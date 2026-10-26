@@ -20,3 +20,6 @@ target_link_libraries(test_mssys PRIVATE mssys)
 
 rufus_add_test(test_syslinux test_syslinux.c)
 target_link_libraries(test_syslinux PRIVATE syslinux_fat syslinux_installer)
+
+rufus_add_test(test_libcdio test_libcdio.c)
+target_link_libraries(test_libcdio PRIVATE rufus_cdio)
