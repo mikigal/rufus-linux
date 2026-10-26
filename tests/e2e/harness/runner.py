@@ -29,17 +29,21 @@ def usb_stick_qemu_opts(image: str, uas: bool = False, name: str = "stick") -> s
     return opts
 
 
-def run_in_vm(command: list[str], stick: str | None = None, uas: bool = False,
+def run_in_vm(script: str, stick: str | None = None, uas: bool = False,
               rw_dirs: tuple[str, ...] = (), memory: str = "2G", timeout: float = 600) -> subprocess.CompletedProcess:
-    """Run 'command' as root in a VM booted from the host kernel. 'rw_dirs' are
-    host directories the command may write to (the rest of the host file
-    system is read-only in the guest)."""
+    """Run the shell 'script' as root in a VM booted from the host kernel, and
+    return its exit status and output. 'rw_dirs' are host directories the
+    script may write to (the rest of the host file system is read-only in the
+    guest)."""
     if vng_binary() is None:
         raise RuntimeError("virtme-ng (vng) is not installed")
-    args = ["vng", "--run", "--user", "root", "--memory", memory, "--cpus", "2"]
+    # The default "microvm" machine has no PCI bus, hence no USB controller
+    args = ["vng", "--run", "--disable-microvm", "--user", "root",
+            "--memory", memory, "--cpus", "2"]
     for d in rw_dirs:
-        args += ["--rwdir", d]
+        args.append(f"--rwdir={d}")
     if stick is not None:
-        args += ["--qemu-opts", usb_stick_qemu_opts(os.path.abspath(stick), uas)]
-    args += ["--", *command]
+        # The "=" form is needed as the value starts with a dash
+        args.append("--qemu-opts=" + usb_stick_qemu_opts(os.path.abspath(stick), uas))
+    args += ["--exec", script]
     return subprocess.run(args, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)

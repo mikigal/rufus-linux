@@ -57,6 +57,8 @@ class ObservationChannels(unittest.TestCase):
     def test_ocr_reads_ovmf_screen_without_bootable_media(self):
         if media.missing_tools("tesseract"):
             self.skipTest("tesseract is not installed")
+        if qemu.ovmf() is None:
+            self.skipTest("OVMF is not installed")
         stick = media.blank_stick(os.path.join(WORK, "blank-uefi.img"), 16 * 1024 * 1024)
         with qemu.VM("uefi").add_usb_stick(stick) as vm:
             text = vm.wait_for("ocr", r"(?i)(shell>|no bootable|boot manager)", timeout=90, interval=3)
@@ -78,12 +80,14 @@ class SyntheticMedia(unittest.TestCase):
             self.skipTest("no readable host kernel")
         self.iso = media.build_grub_iso(WORK)
 
-    def _boot(self, firmware: str, as_usb: bool, uas: bool = False):
+    def _boot(self, firmware: str, as_usb: bool, uas: bool = False, usb2: bool = False):
+        if firmware == "uefi" and qemu.ovmf() is None:
+            self.skipTest("OVMF is not installed")
         vm = qemu.VM(firmware)
         if as_usb:
             stick = media.blank_stick(os.path.join(vm.workdir, "stick.img"))
             media.dd_to_stick(self.iso, stick)
-            vm.add_usb_stick(stick, uas=uas)
+            vm.add_usb_stick(stick, uas=uas, usb2=usb2)
         else:
             vm.add_cdrom(self.iso)
         with vm:
@@ -103,8 +107,13 @@ class SyntheticMedia(unittest.TestCase):
     def test_grub_iso_uefi_usb(self):
         self._boot("uefi", as_usb=True)
 
-    def test_grub_iso_uefi_usb_uas(self):
-        self._boot("uefi", as_usb=True, uas=True)
+    def test_grub_iso_bios_usb2(self):
+        self._boot("bios", as_usb=True, usb2=True)
+
+    def test_grub_iso_bios_usb2_uas(self):
+        # SeaBIOS only boots UAS on USB 2 ports, and OVMF (EDK2) has no UAS
+        # driver at all: real UEFI firmware uses the sticks' BOT interface.
+        self._boot("bios", as_usb=True, uas=True, usb2=True)
 
 
 class RootVM(unittest.TestCase):
@@ -121,17 +130,21 @@ class RootVM(unittest.TestCase):
         stick = media.blank_stick(os.path.join(WORK, f"root-{int(uas)}.img"), 64 * 1024 * 1024)
         driver = "uas" if uas else "usb-storage"
         # Find the stick through udev like Rufus will, check its bus and
-        # driver, then write a marker to it as root
+        # driver, then write a marker to it as root. usb-storage only scans a
+        # new device after a delay (delay_use, 1 s by default), so wait for the
+        # disk itself to show up rather than just for udev to settle.
         script = (
-            "set -e; udevadm settle; "
-            "for d in /sys/block/sd*; do dev=/dev/${d##*/}; "
-            "  if udevadm info -q property -n $dev | grep -qx ID_BUS=usb; then break; fi; done; "
+            "set -e; dev=; "
+            "for i in $(seq 100); do udevadm settle; "
+            "  for d in /sys/block/sd*; do [ -e \"$d\" ] || continue; "
+            "    if udevadm info -q property -n /dev/${d##*/} | grep -qx ID_BUS=usb; then dev=/dev/${d##*/}; fi; done; "
+            "  [ -n \"$dev\" ] && break; sleep 0.2; done; "
             "udevadm info -q property -n $dev | grep -x ID_BUS=usb; "
             f"udevadm info -q property -n $dev | grep -x ID_USB_DRIVER={driver}; "
             "printf RUFUS-E2E-ROOT-WRITE | dd of=$dev bs=512 seek=1 conv=fsync status=none; "
             "id -u"
         )
-        result = runner.run_in_vm(["sh", "-c", script], stick=stick, uas=uas)
+        result = runner.run_in_vm(script, stick=stick, uas=uas)
         output = result.stdout.decode(errors="replace") + result.stderr.decode(errors="replace")
         self.assertEqual(result.returncode, 0, output[-3000:])
         self.assertIn(f"ID_USB_DRIVER={driver}", output)

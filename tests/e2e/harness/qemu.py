@@ -21,8 +21,12 @@ import time
 
 from .qmp import QMP, QMPError
 
-OVMF_CODE = "/usr/share/edk2/x64/OVMF_CODE.4m.fd"
-OVMF_VARS = "/usr/share/edk2/x64/OVMF_VARS.4m.fd"
+# (code, vars) firmware pairs, as packaged by Arch, Debian/Ubuntu and Fedora
+OVMF_CANDIDATES = (
+    ("/usr/share/edk2/x64/OVMF_CODE.4m.fd", "/usr/share/edk2/x64/OVMF_VARS.4m.fd"),
+    ("/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/OVMF/OVMF_VARS_4M.fd"),
+    ("/usr/share/edk2/ovmf/OVMF_CODE.fd", "/usr/share/edk2/ovmf/OVMF_VARS.fd"),
+)
 
 VGA_TEXT_ADDR = 0xB8000
 VGA_COLS, VGA_ROWS = 80, 25
@@ -34,6 +38,18 @@ def kvm_available() -> bool:
 
 def qemu_binary() -> str | None:
     return shutil.which("qemu-system-x86_64")
+
+
+def ovmf() -> tuple[str, str] | None:
+    """Locate the OVMF (UEFI) firmware, overridable with RUFUS_E2E_OVMF_CODE
+    and RUFUS_E2E_OVMF_VARS."""
+    code, nvram = os.environ.get("RUFUS_E2E_OVMF_CODE"), os.environ.get("RUFUS_E2E_OVMF_VARS")
+    if code and nvram:
+        return code, nvram
+    for code, nvram in OVMF_CANDIDATES:
+        if os.path.exists(code) and os.path.exists(nvram):
+            return code, nvram
+    return None
 
 
 def host_kernel() -> str | None:
@@ -65,7 +81,7 @@ class VM:
         self.boot_index = 0
         self.proc = None
         self.qmp = None
-        self.usb = False
+        self.usb_buses = set()
 
     # --- Configuration --------------------------------------------------
 
@@ -74,22 +90,29 @@ class VM:
         self.boot_index += 1
         return index
 
-    def _xhci(self):
-        if not self.usb:
-            self.args += ["-device", "qemu-xhci,id=xhci"]
-            self.usb = True
+    def _usb_bus(self, usb2: bool) -> str:
+        controller = "ehci" if usb2 else "xhci"
+        if controller not in self.usb_buses:
+            self.args += ["-device", "usb-ehci,id=ehci" if usb2 else "qemu-xhci,id=xhci"]
+            self.usb_buses.add(controller)
+        return f"{controller}.0"
 
-    def add_usb_stick(self, image: str, uas: bool = False, readonly: bool = False, name: str = "stick"):
-        """Attach a raw image as a USB mass storage device (BOT or UAS)."""
-        self._xhci()
+    def add_usb_stick(self, image: str, uas: bool = False, usb2: bool = False,
+                      readonly: bool = False, name: str = "stick"):
+        """Attach a raw image as a USB mass storage device, using either the
+        Bulk-Only Transport or UAS, on an xHCI (USB 3) or EHCI (USB 2) port.
+
+        Firmware support differs like on real hardware: OVMF has no UAS driver
+        at all, and SeaBIOS only boots UAS devices on USB 2 ports."""
+        bus = self._usb_bus(usb2)
         ro = ",readonly=on" if readonly else ""
         self.args += ["-drive", f"if=none,id={name},format=raw,file={image}{ro}"]
         if uas:
-            self.args += ["-device", f"usb-uas,id={name}-uas,bus=xhci.0",
+            self.args += ["-device", f"usb-uas,id={name}-uas,bus={bus}",
                           "-device", f"scsi-hd,bus={name}-uas.0,scsi-id=0,lun=0,drive={name},"
                                      f"bootindex={self._next_bootindex()}"]
         else:
-            self.args += ["-device", f"usb-storage,bus=xhci.0,drive={name},removable=on,"
+            self.args += ["-device", f"usb-storage,bus={bus},drive={name},removable=on,"
                                      f"bootindex={self._next_bootindex()}"]
         return self
 
@@ -114,9 +137,12 @@ class VM:
         else:
             cmd += ["-accel", "tcg"]
         if self.firmware == "uefi":
+            firmware = ovmf()
+            if firmware is None:
+                raise FileNotFoundError("OVMF firmware not found (set RUFUS_E2E_OVMF_CODE/VARS)")
             vars_copy = os.path.join(self.workdir, "OVMF_VARS.fd")
-            shutil.copyfile(OVMF_VARS, vars_copy)
-            cmd += ["-drive", f"if=pflash,format=raw,unit=0,readonly=on,file={OVMF_CODE}",
+            shutil.copyfile(firmware[1], vars_copy)
+            cmd += ["-drive", f"if=pflash,format=raw,unit=0,readonly=on,file={firmware[0]}",
                     "-drive", f"if=pflash,format=raw,unit=1,file={vars_copy}"]
         return cmd + self.args
 

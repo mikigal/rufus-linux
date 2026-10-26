@@ -55,3 +55,9 @@ Environment variables:
 | `RUFUS_E2E_KEEP=1` | keep the VM work directories (serial logs, screenshots, images) |
 | `RUFUS_E2E_WORK=<dir>` | build and cache the test media in `<dir>` |
 | `RUFUS_E2E_KERNEL=<path>` | kernel used by the test media (default: the running one) |
+| `RUFUS_E2E_OVMF_CODE=<path>`, `RUFUS_E2E_OVMF_VARS=<path>` | UEFI firmware (default: the Arch, Debian/Ubuntu or Fedora location) |
+
+Firmware support for USB boot mirrors real hardware: OVMF has no UAS driver,
+and SeaBIOS only boots UAS devices on USB 2 ports, so UAS boot tests use
+SeaBIOS with an EHCI controller. Writes through the Linux `uas` driver are
+covered by the root VM tests.
