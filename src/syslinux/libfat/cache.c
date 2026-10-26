@@ -17,7 +17,6 @@
  */
 
 #include <stdlib.h>
-#include <malloc.h>
 #include "libfatint.h"
 
 /*
@@ -27,6 +26,7 @@
  * For good measure, we'll go further and align our buffers on a 16-byte boundary.
  * Also, since struct libfat_sector's data[0] is our buffer, this means we must BOTH
  * align that member in the struct declaration, and use aligned malloc/free.
+ * The same alignment also keeps us compatible with O_DIRECT reads on Linux.
  */
 void *libfat_get_sector(struct libfat_filesystem *fs, libfat_sector_t n)
 {
@@ -38,10 +38,10 @@ void *libfat_get_sector(struct libfat_filesystem *fs, libfat_sector_t n)
     }
 
     /* Not found in cache */
-    ls = _mm_malloc(sizeof(struct libfat_sector) + LIBFAT_SECTOR_SIZE, 16);
+    ls = aligned_alloc(16, sizeof(struct libfat_sector) + LIBFAT_SECTOR_SIZE);
     if (!ls) {
 	libfat_flush(fs);
-	ls = _mm_malloc(sizeof(struct libfat_sector) + LIBFAT_SECTOR_SIZE, 16);
+	ls = aligned_alloc(16, sizeof(struct libfat_sector) + LIBFAT_SECTOR_SIZE);
 
 	if (!ls)
 	    return NULL;	/* Can't allocate memory */
@@ -49,7 +49,7 @@ void *libfat_get_sector(struct libfat_filesystem *fs, libfat_sector_t n)
 
     if (fs->read(fs->readptr, ls->data, LIBFAT_SECTOR_SIZE, n)
 	!= LIBFAT_SECTOR_SIZE) {
-	_mm_free(ls);
+	free(ls);
 	return NULL;		/* I/O error */
     }
 
@@ -69,6 +69,6 @@ void libfat_flush(struct libfat_filesystem *fs)
 
     for (ls = lsnext; ls; ls = lsnext) {
 	lsnext = ls->next;
-	_mm_free(ls);
+	free(ls);
     }
 }

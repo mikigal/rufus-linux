@@ -1,6 +1,7 @@
 /******************************************************************
     Copyright (C) 2009  Henrik Carlqvist
     Modified for Rufus/Windows (C) 2011-2019  Pete Batard
+    Ported to Linux (C) 2026  Rufus for Linux contributors
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -16,105 +17,114 @@
     along with this program; if not, write to the Free Software
     Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 ******************************************************************/
+#include <errno.h>
+#include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <unistd.h>
 
-#include "../rufus.h"
 #include "file.h"
 
+/* Provided by the application */
+extern void uprintf(const char *format, ...);
+/* Defined in br.c */
 extern unsigned long ulBytesPerSector;
 
-/* Returns the number of bytes written or -1 on error */
-int64_t write_sectors(HANDLE hDrive, uint64_t SectorSize,
+/* Returns the number of bytes written or -1 on error (errno is preserved) */
+int64_t write_sectors(int fd, uint64_t SectorSize,
                       uint64_t StartSector, uint64_t nSectors,
                       const void *pBuf)
 {
-   LARGE_INTEGER ptr;
-   DWORD Size;
+   const uint8_t *p = pBuf;
+   uint64_t Size = nSectors*SectorSize, Done = 0;
+   off_t Offset = (off_t)(StartSector*SectorSize);
+   int err;
 
-   if((nSectors*SectorSize) > 0xFFFFFFFFUL)
+   if(Size > 0xFFFFFFFFUL)
    {
       uprintf("write_sectors: nSectors x SectorSize is too big\n");
-      return -1;
-   }
-   Size = (DWORD)(nSectors*SectorSize);
-
-   ptr.QuadPart = StartSector*SectorSize;
-   if(!SetFilePointerEx(hDrive, ptr, NULL, FILE_BEGIN))
-   {
-      uprintf("write_sectors: Could not access sector 0x%08" PRIx64 " - %s\n", StartSector, WindowsErrorString());
+      errno = EINVAL;
       return -1;
    }
 
-   LastWriteError = 0;
-   if(!WriteFileWithRetry(hDrive, pBuf, Size, &Size, WRITE_RETRIES))
+   while(Done < Size)
    {
-      LastWriteError = RUFUS_ERROR(GetLastError());
-      uprintf("write_sectors: Write error %s\n", WindowsErrorString());
-      uprintf("  StartSector: 0x%08" PRIx64 ", nSectors: 0x%" PRIx64 ", SectorSize: 0x%" PRIx64 "\n", StartSector, nSectors, SectorSize);
-      return -1;
-   }
-   if (Size != nSectors*SectorSize)
-   {
-      /* Some large drives return 0, even though all the data was written - See github #787 */
-      if (large_drive && Size == 0) {
-         uprintf("WARNING: Possible short write\n");
-         return 0;
+      ssize_t r = pwrite(fd, &p[Done], (size_t)(Size - Done), Offset + (off_t)Done);
+      if(r < 0 && errno == EINTR)
+         continue;
+      if(r <= 0)
+      {
+         err = (r < 0) ? errno : EIO;
+         uprintf("write_sectors: Write error %s\n", strerror(err));
+         uprintf("  Wrote: %" PRIu64 ", Expected: %" PRIu64 "\n", Done, Size);
+         uprintf("  StartSector: 0x%08" PRIx64 ", nSectors: 0x%" PRIx64 ", SectorSize: 0x%" PRIx64 "\n", StartSector, nSectors, SectorSize);
+         errno = err;
+         return -1;
       }
-      uprintf("write_sectors: Write error\n");
-      LastWriteError = RUFUS_ERROR(ERROR_WRITE_FAULT);
-      uprintf("  Wrote: %d, Expected: %" PRIu64 "\n", Size, nSectors*SectorSize);
-      uprintf("  StartSector: 0x%08" PRIx64 ", nSectors: 0x%" PRIx64 ", SectorSize: 0x%" PRIx64 "\n", StartSector, nSectors, SectorSize);
-      return -1;
+      Done += (uint64_t)r;
    }
 
    return (int64_t)Size;
 }
 
-/* Returns the number of bytes read or -1 on error */
-int64_t read_sectors(HANDLE hDrive, uint64_t SectorSize,
+/* Returns the number of bytes read or -1 on error (errno is preserved) */
+int64_t read_sectors(int fd, uint64_t SectorSize,
                      uint64_t StartSector, uint64_t nSectors,
                      void *pBuf)
 {
-   LARGE_INTEGER ptr;
-   DWORD Size;
+   uint8_t *p = pBuf;
+   uint64_t Size = nSectors*SectorSize, Done = 0;
+   off_t Offset = (off_t)(StartSector*SectorSize);
+   int err;
 
-   if((nSectors*SectorSize) > 0xFFFFFFFFUL)
+   if(Size > 0xFFFFFFFFUL)
    {
       uprintf("read_sectors: nSectors x SectorSize is too big\n");
-      return -1;
-   }
-   Size = (DWORD)(nSectors*SectorSize);
-
-   ptr.QuadPart = StartSector*SectorSize;
-   if(!SetFilePointerEx(hDrive, ptr, NULL, FILE_BEGIN))
-   {
-      uprintf("read_sectors: Could not access sector 0x%08" PRIx64 " - %s\n", StartSector, WindowsErrorString());
+      errno = EINVAL;
       return -1;
    }
 
-   if((!ReadFile(hDrive, pBuf, Size, &Size, NULL)) || (Size != nSectors*SectorSize))
+   while(Done < Size)
    {
-      uprintf("read_sectors: Read error %s\n", (GetLastError()!=ERROR_SUCCESS)?WindowsErrorString():"");
-      uprintf("  Read: %d, Expected: %" PRIu64 "\n",  Size, nSectors*SectorSize);
-      uprintf("  StartSector: 0x%08" PRIx64 ", nSectors: 0x%" PRIx64 ", SectorSize: 0x%" PRIx64 "\n", StartSector, nSectors, SectorSize);
+      ssize_t r = pread(fd, &p[Done], (size_t)(Size - Done), Offset + (off_t)Done);
+      if(r < 0 && errno == EINTR)
+         continue;
+      if(r < 0)
+      {
+         err = errno;
+         uprintf("read_sectors: Read error %s\n", strerror(err));
+         uprintf("  Read: %" PRIu64 ", Expected: %" PRIu64 "\n", Done, Size);
+         uprintf("  StartSector: 0x%08" PRIx64 ", nSectors: 0x%" PRIx64 ", SectorSize: 0x%" PRIx64 "\n", StartSector, nSectors, SectorSize);
+         errno = err;
+         return -1;
+      }
+      if(r == 0)   /* EOF: short read, as with ReadFile() */
+         break;
+      Done += (uint64_t)r;
    }
 
-   return (int64_t)Size;
+   return (int64_t)Done;
 }
 
 /*
-* The following calls use a hijacked fp on Windows that contains:
-* fp->_handle: a Windows handle
+* The following calls use a hijacked fp that contains:
+* fp->_fd: a file descriptor
 * fp->_offset: a file offset
 */
+
+static unsigned char *aligned_buffer(size_t alignment)
+{
+   void *p = NULL;
+   return (posix_memalign(&p, alignment, MAX_DATA_LEN) == 0) ? p : NULL;
+}
 
 int contains_data(FILE *fp, uint64_t Position,
 	const void *pData, uint64_t Len)
 {
    int r = 0;
-   unsigned char *aucBuf = _mm_malloc(MAX_DATA_LEN, 16);
+   unsigned char *aucBuf = aligned_buffer(16);
 
    if(aucBuf == NULL)
       return 0;
@@ -128,7 +138,7 @@ int contains_data(FILE *fp, uint64_t Position,
    r = 1;
 
 out:
-   _mm_free(aucBuf);
+   free(aucBuf);
    return r;
 } /* contains_data */
 
@@ -136,9 +146,8 @@ int read_data(FILE *fp, uint64_t Position,
               void *pData, uint64_t Len)
 {
    int r = 0;
-   unsigned char *aucBuf = _mm_malloc(MAX_DATA_LEN, 16);
+   unsigned char *aucBuf = aligned_buffer(16);
    FAKE_FD* fd = (FAKE_FD*)fp;
-   HANDLE hDrive = (HANDLE)fd->_handle;
    uint64_t StartSector, EndSector, NumSectors;
 
    if (aucBuf == NULL)
@@ -162,16 +171,16 @@ int read_data(FILE *fp, uint64_t Position,
       goto out;
    }
 
-   if(read_sectors(hDrive, ulBytesPerSector, StartSector,
-                     NumSectors, aucBuf) <= 0)
-   goto out;
+   if(read_sectors(fd->_fd, ulBytesPerSector, StartSector,
+                     NumSectors, aucBuf) != (int64_t)(NumSectors*ulBytesPerSector))
+      goto out;
 
    memcpy(pData, &aucBuf[Position - StartSector*ulBytesPerSector], (size_t)Len);
 
    r = 1;
 
 out:
-   _mm_free(aucBuf);
+   free(aucBuf);
    return r;
 }  /* read_data */
 
@@ -180,10 +189,9 @@ int write_data(FILE *fp, uint64_t Position,
                const void *pData, uint64_t Len)
 {
    int r = 0;
-   /* Windows' WriteFile() may require a buffer that is aligned to the sector size */
-   unsigned char *aucBuf = _mm_malloc(MAX_DATA_LEN, 4096);
+   /* Direct I/O requires a buffer that is aligned to the sector size */
+   unsigned char *aucBuf = aligned_buffer(4096);
    FAKE_FD* fd = (FAKE_FD*)fp;
-   HANDLE hDrive = (HANDLE)fd->_handle;
    uint64_t StartSector, EndSector, NumSectors;
 
    if (aucBuf == NULL)
@@ -208,20 +216,20 @@ int write_data(FILE *fp, uint64_t Position,
    }
 
    /* Data to write may not be aligned on a sector boundary => read into a sector buffer first */
-   if(read_sectors(hDrive, ulBytesPerSector, StartSector,
-                     NumSectors, aucBuf) <= 0)
+   if(read_sectors(fd->_fd, ulBytesPerSector, StartSector,
+                     NumSectors, aucBuf) != (int64_t)(NumSectors*ulBytesPerSector))
       goto out;
 
    if(!memcpy(&aucBuf[Position - StartSector*ulBytesPerSector], pData, (size_t)Len))
       goto out;
 
-   if(write_sectors(hDrive, ulBytesPerSector, StartSector,
+   if(write_sectors(fd->_fd, ulBytesPerSector, StartSector,
                      NumSectors, aucBuf) <= 0)
       goto out;
 
    r = 1;
 
 out:
-   _mm_free(aucBuf);
+   free(aucBuf);
    return r;
 } /* write_data */
