@@ -34,6 +34,8 @@
 
 #define LONG_NAME   "Long File Name With Spaces.txt"
 #define BIOS_SIZE   (4 * ISO_BLOCKSIZE)
+/* El Torito entries are sized by their load size, in 512-byte virtual sectors */
+#define BIOS_LOAD_SECTORS 4
 #define EFI_SIZE    (32 * ISO_BLOCKSIZE)
 
 static char tmp_dir[] = "/tmp/rufus-test-libcdio-XXXXXX";
@@ -113,8 +115,9 @@ static void test_scan(const char* iso_path)
 		iso9660_filelist_free(list);
 	}
 	CHECK_EQ_INT(boot_images, 2);
-	/* Entry 0 is the BIOS image, entry 1 the EFI one that Rufus looks for */
-	check_content(iso, "/[BOOT]/0-Boot-NoEmul.img", 'B', BIOS_SIZE);
+	/* Entry 0 is the BIOS image, of which the firmware only loads the first
+	 * BIOS_LOAD_SECTORS, and entry 1 the EFI one that Rufus looks for */
+	check_content(iso, "/[BOOT]/0-Boot-NoEmul.img", 'B', BIOS_LOAD_SECTORS * 512);
 	check_content(iso, "/[BOOT]/1-Boot-NoEmul.img", 'E', EFI_SIZE);
 	iso9660_close(iso);
 
@@ -148,9 +151,9 @@ int main(void)
 	write_pattern(tmp_path("iso/efi.img"), 'E', EFI_SIZE);
 	write_pattern(tmp_path("iso/" LONG_NAME), 'L', 100);
 	snprintf(cmd, sizeof(cmd), "xorriso -as mkisofs -quiet -J -R -V RUFUS_TEST "
-		"-b boot/bios.img -no-emul-boot -boot-load-size 4 "
+		"-b boot/bios.img -no-emul-boot -boot-load-size %d "
 		"-eltorito-alt-boot -e efi.img -no-emul-boot -o '%s' '%s'",
-		tmp_path("test.iso"), tmp_path("iso"));
+		BIOS_LOAD_SECTORS, tmp_path("test.iso"), tmp_path("iso"));
 	CHECK_EQ_INT(system(cmd), 0);
 
 	test_scan(tmp_path("test.iso"));
