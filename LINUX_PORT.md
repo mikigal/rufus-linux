@@ -43,7 +43,7 @@ Wayland, and tracks the progress of the port.
 
 | Stage | Status |
 |---|---|
-| 0. Foundation (build system, compat layer, libraries, CI, test harness) | in progress |
+| 0. Foundation (build system, compat layer, libraries, CI, test harness) | **done** |
 | 1. Decouple the logic from the UI | not started |
 | 2. Linux backend, helper, CLI | not started |
 | 3. Qt 6 GUI | not started |
@@ -51,7 +51,7 @@ Wayland, and tracks the progress of the port.
 | 5. Windows To Go | not started |
 | 6. Distribution | not started |
 
-**Stage 0, done so far**
+**Stage 0 (done)**
 
 - **CMake build**:
   - strict warnings for Rufus' code (fatal with `-DRUFUS_WERROR=ON`) and relaxed ones
@@ -69,16 +69,22 @@ Wayland, and tracks the progress of the port.
   - **ext2fs**: now the system library.
 - **Unit tests** under `ctest`, and GitHub Actions on Arch (gcc, clang), Fedora and
   Ubuntu.
-- **E2E harness** (`tests/e2e`, §8):
+- **E2E harness** (`tests/e2e`, §8), 12 tests in about 35 s:
   - QEMU boot verifier with the serial, VGA text and OCR channels;
   - marker initramfs and synthetic media builder;
   - root-in-VM runner with an emulated USB stick.
 
-  The observation channels are verified.
+  Verified results:
+  - the synthetic GRUB ISO boots from CD and as a `dd`-written USB stick under SeaBIOS
+    and OVMF (xHCI, EHCI, UAS);
+  - root writes go through the Linux `usb-storage` and `uas` drivers in the guest.
 
-**Stage 0, remaining**: run the harness tests that need the optional tools from
-`tests/e2e/README.md` (synthetic ISO boots, the root VM runner, the ISO parts of the
-libcdio/wimlib tests).
+  OVMF has no UAS driver, and SeaBIOS boots UAS only on USB 2, as on real hardware.
+
+**Follow-up**: run `ctest -L e2e` in GitHub Actions once the repository is pushed
+(hosted runners expose KVM).
+
+**Next: stage 1.**
 
 ---
 
@@ -583,9 +589,9 @@ T4.
 
 Size: S / M / L / XL (relative effort). Each stage ends with a working, testable result.
 
-### Stage 0: Foundation (M), in progress
+### Stage 0: Foundation (M), done
 
-- CMake with the targets of §4.5, compat header, library ports, CI: **done**.
+- CMake with the targets of §4.5, compat header, library ports, CI.
 - E2E harness (§8):
   - a VM runner with an emulated USB stick;
   - a QEMU boot verifier with the serial, VGA text and OCR channels;
