@@ -15,22 +15,16 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-#include <assert.h>
-#include <windows.h>
-#include <malloc.h>
-#include <inttypes.h>
-
-#if defined(_MSC_VER)
-// Disable some VS Code Analysis warnings
-#pragma warning(disable: 4996)		// Ignore deprecated
-#pragma warning(disable: 6258)		// I know what I'm using TerminateThread for
-#pragma warning(disable: 26451)		// Stop bugging me with casts already!
-#pragma warning(disable: 28159)		// I'll keep using GetVersionEx(), thank you very much...
-// Enable C11's _Static_assert (requires VS2015 or later)
-#define _Static_assert static_assert
-#endif
-
 #pragma once
+
+#include <assert.h>
+#include <inttypes.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+
+#include "compat.h"
 
 /* Convenient to have around */
 #define KB                          1024LL
@@ -45,14 +39,18 @@
 //#define RUFUS_TEST
 
 #define APPLICATION_NAME            "Rufus"
-#if defined(_M_AMD64)
+#if defined(__x86_64__)
 #define APPLICATION_ARCH            "x64"
-#elif defined(_M_IX86)
+#elif defined(__i386__)
 #define APPLICATION_ARCH            "x86"
-#elif defined(_M_ARM64)
+#elif defined(__aarch64__)
 #define APPLICATION_ARCH            "Arm64"
-#elif defined(_M_ARM)
+#elif defined(__arm__)
 #define APPLICATION_ARCH            "Arm"
+#elif defined(__riscv) && (__riscv_xlen == 64)
+#define APPLICATION_ARCH            "RISC-V 64"
+#elif defined(__loongarch64)
+#define APPLICATION_ARCH            "LoongArch 64"
 #else
 #define APPLICATION_ARCH            "(Unknown Arch)"
 #endif
@@ -118,7 +116,6 @@
 #define UBUFFER_SIZE                4096
 #define ISO_BUFFER_SIZE             (64 * KB)	// Buffer size used for ISO data extraction
 #define RSA_SIGNATURE_SIZE          256
-#define CBN_SELCHANGE_INTERNAL      (CBN_SELCHANGE + 256)
 #if defined(RUFUS_TEST)
 #define RUFUS_URL                   "http://nas/~rufus"
 #else
@@ -135,21 +132,7 @@
 #define DISKCOPY_SIZE               0x16ee00
 #define DISKCOPY_IMAGE_OFFSET       0x66d8
 #define DISKCOPY_IMAGE_SIZE         0x168000
-#if defined(_M_AMD64)
-#define OSCDIMG_URL                 "https://msdl.microsoft.com/download/symbols/oscdimg.exe/688CABB065000/oscdimg.exe"
-#define OSCDIMG_HASH                "2000160b2c5044691b2f9a0ac308e5207f273d4880a572457af16d05886ba861"
-#elif defined(_M_IX86)
-#define OSCDIMG_URL                 "https://msdl.microsoft.com/download/symbols/oscdimg.exe/704FD1B760000/oscdimg.exe"
-#define OSCDIMG_HASH                "cbd6872265d44e88897905bdc47f7035d64ad1775ab890ea59db13ec92d867eb"
-#elif defined(_M_ARM64)
-#define OSCDIMG_URL                 "https://msdl.microsoft.com/download/symbols/oscdimg.exe/02633D8D66000/oscdimg.exe"
-#define OSCDIMG_HASH                "80c059815d82fca009841143a821f79c8ac78dba12bb63dc07842f1a2a552666"
-#elif defined(_M_ARM)
-#define OSCDIMG_URL                 "https://msdl.microsoft.com/download/symbols/oscdimg.exe/9CD825745F000/oscdimg.exe"
-#define OSCDIMG_HASH                "5ecd9956da589baa65806c884a55f9303ec6c6c559bdeb8afe00c72614a24c7a"
-#endif
 #define SYMBOL_SERVER_USER_AGENT    "Microsoft-Symbol-Server/10.0.22621.755"
-#define DEFAULT_ESP_MOUNT_POINT     "S:\\"
 // Per https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/unattend/microsoft-windows-shell-setup-useraccounts-localaccounts-localaccount-name
 // and https://learn.microsoft.com/en-us/previous-versions/cc722458(v=technet.10)#user-name-policies
 // Also add '&', even as it could be escaped, as it's just not worth the trouble...
@@ -163,14 +146,10 @@
 #define STRINGIFY(x)                #x
 #endif
 #define PERCENTAGE(percent, value)  ((1ULL * (percent) * (value)) / 100ULL)
-#define IsChecked(CheckBox_ID)      (IsDlgButtonChecked(hMainDialog, CheckBox_ID) == BST_CHECKED)
-#define MB_IS_RTL                   (right_to_left_mode?MB_RTLREADING|MB_RIGHT:0)
 #define CHECK_FOR_USER_CANCEL       if (IS_ERROR(ErrorStatus) && (SCODE_CODE(ErrorStatus) == ERROR_CANCELLED)) goto out
 // Bit masks used for the display of additional image options in the UI
 #define IMOP_WINTOGO                0x01
 #define IMOP_PERSISTENCE            0x02
-
-#define ComboBox_GetCurItemData(hCtrl) ComboBox_GetItemData(hCtrl, ComboBox_GetCurSel(hCtrl))
 
 #define safe_free(p) do { free((void*)p); p = NULL; } while(0)
 #define safe_mm_free(p) do { _mm_free((void*)p); p = NULL; } while(0)
@@ -180,34 +159,43 @@ static __inline void safe_strcp(char* dst, const size_t dst_max, const char* src
 }
 #define safe_strcpy(dst, dst_max, src) safe_strcp(dst, dst_max, src, safe_strlen(src) + 1)
 #define static_strcpy(dst, src) safe_strcpy(dst, sizeof(dst), src)
-#define safe_strcat(dst, dst_max, src) strncat_s(dst, dst_max, src, _TRUNCATE)
+// Same semantics as strncat_s(dst, dst_max, src, _TRUNCATE): append as much as fits, always terminate
+static __inline void safe_strcat(char* dst, const size_t dst_max, const char* src) {
+	size_t len, n;
+	if ((dst == NULL) || (dst_max == 0) || (src == NULL))
+		return;
+	len = strnlen(dst, dst_max);
+	if (len >= dst_max) {
+		dst[0] = 0;
+		return;
+	}
+	n = min(strlen(src), dst_max - len - 1);
+	memcpy(&dst[len], src, n);
+	dst[len + n] = 0;
+}
 #define static_strcat(dst, src) safe_strcat(dst, sizeof(dst), src)
 #define safe_strcmp(str1, str2) strcmp(((str1 == NULL) ? "<NULL>" : str1), ((str2 == NULL) ? "<NULL>" : str2))
 #define safe_strstr(str1, str2) strstr(((str1 == NULL) ? "<NULL>" : str1), ((str2 == NULL) ? "<NULL>" : str2))
 #define safe_stricmp(str1, str2) _stricmp(((str1 == NULL) ? "<NULL>" : str1), ((str2 == NULL) ? "<NULL>" : str2))
 #define safe_strncmp(str1, str2, count) strncmp(((str1 == NULL) ? "<NULL>" : str1), ((str2 == NULL) ? "<NULL>" : str2), count)
 #define safe_strnicmp(str1, str2, count) _strnicmp(((str1 == NULL) ? "<NULL>" : str1), ((str2 == NULL) ? "<NULL>" : str2), count)
-#define safe_closehandle(h) do { if ((h != INVALID_HANDLE_VALUE) && (h != NULL)) { CloseHandle(h); h = INVALID_HANDLE_VALUE; } } while(0)
-#define safe_release_dc(hDlg, hDC) do { if ((hDC != INVALID_HANDLE_VALUE) && (hDC != NULL)) { ReleaseDC(hDlg, hDC); hDC = NULL; } } while(0)
-#define safe_delete_object(hObj) do { if (hObj != NULL) { DeleteObject(hObj); hObj = NULL; } } while(0)
-#define safe_destroy_icon(hIcon) do { if (hIcon != NULL) { DestroyIcon(hIcon); hIcon = NULL; } } while(0)
-#define safe_destroy_imagelist(hImageList) do { if (hImageList != NULL) { ImageList_Destroy(hImageList); hImageList = NULL; } } while(0)
-#define safe_destroy_imagelist_from_toolbar(hToolbar) do { if (hToolbar != NULL) {                     \
-	HIMAGELIST _hImageList = (HIMAGELIST)SendMessage(hToolbar, TB_GETIMAGELIST, (WPARAM)0, (LPARAM)0); \
-	safe_destroy_imagelist(_hImageList); } } while(0)
-#define safe_sprintf(dst, count, ...) do { size_t _count = count; char* _dst = dst; _snprintf_s(_dst, _count, _TRUNCATE, __VA_ARGS__); \
+#define safe_close(fd) do { if ((fd) >= 0) { close(fd); fd = -1; } } while(0)
+#define safe_sprintf(dst, count, ...) do { size_t _count = count; char* _dst = dst; snprintf(_dst, _count, __VA_ARGS__); \
 	if (_dst != NULL) _dst[(_count) - 1] = 0; } while(0)
 #define static_sprintf(dst, ...) safe_sprintf(dst, sizeof(dst), __VA_ARGS__)
 #define safe_atoi(str) ((((char*)(str))==NULL) ? 0 : atoi(str))
 #define safe_strlen(str) ((((char*)(str))==NULL) ? 0 : strlen(str))
 #define safe_strdup(str) ((((char*)(str))==NULL) ? NULL : _strdup(str))
-#if defined(_MSC_VER)
-#define safe_vsnprintf(buf, size, format, arg) _vsnprintf_s(buf, size, _TRUNCATE, format, arg)
-#else
 #define safe_vsnprintf vsnprintf
-#endif
-#define safe_strtolower(str) do { if (str != NULL) CharLowerA(str); } while(0)
-#define safe_strtoupper(str) do { if (str != NULL) CharUpperA(str); } while(0)
+// NB: Unlike CharLowerA()/CharUpperA(), these only convert ASCII, which is what UTF-8 data needs
+static __inline void _strtolower(char* p) {
+	for (; *p != 0; p++) if ((*p >= 'A') && (*p <= 'Z')) *p += 'a' - 'A';
+}
+static __inline void _strtoupper(char* p) {
+	for (; *p != 0; p++) if ((*p >= 'a') && (*p <= 'z')) *p -= 'a' - 'A';
+}
+#define safe_strtolower(str) do { if (str != NULL) _strtolower(str); } while(0)
+#define safe_strtoupper(str) do { if (str != NULL) _strtoupper(str); } while(0)
 static __inline void static_repchr(char* p, char s, char r) {
 	if (p != NULL) while (*p != 0) { if (*p == s) *p = r; p++; }
 }
@@ -216,9 +204,8 @@ static __inline void static_repchr(char* p, char s, char r) {
 #define if_assert_fails(cond) assert(cond); if (!(cond))
 #define if_assert_succeeds(cond) assert(cond); if ((cond))
 
-extern void uprintf(const char *format, ...);
+extern void uprintf(const char *format, ...) __attribute__((format(printf, 1, 2)));
 extern void uprintfs(const char *str);
-extern void wuprintf(const wchar_t* format, ...);
 extern void uprint_progress(uint64_t cur_value, uint64_t max_value);
 #define vuprintf(...) do { if (verbose) uprintf(__VA_ARGS__); } while(0)
 #define vvuprintf(...) do { if (verbose > 1) uprintf(__VA_ARGS__); } while(0)
@@ -233,52 +220,6 @@ extern void uprint_progress(uint64_t cur_value, uint64_t max_value);
 #else
 #define duprintf(...)
 #endif
-
-/* Custom Windows messages */
-enum user_message_type {
-	UM_FORMAT_COMPLETED = WM_APP,
-	UM_MEDIA_CHANGE,
-	UM_PROGRESS_INIT,
-	UM_PROGRESS_EXIT,
-	UM_NO_UPDATE,
-	UM_UPDATE_CSM_TOOLTIP,
-	UM_RESIZE_BUTTONS,
-	UM_ENABLE_CONTROLS,
-	UM_SELECT_ISO,
-	UM_TIMER_START,
-	UM_FORMAT_START,
-	// Start of the WM IDs for the language menu items
-	UM_LANGUAGE_MENU = WM_APP + 0x100
-};
-
-/* Custom notifications */
-#define MB_CLOSE 0x0F
-typedef INT_PTR (CALLBACK *Callback_t)(HWND, UINT, WPARAM, LPARAM);
-typedef struct {
-	WORD id;
-	union {
-		Callback_t callback;
-		char* url;
-	};
-} notification_info;	// To provide a "More info..." on notifications
-
-/* Status Bar sections */
-#define SB_SECTION_LEFT         0
-#define SB_SECTION_RIGHT        1
-#define SB_TIMER_SECTION_SIZE   58.0f
-
-/* Timers used throughout the program */
-enum timer_type {
-	TID_MESSAGE_INFO = 0x1000,
-	TID_MESSAGE_STATUS,
-	TID_OUTPUT_INFO,
-	TID_OUTPUT_STATUS,
-	TID_BADBLOCKS_UPDATE,
-	TID_APP_TIMER,
-	TID_BLOCKING_TIMER,
-	TID_REFRESH_TIMER,
-	TID_MARQUEE_TIMER
-};
 
 /* Action type, for progress bar breakdown */
 enum action_type {
@@ -333,7 +274,7 @@ enum target_type {
 	TT_UEFI,
 	TT_MAX
 };
-// For the partition types we'll use Microsoft's PARTITION_STYLE_### constants
+// For the partition types we'll use Microsoft's PARTITION_STYLE_### constants (see compat.h)
 #define PARTITION_STYLE_SFD PARTITION_STYLE_RAW
 
 enum image_option_type {
@@ -524,20 +465,8 @@ typedef struct {
 	const char** description;
 } ext_t;
 
-/* DLL address resolver */
-typedef struct {
-	char* path;
-	uint32_t    count;
-	char** name;
-	uint32_t* address;	// 32-bit will do, as we're not dealing with >4GB DLLs...
-} dll_resolver_t;
-
 /* Alignment macro */
-#if defined(__GNUC__)
 #define ALIGNED(m) __attribute__ ((__aligned__(m)))
-#elif defined(_MSC_VER)
-#define ALIGNED(m) __declspec(align(m))
-#endif
 
 /* Hash definitions */
 enum hash_type {
@@ -605,26 +534,20 @@ typedef struct {
 	EXT_D(var, descriptions);                                               \
 	ext_t var = { ARRAYSIZE(_##var##_x), filename, _##var##_x, _##var##_d }
 
-/* Duplication of the TBPFLAG enum for Windows taskbar progress */
-typedef enum TASKBAR_PROGRESS_FLAGS
-{
-	TASKBAR_NOPROGRESS = 0,
-	TASKBAR_INDETERMINATE = 0x1,
-	TASKBAR_NORMAL = 0x2,
-	TASKBAR_ERROR = 0x4,
-	TASKBAR_PAUSED = 0x8
-} TASKBAR_PROGRESS_FLAGS;
-
 static __inline USHORT GetApplicationArch(void)
 {
-#if defined(_M_AMD64)
+#if defined(__x86_64__)
 	return IMAGE_FILE_MACHINE_AMD64;
-#elif defined(_M_IX86)
+#elif defined(__i386__)
 	return IMAGE_FILE_MACHINE_I386;
-#elif defined(_M_ARM64)
+#elif defined(__aarch64__)
 	return IMAGE_FILE_MACHINE_ARM64;
-#elif defined(_M_ARM)
+#elif defined(__arm__)
 	return IMAGE_FILE_MACHINE_ARM;
+#elif defined(__riscv) && (__riscv_xlen == 64)
+	return IMAGE_FILE_MACHINE_RISCV64;
+#elif defined(__loongarch64)
+	return IMAGE_FILE_MACHINE_LOONGARCH64;
 #else
 	return IMAGE_FILE_MACHINE_UNKNOWN;
 #endif
@@ -641,25 +564,14 @@ static __inline const char* GetArchName(USHORT uArch)
 		return "ARM64";
 	case IMAGE_FILE_MACHINE_ARM:
 		return "ARM32";
+	case IMAGE_FILE_MACHINE_RISCV64:
+		return "RISC-V 64";
+	case IMAGE_FILE_MACHINE_LOONGARCH64:
+		return "LoongArch 64";
 	default:
 		return "Unknown";
 	}
 }
-
-/* Windows versions */
-enum WindowsVersion {
-	WINDOWS_UNDEFINED = 0,
-	WINDOWS_XP = 0x51,
-	WINDOWS_2003 = 0x52,	// Also XP_64
-	WINDOWS_VISTA = 0x60,	// Also Server 2008
-	WINDOWS_7 = 0x61,		// Also Server 2008_R2
-	WINDOWS_8 = 0x62,		// Also Server 2012
-	WINDOWS_8_1 = 0x63,		// Also Server 2012_R2
-	WINDOWS_10_PREVIEW1 = 0x64,
-	WINDOWS_10 = 0xA0,		// Also Server 2016, also Server 2019
-	WINDOWS_11 = 0xB0,		// Also Server 2022
-	WINDOWS_MAX = 0xFFFF,
-};
 
 typedef struct {
 	WORD Major;
@@ -670,17 +582,6 @@ typedef struct {
 static __inline uint64_t version_to_uint64(version_t* ver) {
 	return (uint64_t)ver->Major << 48 | (uint64_t)ver->Minor << 32 | (uint64_t)ver->Micro << 16 | ver->Nano;
 }
-
-typedef struct {
-	DWORD Version;
-	DWORD Major;
-	DWORD Minor;
-	DWORD BuildNumber;
-	DWORD Ubr;
-	DWORD Edition;
-	USHORT Arch;
-	char VersionStr[128];
-} windows_version_t;
 
 // Windows User Experience (unattend.xml) flags and masks
 #define UNATTEND_SECUREBOOT_TPM_MINRAM      0x00001
@@ -763,12 +664,8 @@ typedef struct {
  */
 extern RUFUS_UPDATE update;
 extern RUFUS_IMG_REPORT img_report;
-extern HINSTANCE hMainInstance;
-extern HWND hMainDialog, hLogDialog, hStatus, hDeviceList, hCapacity, hImageOption;
-extern HWND hPartitionScheme, hTargetSystem, hFileSystem, hClusterSize, hLabel, hBootType;
-extern HWND hNBPasses, hLog, hInfo, hProgress;
 extern WORD selected_langid;
-extern DWORD ErrorStatus, DownloadStatus, MainThreadId, LastWriteError;
+extern DWORD ErrorStatus, DownloadStatus, LastWriteError;
 extern BOOL use_own_c32[NB_OLD_C32], detect_fakes, op_in_progress, right_to_left_mode;
 extern BOOL allow_dual_uefi_bios, large_drive, usb_debug;
 extern uint8_t image_options, *pe256ssp;
@@ -778,24 +675,23 @@ extern uint64_t persistence_size;
 extern int64_t iso_blocking_status;
 extern size_t ubuffer_pos;
 extern const int nb_steps[FS_MAX];
-extern float fScale;
-extern windows_version_t WindowsVersion;
 extern sbat_entry_t* sbat_entries;
 extern thumbprint_list_t *sb_active_certs, *sb_revoked_certs;
-extern int dialog_showing, force_update, fs_type, boot_type, partition_type, target_type;
+extern int force_update, fs_type, boot_type, partition_type, target_type;
 extern unsigned long syslinux_ldlinux_len[2];
 extern char ubuffer[UBUFFER_SIZE], embedded_sl_version_str[2][12];
-extern char szFolderPath[MAX_PATH], app_dir[MAX_PATH], temp_dir[MAX_PATH], system_dir[MAX_PATH];
-extern char sysnative_dir[MAX_PATH], app_data_dir[MAX_PATH], *image_path, *fido_url;
+extern char app_dir[MAX_PATH], temp_dir[MAX_PATH], app_data_dir[MAX_PATH], *image_path, *fido_url;
 extern StrArray modified_files;
 
 /*
  * Shared prototypes
+ *
+ * NB: The Linux port only declares what is portable. Win32 and GUI specific
+ * functions from upstream are dropped here and come back, with POSIX types,
+ * as the files that need them get ported (see LINUX_PORT.md).
  */
-extern void GetWindowsVersion(windows_version_t* WindowsVersion);
 extern const char* GetEditionName(DWORD ProductType);
 extern int GetEditions(StrArray* version_name, StrArray* version_index);
-extern version_t* GetExecutableVersion(const char* path);
 extern const char* WindowsErrorString(void);
 extern void DumpBufferHex(void *buf, size_t size);
 extern void PrintStatusInfo(BOOL info, BOOL debug, unsigned int duration, int msg_id, ...);
@@ -808,36 +704,11 @@ extern void _UpdateProgressWithInfo(int op, int msg, uint64_t processed, uint64_
 #define UpdateProgressWithInfo(op, msg, processed, total) _UpdateProgressWithInfo(op, msg, processed, total, FALSE)
 #define UpdateProgressWithInfoUpTo(upto, op, msg, processed, total) _UpdateProgressWithInfo(op, msg, (processed) * (upto), (total) * 100, FALSE)
 #define UpdateProgressWithInfoForce(op, msg, processed, total) _UpdateProgressWithInfo(op, msg, processed, total, TRUE)
-#define UpdateProgressWithInfoInit(hProgressDialog, bNoAltMode) UpdateProgressWithInfo(OP_INIT, (int)bNoAltMode, (uint64_t)(uintptr_t)hProgressDialog, 0);
 extern const char* StrError(DWORD error_code, BOOL use_default_locale);
 extern char* GuidToString(const GUID* guid, BOOL bDecorated);
 extern GUID StringToGuid(const char* str);
 extern char* SizeToHumanReadable(uint64_t size, BOOL copy_to_log, BOOL fake_units);
 extern char* TimestampToHumanReadable(uint64_t ts);
-extern HWND MyCreateDialog(HINSTANCE hInstance, int Dialog_ID, HWND hWndParent, DLGPROC lpDialogFunc);
-extern INT_PTR MyDialogBox(HINSTANCE hInstance, int Dialog_ID, HWND hWndParent, DLGPROC lpDialogFunc);
-extern void CenterDialog(HWND hDlg, HWND hParent);
-extern void ResizeMoveCtrl(HWND hDlg, HWND hCtrl, int dx, int dy, int dw, int dh, float scale);
-extern void ResizeButtonHeight(HWND hDlg, int id);
-extern void CreateStatusBar(HFONT* hFont);
-extern void CreateStaticFont(HDC hDC, HFONT* hFont, BOOL underlined);
-extern void SetHyperLinkFont(HWND hWnd, HDC hDC, HFONT* hFont, BOOL underlined);
-extern void SetTitleBarIcon(HWND hDlg);
-extern BOOL CreateTaskbarList(void);
-extern BOOL SetTaskbarProgressState(TASKBAR_PROGRESS_FLAGS tbpFlags);
-extern BOOL SetTaskbarProgressValue(ULONGLONG ullCompleted, ULONGLONG ullTotal);
-extern INT_PTR CreateAboutBox(void);
-extern BOOL CreateTooltipEx(HWND hDlg, HWND hControl, const char* message, int duration);
-#define CreateTooltip(hControl, message, duration) CreateTooltipEx(hMainDialog, hControl, message, duration)
-extern void PopTooltip(HWND hControl);
-extern void DestroyTooltip(HWND hControl);
-extern void DestroyAllTooltips(void);
-extern int NotificationEx(int type, const char* dont_display_setting, const notification_info* more_info, const char* title, const char* format, ...);
-#define Notification(type, title, ...) NotificationEx(type, NULL, NULL, title, __VA_ARGS__)
-extern int SelectionDialog(char* title, char* message, selection_dialog_options_t* options);
-extern void ListDialog(char* title, char* message, char** items, int size);
-extern SIZE GetTextSize(HWND hCtrl, char* txt);
-extern BOOL ExtractAppIcon(const char* filename, BOOL bSilent);
 extern BOOL ExtractDOS(const char* path);
 extern BOOL ExtractISO(const char* src_iso, const char* dest_dir, BOOL scan);
 extern BOOL ExtractZip(const char* src_zip, const char* dest_dir);
@@ -845,34 +716,13 @@ extern int64_t ExtractISOFile(const char* iso, const char* iso_file, const char*
 extern uint32_t ReadISOFileToBuffer(const char* iso, const char* iso_file, uint8_t** buf);
 extern BOOL HasEfiImgBootLoaders(void* iso);
 extern BOOL DumpFatDir(void* iso, const char* path, int32_t cluster);
-extern BOOL InstallSyslinux(DWORD drive_index, char drive_letter, int fs);
 extern uint16_t GetSyslinuxVersion(char* buf, size_t buf_size, char** ext);
 extern BOOL SetAutorun(const char* path);
-extern char* FileDialog(BOOL save, char* path, const ext_t* ext, UINT* selected_ext);
 extern BOOL FileIO(enum file_io_type io_type, char* path, char** buffer, DWORD* size);
-extern uint8_t* GetResource(HMODULE module, char* name, char* type, const char* desc, DWORD* len, BOOL duplicate);
-extern DWORD GetResourceSize(HMODULE module, char* name, char* type, const char* desc);
 extern DWORD RunCommandWithProgress(const char* cmdline, const char* dir, BOOL log, int msg, const char* pattern);
 #define RunCommand(cmd, dir, log) RunCommandWithProgress(cmd, dir, log, 0, NULL)
 extern BOOL CompareGUID(const GUID *guid1, const GUID *guid2);
-extern BOOL MountRegistryHive(const HKEY key, const char* pszHiveName, const char* pszHivePath);
-extern BOOL UnmountRegistryHive(const HKEY key, const char* pszHiveName);
-extern BOOL SetNDTA(BOOL bRestore, BOOL* bExistingKey, DWORD dwValue);
-extern LONG GetEntryWidth(HWND hDropDown, const char* entry);
-extern uint64_t DownloadToFileOrBufferEx(const char* url, const char* file, const char* user_agent,
-	BYTE** buffer, HWND hProgressDialog, BOOL bTaskBarProgress);
-#define DownloadToFileOrBuffer(url, file, buffer, hProgressDialog, bTaskBarProgress) \
-	DownloadToFileOrBufferEx(url, file, NULL, buffer, hProgressDialog, bTaskBarProgress)
-extern DWORD DownloadSignedFile(const char* url, const char* file, HWND hProgressDialog, BOOL PromptOnError);
-extern HANDLE DownloadSignedFileThreaded(const char* url, const char* file, HWND hProgressDialog, BOOL bPromptOnError);
-extern INT_PTR CALLBACK UpdateCallback(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
-extern void SetFidoCheck(void);
-extern BOOL SetUpdateCheck(void);
-extern BOOL CheckForUpdates(BOOL force);
-extern void DownloadNewVersion(void);
-extern BOOL DownloadISO(void);
 extern BOOL IsDownloadable(const char* url);
-extern BOOL IsShown(HWND hDlg);
 extern uint32_t read_file(const char* path, uint8_t** buf);
 extern uint32_t write_file(const char* path, const uint8_t* buf, const uint32_t size);
 extern char* get_token_data_file_indexed(const char* token, const char* filename, int index);
@@ -889,18 +739,8 @@ extern void parse_update(char* buf, size_t len);
 extern void* get_data_from_asn1(const uint8_t* buf, size_t buf_len, const char* oid_str, uint8_t asn1_type, size_t* data_len);
 extern int sanitize_label(char* label);
 extern int IsHDD(DWORD DriveIndex, uint16_t vid, uint16_t pid, const char* strid);
-extern char* GetSignatureName(const char* path, const char* country_code, uint8_t* thumbprint, BOOL bSilent);
 extern int GetIssuerCertificateInfo(uint8_t* cert, cert_info_t* info);
-extern uint64_t GetSignatureTimeStamp(const char* path);
-extern LONG ValidateSignature(HWND hDlg, const char* path);
 extern BOOL ValidateOpensslSignature(BYTE* pbBuffer, DWORD dwBufferLen, BYTE* pbSignature, DWORD dwSigLen);
-extern BOOL IsFontAvailable(const char* font_name);
-extern BOOL WriteFileWithRetry(HANDLE hFile, LPCVOID lpBuffer, DWORD nNumberOfBytesToWrite,
-	LPDWORD lpNumberOfBytesWritten, DWORD nNumRetries);
-extern HANDLE CreateFileWithTimeout(LPCSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode,
-	LPSECURITY_ATTRIBUTES lpSecurityAttributes, DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes,
-	HANDLE hTemplateFile, DWORD dwTimeOut);
-extern BOOL SetThreadAffinity(DWORD_PTR* thread_affinity, size_t num_threads);
 extern BOOL DetectSHA1Acceleration(void);
 extern BOOL DetectSHA256Acceleration(void);
 extern BOOL HashFile(const unsigned type, const char* path, uint8_t* sum);
@@ -917,103 +757,15 @@ extern BOOL IsBufferInDB(const unsigned char* buf, const size_t len);
 #define printbits(x) _printbits(sizeof(x), &x, 0)
 #define printbitslz(x) _printbits(sizeof(x), &x, 1)
 extern char* _printbits(size_t const size, void const * const ptr, int leading_zeroes);
-extern BOOL IsCurrentProcessElevated(void);
 extern char* ToLocaleName(DWORD lang_id);
-extern void SetAlertPromptMessages(void);
-extern BOOL SetAlertPromptHook(void);
-extern void ClrAlertPromptHook(void);
-extern BOOL StartProcessSearch(void);
-extern void StopProcessSearch(void);
-extern BOOL SetProcessSearch(DWORD DeviceNum);
-extern BYTE GetProcessSearch(uint32_t timeout, uint8_t access_mask, BOOL bIgnoreStaleProcesses);
-extern BOOL EnablePrivileges(void);
-extern void FlashTaskbar(HANDLE handle);
-extern DWORD WaitForSingleObjectWithMessages(HANDLE hHandle, DWORD dwMilliseconds);
-extern HICON CreateMirroredIcon(HICON hiconOrg);
-extern HANDLE CreatePreallocatedFile(const char* lpFileName, DWORD dwDesiredAccess,
-	DWORD dwShareMode, LPSECURITY_ATTRIBUTES lpSecurityAttributes, DWORD dwCreationDisposition,
-	DWORD dwFlagsAndAttributes, LONGLONG llFileSize);
-extern uint32_t ResolveDllAddress(dll_resolver_t* resolver);
 extern sbat_entry_t* GetSbatEntries(char* sbatlevel);
 extern thumbprint_list_t* GetThumbprintEntries(char* thumbprints_txt);
 extern uint16_t GetPeArch(uint8_t* buf);
 extern uint8_t* GetPeSection(uint8_t* buf, const char* name, uint32_t* len);
 extern uint8_t* GetPeSignatureData(uint8_t* buf);
 extern uint8_t* RvaToPhysical(uint8_t* buf, uint32_t rva);
-extern uint32_t FindResourceRva(const wchar_t* name, uint8_t* root, uint8_t* dir, uint32_t* len);
 extern DWORD ListDirectoryContent(StrArray* arr, char* dir, uint8_t type);
-extern BOOL TakeOwnership(LPCSTR lpszOwnFile);
 extern enum ArchType MachineToArch(WORD machine);
-#define GetTextWidth(hDlg, id) GetTextSize(GetDlgItem(hDlg, id), NULL).cx
-
-DWORD WINAPI HashThread(void* param);
-
-/*
- * typedefs for the function prototypes. Use the something like:
- *   PF_DECL(FormatEx);
- * which translates to:
- *   FormatEx_t pfFormatEx = NULL;
- * in your code, to declare the entrypoint and then use:
- *   PF_INIT(FormatEx, Fmifs);
- * which translates to:
- *   pfFormatEx = (FormatEx_t) GetProcAddress(GetDLLHandle("fmifs"), "FormatEx");
- * to make it accessible.
- */
-#define         MAX_LIBRARY_HANDLES 64
-extern HMODULE  OpenedLibrariesHandle[MAX_LIBRARY_HANDLES];
-extern uint16_t OpenedLibrariesHandleSize;
-#define         OPENED_LIBRARIES_VARS HMODULE OpenedLibrariesHandle[MAX_LIBRARY_HANDLES]; uint16_t OpenedLibrariesHandleSize = 0
-#define         CLOSE_OPENED_LIBRARIES while(OpenedLibrariesHandleSize > 0) FreeLibrary(OpenedLibrariesHandle[--OpenedLibrariesHandleSize])
-static __inline HMODULE GetLibraryHandle(char* szLibraryName) {
-	HMODULE h = NULL;
-	wchar_t* wszLibraryName = NULL;
-	int size;
-	if (szLibraryName == NULL || szLibraryName[0] == 0)
-		goto out;
-	size = MultiByteToWideChar(CP_UTF8, 0, szLibraryName, -1, NULL, 0);
-	if ((size <= 1) || ((wszLibraryName = (wchar_t*)calloc(size, sizeof(wchar_t))) == NULL) ||
-		(MultiByteToWideChar(CP_UTF8, 0, szLibraryName, -1, wszLibraryName, size) != size))
-		goto out;
-	// If the library is already opened, just return a handle (that doesn't need to be freed)
-	if ((h = GetModuleHandleW(wszLibraryName)) != NULL)
-		goto out;
-	// Sanity check
-	if (OpenedLibrariesHandleSize >= MAX_LIBRARY_HANDLES) {
-		uprintf("Error: MAX_LIBRARY_HANDLES is too small\n");
-		goto out;
-	}
-	h = LoadLibraryExW(wszLibraryName, NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
-	if (h != NULL)
-		OpenedLibrariesHandle[OpenedLibrariesHandleSize++] = h;
-	else
-		uprintf("Unable to load '%S.dll': %s", wszLibraryName, WindowsErrorString());
-out:
-	free(wszLibraryName);
-	return h;
-}
-#define PF_TYPE(api, ret, proc, args)		typedef ret (api *proc##_t)args
-#define PF_DECL(proc)						static proc##_t pf##proc = NULL
-#define PF_TYPE_DECL(api, ret, proc, args)	PF_TYPE(api, ret, proc, args); PF_DECL(proc)
-#define PF_INIT(proc, name)					if (pf##proc == NULL) pf##proc = \
-	(proc##_t) GetProcAddress(GetLibraryHandle(#name), #proc)
-#define PF_INIT_ID(proc, name, id)			if (pf##proc == NULL) pf##proc = \
-	(proc##_t) GetProcAddress(GetLibraryHandle(#name), MAKEINTRESOURCEA(id))
-#define PF_INIT_OR_OUT(proc, name)			do {PF_INIT(proc, name);         \
-	if (pf##proc == NULL) {uprintf("Unable to locate %s() in '%s.dll': %s",  \
-	#proc, #name, WindowsErrorString()); goto out;} } while(0)
-#define PF_INIT_ID_OR_OUT(proc, name, id)	do {PF_INIT_ID(proc, name, id);  \
-	if (pf##proc == NULL) {uprintf("Unable to locate %s() in %s.dll: %s\n",  \
-	#proc, #name, WindowsErrorString()); goto out;} } while(0)
-#define PF_INIT_OR_SET_STATUS(proc, name)	do {PF_INIT(proc, name);         \
-	if ((pf##proc == NULL) && (NT_SUCCESS(status))) status = STATUS_PROCEDURE_NOT_FOUND; } while(0)
-#if defined(_MSC_VER)
-#define TRY_AND_HANDLE(exception, TRY_CODE, EXCEPTION_CODE) __try TRY_CODE   \
-	__except (GetExceptionCode() == exception ? EXCEPTION_EXECUTE_HANDLER :  \
-			  EXCEPTION_CONTINUE_SEARCH) EXCEPTION_CODE
-#else
-// NB: Eventually we may try __try1 and __except1 from MinGW...
-#define TRY_AND_HANDLE(exception, TRY_CODE, EXCEPTION_CODE) TRY_CODE
-#endif
 
 /* Custom application errors */
 #define FAC(f)                         ((f)<<16)

@@ -30,6 +30,12 @@ target_link_libraries(test_libcdio PRIVATE rufus_cdio)
 rufus_add_test(test_ext2fs test_ext2fs.c)
 target_link_libraries(test_ext2fs PRIVATE PkgConfig::EXT2FS)
 
+# The rules are checked against the original Windows functions (rules_oracle/rules_win.c)
+rufus_add_test(test_rules test_rules.c rules_oracle/rules_win.c)
+target_link_libraries(test_rules PRIVATE rufus_core)
+# The oracle is verbatim upstream code, written for LLP64 format specifiers
+set_source_files_properties(rules_oracle/rules_win.c PROPERTIES COMPILE_OPTIONS "-Wno-format-security;-Wno-format;-Wno-unused-function;-Wno-unused-variable")
+
 # End-to-end tests: ctest -L e2e
 if(RUFUS_E2E_TESTS)
 	find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)

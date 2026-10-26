@@ -675,6 +675,15 @@ Size: S / M / L / XL (relative effort). Each stage ends with a working, testable
   only USBSTOR sets `is_USB`, and card reader enumerators are never recognized.
 - `src/format.c:516` compares `Label` (the volume label) with `"UDF"` instead of the file
   system name, so `SETTING_USE_UDF_VERSION` effectively never applies.
+- **Main window rules** (`rufus.c`). `core/rules.c` keeps these on purpose, so that it
+  stays identical to the Windows behaviour; each one is marked in the code.
+  - The `IDC_BOOT_SELECTION` handler ends by swapping the partition scheme and the target
+    system: `target_type` gets the partition style and `partition_type` the target type.
+  - `SetFSFromISO()` seeds its file system mask with `FS_NTFS | FS_FAT32` (indexes, not
+    bits), so FAT32 always counts as available, and FAT16 does whenever there is no file
+    over 4 GB.
+  - `SetProposedLabel()` compares `"NO_LABEL"` with `""` instead of with the drive label.
+  - The `IDC_FILE_SYSTEM` handler never records FAT16 (index 0) as the user's choice.
 - **bled**:
   - zip members with `..` or absolute paths were extracted outside the target
     directory;

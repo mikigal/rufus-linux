@@ -64,7 +64,7 @@
 /*
  * Globals
  */
-const char* FileSystemLabel[FS_MAX] = { "FAT", "FAT32", "NTFS", "UDF", "exFAT", "ReFS", "ext2", "ext3", "ext4" };
+extern const char* FileSystemLabel[FS_MAX];	// Now in core/rules.c
 DWORD ErrorStatus = 0, LastWriteError = 0;
 badblocks_report report = { 0 };
 static float format_percent = 0.0f;

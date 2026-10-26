@@ -208,6 +208,26 @@ typedef struct {
 #define ERROR_MUI_FILE_NOT_LOADED               15105
 #define ERROR_API_UNAVAILABLE                   15841
 
+/* Disk partition styles (values match PARTITION_STYLE from winioctl.h) */
+#define PARTITION_STYLE_MBR                     0
+#define PARTITION_STYLE_GPT                     1
+#define PARTITION_STYLE_RAW                     2
+
+/* PE machine types (values match the PE/COFF specification) */
+#define IMAGE_FILE_MACHINE_UNKNOWN              0x0000
+#define IMAGE_FILE_MACHINE_I386                 0x014c
+#define IMAGE_FILE_MACHINE_ARM                  0x01c0
+#define IMAGE_FILE_MACHINE_ARMNT                0x01c4
+#define IMAGE_FILE_MACHINE_IA64                 0x0200
+#define IMAGE_FILE_MACHINE_EBC                  0x0ebc
+#define IMAGE_FILE_MACHINE_RISCV32              0x5032
+#define IMAGE_FILE_MACHINE_RISCV64              0x5064
+#define IMAGE_FILE_MACHINE_RISCV128             0x5128
+#define IMAGE_FILE_MACHINE_LOONGARCH32          0x6232
+#define IMAGE_FILE_MACHINE_LOONGARCH64          0x6264
+#define IMAGE_FILE_MACHINE_AMD64                0x8664
+#define IMAGE_FILE_MACHINE_ARM64                0xaa64
+
 /* C runtime spellings */
 #define _stricmp                        strcasecmp
 #define _strnicmp                       strncasecmp
