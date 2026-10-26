@@ -1,0 +1,674 @@
+# Rufus for Linux (Wayland): porting plan
+
+Baseline: Rufus 4.16 (`85873804`). This document describes how to bring **every feature
+and the full user interface** of the Windows version to Linux, running natively under
+Wayland, and tracks the progress of the port.
+
+---
+
+## 1. Summary
+
+- **Rufus' own code** is about 46k lines (`src/*.c|h`), and the bundled libraries add
+  about 150k more (`bled`, `ext2fs`, `libcdio`, `ms-sys`, `syslinux`, `wimlib`).
+  - The libraries are mostly upstream POSIX code with thin Windows shims.
+  - Rufus' own code is **tightly bound to Win32**:
+    - worker threads read GUI controls directly;
+    - paths assume a drive letter (`"D:"`);
+    - all I/O goes through `HANDLE` and `DeviceIoControl`.
+- **Wayland forces a privilege split.** A GUI should not (and by default cannot) run as
+  root under Wayland, so the work is divided between two processes:
+  - **Unprivileged GUI**: device enumeration, image analysis, hashing and downloads.
+  - **Privileged `rufus-helper`** (polkit/pkexec, no GUI): formatting, writing, and every
+    other raw-disk operation.
+- **Toolkit: Qt 6 Widgets.** It gives the most faithful rendition of the classic Rufus
+  window (split button, combos, progress bar with text, status bar) and mature Wayland
+  support. The core stays in C, and the C++/C boundary doubles as the logic/UI
+  separation that the code base lacks today.
+- **Strategy: fork and refactor in place.**
+  - Logic files (`iso.c`, `hash.c`, `wue.c`, `format*.c`, `dos*.c`, `parser.c`...) keep
+    their names and function structure, so upstream fixes can still be carried over.
+  - The GUI layer (`ui.c`, `stdlg.c`, `darkmode.c`, parts of `rufus.c`) and the disk
+    layer (`dev.c`, `drive.c`) are rewritten as a Linux backend.
+  - This repository will never build for Windows.
+- **Feature parity** is achievable for almost everything.
+  - Infeasible: ReFS (no `mkfs` on Linux), FFU (needs `dism`), post-write Chkdsk.
+  - Expensive:
+    - Windows To Go (needs a `bcdboot` replacement);
+    - "Download ISO" (Fido is a PowerShell script with a WPF GUI and must be
+      reimplemented).
+
+---
+
+## 2. Status
+
+| Stage | Status |
+|---|---|
+| 0. Foundation (build system, compat layer, libraries, CI, test harness) | in progress |
+| 1. Decouple the logic from the UI | not started |
+| 2. Linux backend, helper, CLI | not started |
+| 3. Qt 6 GUI | not started |
+| 4. Advanced features | not started |
+| 5. Windows To Go | not started |
+| 6. Distribution | not started |
+
+**Stage 0, done so far**
+
+- **CMake build**:
+  - strict warnings for Rufus' code (fatal with `-DRUFUS_WERROR=ON`) and relaxed ones
+    for vendored code;
+  - Qt 6 entry point that sets the Wayland `app_id`.
+- **`src/compat/compat.h`**: Windows types, error codes and C runtime spellings only;
+  no API emulation.
+- **Libraries**:
+  - **bled**: POSIX port. File descriptors replace `HANDLE`s, and two security fixes
+    were added: a zip-slip guard and no file-sized stack allocations.
+  - **ms-sys**: file descriptor I/O.
+  - **Syslinux** libfat/libinstaller: no Windows code left.
+  - **libcdio** (Rufus fork, for El Torito virtual files): glibc `config.h`.
+  - **wimlib**: re-vendored at 1.14.5 with the Rufus ISO/UDF reader ported.
+  - **ext2fs**: now the system library.
+- **Unit tests** under `ctest`, and GitHub Actions on Arch (gcc, clang), Fedora and
+  Ubuntu.
+
+**Stage 0, remaining**: the E2E harness described in §8.
+
+---
+
+## 3. Code inventory
+
+| Area | Files | Win32 coupling | Verdict |
+|---|---|---|---|
+| Main GUI | `rufus.c` (4376), `ui.c`, `ui.h`, `ui_data.h`, `rufus.rc`, `resource.h` | total; ~55% of `rufus.c` is logic mixed with `ComboBox_*`/`EnableWindow` | move logic to `core/`, rewrite UI in Qt |
+| Dialogs | `stdlg.c` (2539), `darkmode.c` (1205) | total (dialog procs, RichEdit RTF, uxtheme, taskbar) | rewrite / drop |
+| Devices | `dev.c` (SetupAPI, CfgMgr, USB hub IOCTLs) | total | new backend: libudev + sysfs |
+| Disks | `drive.c` (2732): VDS COM, MountMgr, `IOCTL_DISK_*`, drive letters | total | new backend; keep the partition layout maths of `CreatePartition` |
+| Formatting | `format.c` (2078), `format_fat32.c`, `format_ext.c` | medium: fmifs/VDS, widgets read from the worker thread | keep the pipeline; FS via `mkfs.*`, ext via system libext2fs |
+| ISO | `iso.c` (2283) + libcdio | low, but `"D:/..."` paths with hard-coded offsets | path refactor (mount root + relative path) |
+| WUE / Windows | `wue.c` (1485) | `RegLoadKey`, `bcdboot`, `dism`, locale/TZ APIs | unattend is portable; hives via hivex; WTG is hard |
+| DOS | `dos.c`, `dos_locale.c` | low (FAT attributes, keyboard APIs) | portable + XKB to KLID tables |
+| Hash / Secure Boot | `hash.c` (2707), `pki.c` | Win32 threads, WinCrypt/WinTrust | algorithms portable; signatures via OpenSSL |
+| Network | `net.c` | WinInet, COM NetworkList | libcurl |
+| Utilities | `stdio.c`, `stdfn.c`, `parser.c`, `msapi_utf8.h` (79 wrappers, 241 calls) | high | rewrite on POSIX; `parser.c` to UTF-8 |
+| Processes | `process.c` | NT native API | `/proc/*/fd` scan |
+| Bad blocks | `badblocks.c` | low (HANDLE, `SetTimer`) | portable, but **needs `O_DIRECT`** |
+| SMART/HDD | `smart.c`, `hdd_vs_ufd.h` | heuristics are pure; passthrough only in test builds | portable; `SG_IO` optional |
+
+How pervasive Windows is in the main files:
+
+| Item | Uses |
+|---|---|
+| `BOOL` | 706 |
+| `DWORD` | 583 |
+| `HWND` | 215 |
+| `HANDLE` | 202 |
+| `SendMessage` | 180 |
+| `MAX_PATH` | 112 |
+| `wchar_t` | 107 |
+| string literals with `\\` path separators | 206 |
+| `%lu`/`%lx` format specifiers | 54 |
+
+---
+
+## 4. Key decisions
+
+### 4.1 Privilege split (forced by Wayland)
+
+On Windows, Rufus requires administrator rights at startup (`rufus.c:3787`). Under
+Wayland, a GUI started as root cannot connect to the compositor, whose socket lives in
+the user's `$XDG_RUNTIME_DIR`. Running graphical applications through `pkexec` is also
+discouraged. Hence:
+
+```
+┌──────────────────────── rufus (GUI, user, Wayland) ─────────────────────────┐
+│  Qt 6 Widgets  ──►  controller (C++)  ──►  librufus-core (C)                 │
+│  • enumeration + hotplug (libudev, udev database: no root needed)            │
+│  • image analysis (libcdio/wimlib), BootCheck, questions to the user         │
+│  • hashing, downloads (libcurl + RSA verification), settings, localization   │
+└───────────────┬──────────────────────────────────────────────────────────────┘
+                │ pkexec rufus-helper   (socketpair as stdin/stdout,
+                │ framed messages, image fd passed with SCM_RIGHTS)
+┌───────────────▼──────────────────────────────────────────────────────────────┐
+│  rufus-helper (root, no GUI): librufus-core + platform/linux                 │
+│  • FormatThread: partitions, mkfs, MBR/PBR, ISO extraction, syslinux/grub,   │
+│    WUE                                                                       │
+│  • bad blocks, image read/write, zeroing, scan for blocking processes        │
+│  • private mount namespace (unshare CLONE_NEWNS), automount suppression     │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Rules**
+
+- **The helper is started lazily**, on the first operation that needs it: START, saving
+  a drive image, or the blocking-process scan. It stays alive for the session, and its
+  polkit action uses `auth_admin_keep`, so the user sees a single prompt, much like UAC.
+- **The helper does not trust the GUI.**
+  - It enumerates the device again and checks its `diskseq`.
+  - It refuses system disks: `/`, `/boot`, swap, dm/LVM/md holders, and the disk that
+    holds the image.
+  - It scans the image again itself, so `img_report` never needs to be serialized.
+- **The image file is passed as a file descriptor** (`SCM_RIGHTS`), so the helper never
+  opens user-chosen paths as root.
+- **EOF on the socket means cancel and clean up**: unmount, and remove the temporary
+  udev rule.
+- **Transport**: start with pkexec plus stdio. The protocol is transport-agnostic, so it
+  can later become a D-Bus-activated system service.
+
+**Rejected alternatives**
+
+- **UDisks2 alone**:
+  - no control over cluster size (older versions);
+  - no sector-exact partition layout;
+  - no whole-disk `O_EXCL`, no FIEMAP, no process scan;
+  - it mounts under `/run/media`, which the desktop sees.
+- **GUI as root**: does not work under Wayland, and is bad practice.
+
+### 4.2 Toolkit: Qt 6 Widgets (confirmed)
+
+| Rufus needs | Qt 6 | GTK 4 |
+|---|---|---|
+| SELECT▾DOWNLOAD split button | `QToolButton::MenuButtonPopup` | only `AdwSplitButton` (libadwaita) |
+| Classic combo box, status bar | `QComboBox`, `QStatusBar` | `GtkComboBox`/`GtkStatusbar` deprecated since 4.10 |
+| Dialogs opened from worker threads | `Qt::BlockingQueuedConnection` (same semantics as `SendMessage`) | manual `g_main_context_invoke` + `GCond` |
+| RTL, dark mode, fractional scaling | built in | built in |
+| Look on KDE Plasma | native, server-side decorations | client-side decorations, Breeze-GTK theme |
+
+### 4.3 Code strategy and upstream
+
+- **A fork.** Upstream explicitly does not plan a Linux version.
+- **`src/compat/compat.h`** covers only types, error codes and C runtime spellings:
+  - `BOOL=int`;
+  - `DWORD=uint32_t` (not `unsigned long`, because Linux is LP64);
+  - `ERROR_*` codes and the HRESULT macros;
+  - `_stricmp→strcasecmp`, `_mm_malloc→posix_memalign`.
+
+  This keeps the logic files compiling with small diffs. Windows APIs (`CreateFile`,
+  `DeviceIoControl`, `SendMessage`) are **never emulated**.
+- **Tracking upstream**: add an `upstream` remote (pbatard/rufus) and merge at each
+  release. Conflicts concentrate in rewritten files, where only logic changes need to be
+  carried over by hand.
+
+### 4.4 Libraries
+
+| Library | Decision | Status |
+|---|---|---|
+| **bled** | vendored, POSIX platform layer, file descriptor API | ✅ done |
+| **libcdio** | vendored Rufus fork: El Torito boot images as virtual `/[BOOT]/` files, missing from the system 2.4.0 | ✅ done |
+| **wimlib** | upstream 1.14.5 with the Rufus patches re-applied (see `src/wimlib/README.rufus.md`), NTFS-3G backend when available | ✅ done |
+| **ext2fs** | system `libext2fs` + `com_err` | ✅ done |
+| **ms-sys** | vendored, file descriptor I/O | ✅ done |
+| **syslinux** libfat/libinstaller | vendored; the Windows NTFS sector mapper dropped (FIEMAP later) | ✅ done |
+| cregex, ezxml | unchanged | with the core |
+| getopt, msvc-missing | dropped (glibc) | ✅ done |
+
+Other dependencies:
+
+- **System libraries, still to come**: libudev, libblkid, libcurl, OpenSSL (libcrypto),
+  hivex.
+- **Runtime tools**: `mkfs.fat`, `mkntfs`, `mkfs.exfat`, `mkudffs`, `mke2fs`, plus
+  optionally `qemu-img`.
+
+### 4.5 Build and resources
+
+- **CMake targets**:
+  - the vendored libraries (done);
+  - `librufus-core` (C, from stage 1);
+  - `rufus-helper` (C) and `rufus-cli` (developer/test tool driving the full pipeline
+    without a GUI), both from stage 2;
+  - `rufus` (Qt 6).
+- **Binary payloads** (`rufus.rc:454–540`: syslinux, grub, FreeDOS, `uefi-ntfs.img`,
+  `md5/*.efi`, `dbx/*.efiauth2`, `setup_*.exe`, `embedded.loc`) are embedded with
+  **C23 `#embed`**, which GCC 16 and Clang 23 support.
+  - A `GetResource(IDR_*)` shim stays, and `embedded.loc` is parsed from memory
+    (`fmemopen`).
+  - A file in `/usr/share/rufus` may override an embedded payload.
+  - Never substitute the distribution's syslinux/grub/FreeDOS binaries: `db.h` and
+    libinstaller expect exact versions.
+- **Dropped or replaced**: `hogger.exe` is dropped. Icons go to `hicolor` (PNG/SVG are
+  already in `res/icons`), plus a `.desktop` file.
+
+---
+
+## 5. Mapping Windows to Linux
+
+### 5.1 Devices (`dev.c`)
+
+| Windows | Linux |
+|---|---|
+| SetupAPI/`CM_*` over USBSTOR, UASPSTOR, ... | `udev_enumerate` (`block`/`disk`), skipping loop/ram/zram/dm/md |
+| VID/PID/bcdUSB/speed via hub IOCTLs | parent `usb/usb_device` in sysfs: `idVendor`, `idProduct`, `bcdUSB`, `speed`, `rx_lanes` |
+| UASP detection by driver name | `ID_USB_DRIVER` = `uas` vs `usb-storage` |
+| `SPDRP_REMOVAL_POLICY` | `ID_BUS=usb` + UDisks `Drive.Removable` (sysfs `removable` alone is unreliable) |
+| system disk filter | mountinfo (`/`, `/boot`, `/boot/efi`, `/usr`, `/home`), `/proc/swaps`, `holders/`, UDisks `HintSystem` |
+| "X USB Device" names | sysfs `vendor` + `model` + " USB Device"/" UAS Device" suffix, so the `IsHDD` tables keep working |
+| `WM_DEVICECHANGE` + 1 s debounce | `udev_monitor` (QSocketNotifier) + the same debounce |
+| `0x80+N` drive index | table index + devnode + `diskseq`, re-checked before every open |
+
+The filter chain (`dev.c:944-1157`) becomes a pure `should_list(props, opts)`.
+
+### 5.2 Disk access and locking (`drive.c`)
+
+| Windows | Linux |
+|---|---|
+| `\\.\PhysicalDriveN` + `FSCTL_LOCK_VOLUME` (150×100 ms retries) | unmount partitions, then `open(O_RDWR\|O_EXCL)` the whole disk with the same retry loop |
+| drive letters, `SetVolumeMountPoint`, `AltMountVolume`, `GLOBALROOT` | mount in the helper, in a private namespace (`/run/rufus/mnt-*`); ESPs mount normally, so the hacks go away |
+| VDS `DeletePartition`/`Refresh` | zeroing (`ClearMBRGPT`) + `BLKRRPART` (fallback `BLKPG`) + wait for the udev event |
+| MountMgr AutoMount off | a whole-disk `O_EXCL` blocks partition mounts, plus a temporary `/run/udev/rules.d` rule with `UDISKS_IGNORE=1` |
+| `CycleDevice`/`CyclePort` | `USBDEVFS_RESET` or toggling `authorized` in sysfs |
+| hook that closes the "Format disk" prompt | not needed: automount suppression also hides desktop notifications |
+
+### 5.3 Partitioning
+
+- **Layout maths: portable as-is** (`CreatePartition`, `drive.c:2326-2456`).
+  - It covers alignment, ESP 260 MB, MSR 128 MB, persistence, UEFI:NTFS and the "BIOS
+    Compatibility" partition, plus all MBR/GPT types.
+  - It is extracted as `plan_partitions()`, returning a neutral structure.
+- **Writing: our own MBR/GPT writer** (~300–400 lines: protective MBR, header, CRC32,
+  backup).
+  - It gives exact control over the disk signature (`MBR_UEFI_MARKER`), the GPT
+    attributes (`NO_DRIVE_LETTER`) and the partition names.
+  - It allows byte-level comparison with the Windows output.
+- After writing: `BLKRRPART`, then wait for the partition node.
+
+### 5.4 File systems
+
+| FS | Windows | Linux |
+|---|---|---|
+| FAT16/FAT32 ≤32 GB | fmifs/VDS | `mkfs.fat -F16/-F32 -s -S -n` |
+| FAT32 >32 GB | `format_fat32.c` | the same `format_fat32.c` (writes through an fd; keeps parity) |
+| NTFS | fmifs/VDS | `mkntfs -Q -c -L` (+ `WritePBR` overwrites the boot code as before) |
+| exFAT | fmifs/VDS | `mkfs.exfat -c -L` |
+| UDF | fmifs/VDS | `mkudffs --blocksize --label --udfrev` |
+| ext2/3/4 | vendored libext2fs (`nt_io`), no ext4 | system libext2fs (`unix_io`), **ext4 enabled** |
+| ReFS | VDS, selected editions only | **infeasible**: no open source `mkfs` |
+
+Notes:
+
+- **ext4**: needs `s_checksum_type = CRC32C` with `metadata_csum`. This is verified by
+  `tests/test_ext2fs.c`.
+- **NTFS**: mounted with the kernel **ntfs3** driver, which supports `fallocate` (the AMI
+  contiguous file workaround). NTFS is case-sensitive on Linux, so path lookups in the
+  code must ignore case.
+
+### 5.5 Image writing, ISO extraction, boot loaders
+
+- **DD / compressed images**: `bled` on fds, then `pwrite` with aligned buffers.
+- **ISO extraction**:
+  - `"D:/..."` becomes a mount root plus a relative path;
+  - buffers become `PATH_MAX`;
+  - the hard-coded offsets go (`iso.c:153`, `:185`, `:767`, `:1052`, `hash.c:2499`);
+  - hidden/system attributes use `FAT_IOCTL_SET_ATTRIBUTES` (vfat) or the
+    `system.ntfs_attrib` xattr;
+  - `CreateSymbolicLink` becomes `symlink`, and `SetFileTime` becomes `futimens`.
+- **Order of operations**: MBR/PBR are written **after unmounting**. Windows writes the
+  PBR through a locked, mounted volume.
+- **Syslinux**:
+  1. create `ldlinux.sys` through the file system;
+  2. map its sectors with FIEMAP (vfat/ntfs3);
+  3. run `syslinux_patch`;
+  4. write the VBR.
+- **GRUB2 / Grub4DOS**: raw MBR/SBR writes (`core.img` at LBA 1).
+- **Config patching** (`fix_config`): the logic is unchanged, but `parser.c` moves from
+  `_wfopen(..., "ccs=UNICODE")` to UTF-8 with explicit UTF-16LE/BOM handling.
+- **Split `install.wim` >4 GB, CA2023, `boot.wim` updates**: wimlib, logic unchanged
+  (open as `"<iso>|sources/install.wim"`).
+
+### 5.6 Windows User Experience (`wue.c`)
+
+- **`unattend.xml`** is portable. Host data must be mapped:
+  - IANA time zone → Windows name, via CLDR `windowsZones.xml`;
+  - `LANG` + XKB layout → BCP-47/KLID.
+- **TPM/Secure Boot/RAM bypass**: **hivex** replaces `RegLoadKey`. The existing unattend
+  `RunSynchronous reg add` fallback stays.
+- **Windows To Go**:
+  - wimlib's NTFS-3G apply mode;
+  - ESP population;
+  - a **BCD hive built from `BCD-Template` with hivex**;
+  - `SanPolicy` set in the SYSTEM hive.
+
+  Feasible, but the hardest part of the port.
+
+### 5.7 Network, signatures, updates, Fido
+
+- **WinInet → libcurl**. Downloads stay in the unprivileged GUI, cached in
+  `$XDG_CACHE_HOME/rufus`.
+- **RSA `.sig` verification** (`pki.c:825`) → OpenSSL `EVP_DigestVerify`.
+- **Boot loader issuer certificates** (used by the Secure Boot, DBX and SBAT checks) →
+  OpenSSL `d2i_PKCS7` + `X509_digest`.
+- **Authenticode checks**: dropped.
+- **Self-update**: replaced by a "new version available" notice, using our own `.ver`
+  endpoint rather than `rufus.ie`.
+- **Fido**: reimplemented in C with a Qt dialog (~600–900 lines). It does not work under
+  `pwsh`: it has a WPF GUI and uses Windows named pipes.
+
+### 5.8 Miscellaneous
+
+| Windows | Linux |
+|---|---|
+| registry / `rufus.ini` | always an ini in `$XDG_CONFIG_HOME/rufus/rufus.ini` (`parser.c` already has an ini backend) |
+| `%LOCALAPPDATA%\Rufus\rufus.log` | `$XDG_STATE_HOME/rufus/rufus.log` |
+| `NtQuerySystemInformation` (blocking processes) | helper: `/proc/*/fd` (`S_ISBLK` + `st_rdev`), `fdinfo`, `cmdline`, mountinfo, holders |
+| `CreateThread`/`TerminateThread`/`SetTimer` | pthreads; only cooperative cancellation (atomic `ErrorStatus`) |
+| `WindowsErrorString` (264 calls) | `strerror(errno)` + mapping to `ERROR_*` |
+| `RunCommandWithProgress` | `posix_spawn` + `poll` + `kill` |
+| `GetKeyboardLayoutName`/`GetOEMCP` (DOS locale) | XKB/`LANG` → KLID / OEM code page tables |
+| raw disk I/O (uncached) for bad blocks | **`O_DIRECT`**, otherwise fake drive detection passes from the page cache |
+| VirtDisk (VHD/VHDX) | fixed VHD = raw data + 512-byte footer (by hand); VHDX through `qemu-img` |
+
+---
+
+## 6. GUI under Wayland
+
+### 6.1 Window mapping
+
+| Windows | Qt 6 |
+|---|---|
+| `IDD_DIALOG`: 3 sections, collapsible "advanced" areas, hand-computed pixel layout | layouts; section = header + line; collapse with an arrow `QToolButton` + `adjustSize()` |
+| `IDC_SELECT` split button | `QToolButton` (`MenuButtonPopup`) with a SELECT/DOWNLOAD menu; Ctrl+click = extra .zip |
+| `IDC_PROGRESS` with text, states, marquee | `QProgressBar` subclass with its own `paintEvent` |
+| status bar with a `00:00:00` timer | `QStatusBar` + permanent timer widget |
+| toolbar (language/about/settings/log), save, hash | `QToolButton`s with the `res/icons` images |
+| `IDD_LOG` docked next to the main window | separate window (Wayland forbids positioning) or a slide-out panel |
+| `IDD_ABOUTBOX`/`IDD_LICENSE` (RichEdit RTF) | `QTextBrowser`; RTF from `license.h` and release notes converted to HTML |
+| `IDD_NOTIFICATION` (OK/YesNo/AbortRetryIgnore, "don't show again", "more information") | custom `QDialog` |
+| `IDD_SELECTION` (≤16 radios/checkboxes, user name field, edition combo, nesting) | custom `QDialog` + `QButtonGroup` |
+| `IDD_LIST`, `IDD_HASH`, `IDD_UPDATE_POLICY`, `IDD_NEW_VERSION` | simple `QDialog`s |
+| language menu with check mark | `QMenu` with checkable actions |
+| `IFileDialog` | `QFileDialog` (native KDE dialog / portal) |
+
+### 6.2 Threads and UI communication
+
+- **`rufus_options_t`**: a snapshot of every option, taken on START. No worker thread
+  reads widgets any more (today ~40 places do: `format.c:699`, `:796`, `:1792-1803`,
+  `dos.c:408`, `wue.c:872`, ...).
+- **`ui_iface.h`**: `ui_log`, `ui_status`, `ui_info`, `ui_progress`, a blocking `ui_ask`,
+  and `ui_event` (replacing `UM_*`).
+  - In the GUI, implemented with `QMetaObject::invokeMethod` (queued / blocking
+    queued).
+  - In the helper, implemented as IPC messages.
+- **`lmprintf`** (rotating static buffers) becomes thread-safe.
+
+### 6.3 Wayland specifics
+
+- **No window positioning**: the log cannot stick to the main window, and dialogs are
+  transient children.
+- **Taskbar progress** (`ITaskbarList3`): D-Bus `com.canonical.Unity.LauncherEntry`
+  (supported by the Plasma task manager and docks). `FlashWindowEx` →
+  `QApplication::alert`, plus `org.freedesktop.Notifications`.
+- **Drag & drop**: `dropEvent` with `text/uri-list`.
+- **Dark mode**: follows Plasma. Rufus' system/dark/light setting (Ctrl-Alt-D) →
+  `QStyleHints::setColorScheme`. `darkmode.c` disappears.
+- **Scaling**: layouts + fractional scaling (`wp_fractional_scale_v1`) instead of
+  `fScale`/`AdjustForLowDPI`.
+- **RTL**: `QGuiApplication::setLayoutDirection(Qt::RightToLeft)`.
+- **Single instance**: D-Bus name `ie.rufus.Rufus` or a `QLockFile`; xdg-activation to
+  raise the existing window.
+- **Alt+letter cheat codes**: an application-wide event filter, ahead of button
+  mnemonics. A bare Alt press/release still cycles the progress text (%/speed/ETA).
+
+### 6.4 Localization
+
+- The `.loc` engine (38 languages) stays.
+- Qt widgets get an `objectName` equal to their `IDC_*` identifier, and
+  `apply_localization` calls `ui_set_text(id, text)` instead of `SetWindowTextU`.
+- New Linux-specific messages go into `rufus.loc`, with an English fallback.
+
+### 6.5 Cheat codes
+
+All of them are carried over (`rufus.c:3904-4280`). Windows-only ones are mapped:
+
+| Shortcut | Windows | Linux |
+|---|---|---|
+| Alt-G | list VHDs | list virtual disks (loop, nbd, virtio); **used by the tests** |
+| Alt-W | VMware disk detection | virtual disk heuristics |
+| Alt-C | cycle USB port | `USBDEVFS_RESET` |
+| Alt-R | delete registry keys | delete `rufus.ini` |
+| Alt-D | delete app files dir | `$XDG_DATA_HOME/rufus` + cache |
+| Alt-V, Alt-X, Alt-Q, Alt-P | VDS, NoDriveTypeAutorun, indexing, ESP toggle | no-op with a message |
+| Alt-N | NTFS compression via `compact` | to evaluate with ntfs-3g; no-op at first |
+
+---
+
+## 7. Feature matrix
+
+| Feature | Status | Notes |
+|---|---|---|
+| Formatting FAT/FAT32/NTFS/exFAT/UDF/ext2/ext3 | ✅ | + ext4 (disabled on Windows) |
+| Large FAT32, cluster sizes, labels, quick/full | ✅ | |
+| DD images (raw, gz/xz/bz2/zstd/lzma/zip/vtsi) | ✅ | |
+| ISOHybrid: ISO / DD / ISO→ESP modes | ✅ | |
+| Linux ISOs: Syslinux 4/6, GRUB2, Grub4DOS, ReactOS | ✅ | FIEMAP instead of retrieval pointers |
+| Windows ISOs: MBR/GPT, BIOS/UEFI, UEFI:NTFS | ✅ | |
+| FreeDOS, MS-DOS | ✅ | `diskcopy.dll` from the MS symbol server |
+| Persistence partition (casper-rw / persistence) | ✅ | |
+| Windows User Experience (local account, privacy, TPM/SB/RAM, BitLocker, S-Mode) | ✅/⚠️ | hivex + locale/TZ mapping |
+| WIM split >4 GB, CA2023, UEFI media validation | ✅ | |
+| Secure Boot checks: DBX, SBAT, SVN, certificates | ✅ | OpenSSL |
+| Bad blocks + fake drive detection | ✅ | requires `O_DIRECT` |
+| MD5/SHA-1/SHA-256/SHA-512 | ✅ | |
+| Save drive to VHD | ✅ | fixed VHD by hand |
+| Save to VHDX, write VHD/VHDX to drive | ⚠️ | `qemu-img` as an optional dependency |
+| Save optical disc to ISO | ✅ | read `/dev/sr*` |
+| USB HDDs, non-USB removables, VID:PID filters | ✅ | |
+| Processes blocking the drive | ✅ | helper, `/proc` |
+| 38 languages, RTL, dark mode, cheat codes, drag & drop | ✅ | |
+| Update check | ⚠️ | notice only; own endpoint |
+| Windows / UEFI Shell ISO download (Fido) | ⚠️ | reimplementation in C |
+| Windows To Go | ⚠️ | NTFS-3G apply + BCD via hivex; high cost |
+| NTFS Chkdsk after writing | ❌ | no equivalent |
+| ReFS | ❌ | no `mkfs.refs` |
+| FFU (save and write) | ❌ | needs `dism` |
+| Self-replacing executable | ❌ | replaced by packages |
+
+---
+
+## 8. Testing without a human in the loop
+
+Goal: every feature can be verified end to end **by a script, without root on the host
+and without physical hardware**. The only manual steps are installing the tools once
+(see `tests/e2e/README.md`) and an optional real-hardware tier.
+
+### 8.1 Tiers
+
+| Tier | What | Privileges | Where | Run with |
+|---|---|---|---|---|
+| T0 | unit tests: libraries, rules, layout planner, MBR/GPT writer, parsers | none | host | `ctest` |
+| T1 | component tests on **image files**: boot records, DD writes, VHD, bled, ext2fs | none | host | `ctest` |
+| T2 | **end-to-end write** to an emulated USB stick, as root | root **inside a VM** | QEMU/KVM VM booted from the host kernel (virtme-ng) | `ctest -L e2e` |
+| T3 | **boot verification** of the written stick | none | QEMU with SeaBIOS (BIOS) and OVMF (UEFI, later UEFI + Secure Boot) | `ctest -L e2e` |
+| T4 | **GUI end-to-end** under a headless Wayland compositor | none (root in the VM for the full stack) | sway headless or `kwin_wayland --virtual` | `ctest -L gui` |
+| T5 | real ISOs (Ubuntu, Fedora, Debian, Arch, Windows 11, ...) | as T2/T3 | as T2/T3 | `ctest -L slow`, nightly, opt-in download |
+| T6 | real hardware with a dedicated stick, identified by USB serial | root | host | opt-in only |
+
+### 8.2 T2: writing to an emulated USB stick, as root, without root on the host
+
+- **The VM boots the host kernel with the host root file system**, read-only, through
+  virtio-fs/9p (virtme-ng), in about a second with KVM. Inside, the tests are root, and
+  the freshly built `rufus-cli`/`rufus-helper` run unchanged from the build directory.
+- **The target is a sparse raw file on the host**, attached to the VM as a real USB
+  device: `-device qemu-xhci -device usb-storage` (or `usb-uas` for the UASP path).
+  The whole Linux backend is therefore exercised for real:
+  - udev reports `ID_BUS=usb` and `ID_USB_DRIVER=usb-storage|uas`;
+  - the filters, unmount, `O_EXCL`, `BLKRRPART`, mkfs, the private mount namespace and
+    automount suppression all run against it.
+- **Hotplug**: QMP `device_add` / `device_del` of the stick while Rufus runs (device
+  list refresh, removal during a write).
+- **Structural checks after the VM exits**, on the host and unprivileged, against the
+  stick image:
+  - `sfdisk --json` (layout, types, attributes, disk signature);
+  - `blkid -p -O <offset>` (file system, label);
+  - `mdir`/`mcopy -i img@@offset` (FAT contents);
+  - `fsck.* -n` on extracted partitions;
+  - comparison of file hashes with the source ISO;
+  - byte checks of the MBR/PBR against the boot code tables in ms-sys.
+
+### 8.3 T3: does the stick boot?
+
+The written image is booted in QEMU **as a USB stick** (xHCI + `usb-storage`,
+`bootindex=0`), with SeaBIOS and OVMF. Success is detected through three observation
+channels, without a screen or a person:
+
+1. **Serial console marker**: the synthetic test media boot a tiny Linux system (the
+   host kernel + a static `init`) that prints `RUFUS-E2E-BOOT-OK`, the kernel command
+   line and the block devices it sees (with ext labels) to `ttyS0`, then powers off.
+   This checks, for example, that persistence parameters were injected and that a
+   `casper-rw` partition exists.
+2. **VGA text memory**: in BIOS text mode, QMP `pmemsave` of `0xB8000` is decoded as
+   CP437, to read boot menus (syslinux, GRUB), the FreeDOS/MS-DOS prompt, or SeaBIOS
+   errors such as "No bootable device".
+3. **Screenshots + OCR**: QMP `screendump` (PNG) + `tesseract`, for graphical screens
+   (UEFI GRUB, Windows Setup, OVMF shell).
+
+Each test case states its firmware, expected channel and timeout. Serial logs,
+screenshots and OCR output are kept as artifacts.
+
+### 8.4 Test media, generated without downloads
+
+A media builder (`tests/e2e`) creates small, deterministic images from tools that are
+already installed:
+
+| Media | Built with | Exercises |
+|---|---|---|
+| `linux-grub.iso` | `grub-mkrescue` (BIOS + UEFI ISOHybrid) + host kernel + marker initramfs | ISO mode with GRUB2 (incl. Rufus' own `core.img`), DD mode, ISO→ESP |
+| `linux-syslinux.iso` | isolinux + `isohybrid` | Syslinux install, config patching |
+| `casper.iso` | GRUB ISO with an Ubuntu-like `/casper` layout | persistence partition + kernel parameters |
+| `windows-like.iso` | UDF/ISO-9660 tree with `bootmgr`, `efi/boot/bootx64.efi` (a GRUB EFI binary that boots the marker kernel) and a `sources/install.wim` made by wimlib, with a >4 GB variant (slow tier) | Windows detection, UEFI:NTFS chain loading, WIM split, WUE file injection |
+| `disk.img[.gz/.xz/.zst/.bz2]`, `.vhd`, `.vhdx` | the ISOs above as raw disks, compressed or converted | DD writes, decompression, VHD/VHDX |
+| FreeDOS / MS-DOS | Rufus' own embedded files | DOS boot to a prompt (VGA text) |
+
+**Real ISOs (T5)** are downloaded once into `~/.cache/rufus-tests`, pinned by SHA-256,
+only with the user's consent. Their pass criteria are OCR of the boot menu / Windows
+Setup screen.
+
+### 8.5 T4: GUI
+
+- **Compositor**: the app runs with `QT_QPA_PLATFORM=wayland` inside `dbus-run-session`,
+  under `sway` (wlroots headless backend) and `kwin_wayland --virtual` (the compositor
+  this port primarily targets).
+- **Driver**: AT-SPI (`python-atspi`), finding widgets by their `IDC_*` object names:
+  - select the device, choose options, press START, answer dialogs;
+  - assert enabled/disabled matrices, translated labels and the RTL layout.
+- **Screenshots**: with `grim` (sway), compared to baselines with a tolerance, plus
+  in-app captures (`QWidget::grab`) through a test hook.
+- **Helper**: replaced on the host by a fake helper that records the job and replays
+  scripted progress and prompts. The full stack (GUI + real helper + emulated stick)
+  runs inside the T2 VM.
+
+### 8.6 Parity with Windows
+
+The partition layout planner and the boot record writers are table-tested against
+expected values derived from the Windows code: offsets, sizes, types, GUIDs, attributes
+and boot code bytes.
+
+An optional golden set (the same ISO written by the Windows Rufus to a VHD in a Windows
+VM) can be added later. Producing it needs a Windows installation, so it is not part of
+the autonomous loop.
+
+### 8.7 CI
+
+GitHub-hosted Linux runners expose KVM, so T0–T4 (except the slow tier) can run on every
+push. On the host: `ctest` for T0/T1, `ctest -L e2e` for T2/T3, and `ctest -L gui` for
+T4.
+
+---
+
+## 9. Stages
+
+Size: S / M / L / XL (relative effort). Each stage ends with a working, testable result.
+
+### Stage 0: Foundation (M), in progress
+
+- CMake with the targets of §4.5, compat header, library ports, CI: **done**.
+- E2E harness (§8):
+  - a VM runner with an emulated USB stick;
+  - a QEMU boot verifier with the serial, VGA text and OCR channels;
+  - the synthetic media builder.
+- **Done when** the harness boots the synthetic media directly (as a CD and as a
+  `dd`-written USB stick) under BIOS and UEFI, and recognizes success and failure on
+  every channel.
+
+### Stage 1: Decouple the logic from the UI (XL, critical)
+
+- `rufus_options_t` + `ui_iface.h`; no more widget reads from threads (~40 places).
+- Move from `rufus.c` into pure functions in `core/rules.c`: `SetAllowedFileSystems`,
+  `SetPartitionSchemeAndTargetSystem`, `SetFileSystemAndClusterSize`,
+  `SetProposedLabel`, and the option applicability rules.
+- `ImageScanThread` and `BootCheckThread` move into the core, with questions going
+  through `ui_ask`.
+- Path refactor (no more `"D:"`), `parser.c` to UTF-8, `msapi_utf8.h` removed, pthreads,
+  atomic `ErrorStatus`.
+- **Done when** the core compiles without `windows.h`, and rule matrix tests (image type
+  × options → allowed FS/partition/target) match the Windows behaviour.
+
+### Stage 2: Linux backend + helper + CLI (XL)
+
+- `platform/linux`:
+  - enumeration and hotplug, filters, `O_EXCL` opens;
+  - the MBR/GPT writer, `BLKRRPART`, private mounts, mkfs;
+  - automount suppression, the blocking-process scan, bad blocks with `O_DIRECT`.
+- `rufus-helper` + IPC protocol + polkit action `ie.rufus.helper`; `rufus-cli`.
+- **Done when** T2 + T3 pass for:
+  - non-bootable formatting in every FS;
+  - DD (raw/xz/zst);
+  - GRUB and Syslinux ISOs (ISO and DD modes);
+  - the Windows-like ISO (GPT/UEFI, and MBR/BIOS+UEFI with UEFI:NTFS);
+  - FreeDOS;
+  - persistence.
+
+### Stage 3: Qt 6 GUI (L)
+
+- The main window and every dialog of §6.1, plus localization, RTL, dark mode, cheat
+  codes, drag & drop, hotplug, taskbar progress, log and settings.
+- **Done when** T4 passes on sway and KWin at 100/125/150% scaling, including a sample
+  of languages with RTL, and every cheat code is reachable.
+
+### Stage 4: Advanced features (L)
+
+- WUE (hivex, locale/TZ/keyboard mapping), persistence, bad blocks UI, UEFI validation,
+  and Secure Boot checks (with T3 under OVMF + Secure Boot).
+- MS-DOS + DOS locale, signed syslinux/grub downloads, DBX/SBAT updates, update check.
+- VHD/VHDX, optical disc → ISO, and Fido in C with a Qt dialog.
+
+### Stage 5: Windows To Go (L, optional)
+
+- NTFS-3G apply, ESP, BCD from the template via hivex, SanPolicy, and `unattend.xml` in
+  `Panther`.
+
+### Stage 6: Distribution (S)
+
+- PKGBUILD (Arch/CachyOS) first, then .deb/.rpm.
+- `.desktop` file, AppStream metainfo, hicolor icons, polkit action, man page.
+- Flatpak is **not** possible with a pkexec helper. AppImage is possible as a secondary
+  format (polkit then shows the generic `pkexec` prompt).
+
+---
+
+## 10. Risks
+
+| Risk | Mitigation |
+|---|---|
+| Stage 1 touches most of the code, which makes upstream merges painful | small mechanical commits; keep function names; merge at every upstream release |
+| Races with desktop automount (KDE Device Notifier, gvfs) | whole-disk `O_EXCL` + `UDISKS_IGNORE` rule + private mount namespace; covered by T2 |
+| NTFS: ntfs3 vs ntfs-3g, case sensitivity, file contiguity | ntfs3 by default; case-insensitive lookups in the code; T3 boot tests |
+| Fido breaks when Microsoft changes its site | follow upstream Fido; feature is optional |
+| Windows To Go: BCD format poorly documented | template from `BCD-Template` on the ISO; T3 tests; optional stage |
+| A fork called "Rufus" may confuse users and load upstream servers | clearly marked as unofficial, own update endpoint, possibly a mirror for syslinux/grub files |
+
+---
+
+## 11. Upstream bugs found along the way
+
+- `src/dev.c:778` compares `usbstor_name[0]` instead of `usbstor_name[j]`. As a result,
+  only USBSTOR sets `is_USB`, and card reader enumerators are never recognized.
+- `src/format.c:516` compares `Label` (the volume label) with `"UDF"` instead of the file
+  system name, so `SETTING_USE_UDF_VERSION` effectively never applies.
+- **bled**:
+  - zip members with `..` or absolute paths were extracted outside the target
+    directory;
+  - the xz index / 7z header buffers were sized from the file and put on the stack.
+
+  Both are fixed in this port.
+- **wimlib ISO reader** (Windows version):
+  - `full_read()` always read from offset 0;
+  - reads past the end of the file silently returned a short buffer.
+
+  Both are fixed in this port.
