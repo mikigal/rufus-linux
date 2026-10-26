@@ -70,3 +70,5 @@ stamp-h1
 # CMake build trees
 /build*/
 compile_commands.json
+# Python
+__pycache__/

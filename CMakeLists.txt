@@ -13,6 +13,7 @@ endif()
 option(RUFUS_BUILD_GUI "Build the Qt 6 user interface" ON)
 option(RUFUS_BUILD_TESTS "Build the unit tests" ON)
 option(RUFUS_WERROR "Treat warnings in Rufus' own code as errors" OFF)
+option(RUFUS_E2E_TESTS "Register the end-to-end tests (need QEMU, see tests/e2e/README.md)" OFF)
 
 # Rufus has always defaulted to debug builds
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)

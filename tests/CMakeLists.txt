@@ -29,3 +29,12 @@ target_link_libraries(test_libcdio PRIVATE rufus_cdio)
 
 rufus_add_test(test_ext2fs test_ext2fs.c)
 target_link_libraries(test_ext2fs PRIVATE PkgConfig::EXT2FS)
+
+# End-to-end tests: ctest -L e2e
+if(RUFUS_E2E_TESTS)
+	find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+	add_test(NAME e2e_harness COMMAND Python3::Interpreter -m unittest -v test_harness
+		WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/e2e")
+	set_tests_properties(e2e_harness PROPERTIES LABELS e2e TIMEOUT 3600
+		ENVIRONMENT "RUFUS_BUILD_DIR=${PROJECT_BINARY_DIR}")
+endif()
