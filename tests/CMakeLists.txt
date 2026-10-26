@@ -26,3 +26,6 @@ target_link_libraries(test_wimlib PRIVATE wim)
 
 rufus_add_test(test_libcdio test_libcdio.c)
 target_link_libraries(test_libcdio PRIVATE rufus_cdio)
+
+rufus_add_test(test_ext2fs test_ext2fs.c)
+target_link_libraries(test_ext2fs PRIVATE PkgConfig::EXT2FS)

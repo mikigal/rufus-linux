@@ -33,6 +33,8 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(RufusWarnings)
 
 find_package(PkgConfig REQUIRED)
+# System libraries (vendored ones live under src/)
+pkg_check_modules(EXT2FS REQUIRED IMPORTED_TARGET GLOBAL ext2fs com_err)
 
 add_subdirectory(src)
 
