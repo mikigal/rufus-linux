@@ -29,3 +29,8 @@ All Rufus specific changes are guarded by `WITH_LIBCDIO` or `_RUFUS`:
   `include/wimlib/progress.h`.
 * **No in-place compaction warning** (`_RUFUS`), as Rufus compacts the
   `boot.wim` on its own media. `src/write.c`.
+
+## Build fixes
+
+* `src/blob_table.c`: a `STATIC_ASSERT()` comparing member addresses is not a
+  constant expression for clang; compare `offsetof()` values instead.

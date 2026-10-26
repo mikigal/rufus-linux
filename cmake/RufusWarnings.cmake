@@ -13,7 +13,10 @@ if(RUFUS_WERROR)
 	target_compile_options(rufus_warnings INTERFACE -Werror)
 endif()
 
+# NB: usage requirements are appended after a target's own options, so any
+# -Wno-xyz that -Wall would override must be listed here, after -Wall.
 add_library(vendor_warnings INTERFACE)
 target_compile_options(vendor_warnings INTERFACE
-	-Wall -Wno-unused-parameter -Wno-sign-compare -Wno-pointer-sign
+	-Wall -Wno-unused-parameter -Wno-sign-compare -Wno-pointer-sign -Wno-strict-aliasing
+	$<$<C_COMPILER_ID:Clang>:-Wno-unknown-pragmas>
 	$<$<COMPILE_LANGUAGE:C>:-Werror=implicit-function-declaration>)

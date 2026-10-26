@@ -9,5 +9,5 @@ add_library(bled STATIC
 	zstd_error_private.c)
 target_include_directories(bled PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(bled PRIVATE BLED_EXPECT_DISK_IMAGE)
-target_compile_options(bled PRIVATE -Wno-undef -Wno-strict-aliasing)
+target_compile_options(bled PRIVATE -Wno-undef)
 target_link_libraries(bled PRIVATE vendor_warnings)

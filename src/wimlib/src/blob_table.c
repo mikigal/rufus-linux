@@ -180,8 +180,9 @@ blob_release_location(struct blob_descriptor *blob)
 			      (void*)&blob->staging_file_name);
 #endif
 	case BLOB_IN_ATTACHED_BUFFER:
-		STATIC_ASSERT((void*)&blob->file_on_disk ==
-			      (void*)&blob->attached_buffer);
+		/* Rufus: offsetof() keeps this a constant expression for clang */
+		STATIC_ASSERT(offsetof(struct blob_descriptor, file_on_disk) ==
+			      offsetof(struct blob_descriptor, attached_buffer));
 		FREE(blob->file_on_disk);
 		break;
 #ifdef _WIN32

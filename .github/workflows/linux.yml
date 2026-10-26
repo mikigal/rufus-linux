@@ -1,0 +1,81 @@
+name: Linux build
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - '.github/ISSUE_TEMPLATE/**'
+      - '**.md'
+      - 'res/loc/**'
+  pull_request:
+    branches: [master]
+    paths-ignore:
+      - '.github/ISSUE_TEMPLATE/**'
+      - '**.md'
+      - 'res/loc/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.distro }} (${{ matrix.cc }})
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: Arch Linux
+            image: archlinux:latest
+            cc: gcc
+            cxx: g++
+          - distro: Arch Linux
+            image: archlinux:latest
+            cc: clang
+            cxx: clang++
+          - distro: Fedora
+            image: fedora:latest
+            cc: gcc
+            cxx: g++
+          - distro: Ubuntu 24.04 (no GUI, Qt is too old)
+            image: ubuntu:24.04
+            cc: gcc
+            cxx: g++
+            cmake_flags: -DRUFUS_BUILD_GUI=OFF
+
+    steps:
+      - name: Install dependencies (Arch Linux)
+        if: startsWith(matrix.image, 'archlinux')
+        run: |
+          pacman -Syu --noconfirm --needed base-devel git cmake ninja clang qt6-base \
+            e2fsprogs dosfstools libisoburn libntfs-3g
+
+      - name: Install dependencies (Fedora)
+        if: startsWith(matrix.image, 'fedora')
+        run: |
+          dnf install -y git gcc gcc-c++ clang cmake ninja-build pkgconf-pkg-config \
+            qt6-qtbase-devel e2fsprogs e2fsprogs-devel libcom_err-devel util-linux \
+            dosfstools xorriso ntfs-3g-devel
+
+      - name: Install dependencies (Ubuntu)
+        if: startsWith(matrix.image, 'ubuntu')
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential cmake ninja-build \
+            pkg-config e2fsprogs libext2fs-dev comerr-dev dosfstools xorriso libntfs-3g-dev
+
+      - uses: actions/checkout@v5
+
+      - name: Configure
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: cmake -S . -B build -G Ninja -DRUFUS_WERROR=ON ${{ matrix.cmake_flags }}
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
