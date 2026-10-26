@@ -90,7 +90,7 @@ void FAST_FUNC data_extract_all(archive_handle_t *archive_handle)
 					goto ret;
 			}
 			/* Proceed with deleting */
-			if (_unlink(dst_name) == -1
+			if (unlink(dst_name) == -1
 			 && errno != ENOENT
 			) {
 				bb_perror_msg_and_die("can't remove old file %s",
@@ -114,7 +114,7 @@ void FAST_FUNC data_extract_all(archive_handle_t *archive_handle)
 			data_skip(archive_handle);
 			goto ret;
 		}
-		else if ((_unlink(dst_name) == -1) && (errno != EISDIR)) {
+		else if ((unlink(dst_name) == -1) && (errno != EISDIR)) {
 			bb_perror_msg_and_die("can't remove old file %s",
 					dst_name);
 		}
@@ -146,11 +146,12 @@ void FAST_FUNC data_extract_all(archive_handle_t *archive_handle)
 			/* rpm-style temp file name */
 			dst_nameN = xasprintf("%s;%x", dst_name, (int)getpid());
 #endif
-		if (_sopen_s(&dst_fd, dst_name, flags, _SH_DENYNO, file_header->mode) != 0) {
+		dst_fd = open(dst_name, flags | O_CLOEXEC, file_header->mode);
+		if (dst_fd < 0) {
 			bb_perror_msg_and_die("can't open file %s", dst_name);
 		}
 		bb_copyfd_exact_size(archive_handle->src_fd, dst_fd, file_header->size);
-		_close(dst_fd);
+		close(dst_fd);
 #ifdef ARCHIVE_REPLACE_VIA_RENAME
 		if (archive_handle->ah_flags & ARCHIVE_REPLACE_VIA_RENAME) {
 			xrename(dst_nameN, dst_name);
@@ -240,7 +241,7 @@ void FAST_FUNC data_extract_all(archive_handle_t *archive_handle)
 		 * so we use chmod... */
 		if (!(archive_handle->ah_flags & ARCHIVE_DONT_RESTORE_PERM)) {
 			// coverity[toctou]
-			(void)_chmod(file_header->name, file_header->mode);
+			(void)chmod(file_header->name, file_header->mode);
 		}
 		if (archive_handle->ah_flags & ARCHIVE_RESTORE_DATE) {
 			struct timeval64 t[2];

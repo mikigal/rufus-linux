@@ -6,7 +6,7 @@
  * Licensed under GPLv2 or later, see file LICENSE in this source tree.
  */
 
-#include <windows.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #pragma once
@@ -41,8 +41,9 @@ int64_t bled_get_uncompressed_size(const char* src, int type);
 /* Uncompress file 'src', compressed using 'type', to file 'dst' */
 int64_t bled_uncompress(const char* src, const char* dst, int type);
 
-/* Uncompress using Windows handles */
-int64_t bled_uncompress_with_handles(HANDLE hSrc, HANDLE hDst, int type);
+/* Uncompress from file descriptor 'src_fd' to file descriptor 'dst_fd'.
+ * The descriptors remain owned by the caller. */
+int64_t bled_uncompress_with_fds(int src_fd, int dst_fd, int type);
 
 /* Uncompress file 'src', compressed using 'type', to buffer 'buf' of size 'size' */
 int64_t bled_uncompress_to_buffer(const char* src, char* buf, size_t size, int type);
@@ -63,10 +64,11 @@ int64_t bled_uncompress_from_buffer_to_buffer(const char* src, const size_t src_
  *   void progress_function(const uint64_t read_bytes);
  * - specify the function you want to use when switching files in an archive
  *   void switch_function(const char* filename, const uint64_t filesize);
- * - point to an unsigned long variable, to be used to cancel operations when set to non zero
+ * - point to a 32-bit variable, to be used to cancel operations when set to non zero
+ *   (it is read atomically, so it may be set from another thread)
  */
 int bled_init(uint32_t buffer_size, printf_t print_function, read_t read_function, write_t write_function,
-    progress_t progress_function, switch_t switch_function, unsigned long* cancel_request);
+    progress_t progress_function, switch_t switch_function, uint32_t* cancel_request);
 
 /* This call frees any resource used by the library */
 void bled_exit(void);

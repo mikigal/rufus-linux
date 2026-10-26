@@ -111,7 +111,7 @@ void FAST_FUNC fork_transformer(int fd, const char *transform_prog)
 	pid = BB_MMU ? xfork() : xvfork();
 	if (pid == 0) {
 		/* Child */
-		_close(fd_pipe.rd); /* we don't want to read from the parent */
+		close(fd_pipe.rd); /* we don't want to read from the parent */
 		// FIXME: error check?
 #if BB_MMU
 		{
@@ -123,8 +123,8 @@ void FAST_FUNC fork_transformer(int fd, const char *transform_prog)
 			xstate.dst_fd = fd_pipe.wr;
 			r = transformer(&xstate);
 			if (ENABLE_FEATURE_CLEAN_UP) {
-				_close(fd_pipe.wr); /* send EOF */
-				_close(fd);
+				close(fd_pipe.wr); /* send EOF */
+				close(fd);
 			}
 			/* must be _exit! bug was actually seen here */
 			_exit(/*error if:*/ r < 0);
@@ -146,7 +146,7 @@ void FAST_FUNC fork_transformer(int fd, const char *transform_prog)
 	}
 
 	/* parent process */
-	_close(fd_pipe.wr); /* don't want to write to the child */
+	close(fd_pipe.wr); /* don't want to write to the child */
 	xmove_fd(fd_pipe.rd, fd);
 }
 
@@ -279,7 +279,7 @@ static transformer_state_t *open_transformer(const char *fname, int fail_if_not_
 	transformer_state_t *xstate;
 	int fd;
 
-	fd = _open(fname, O_RDONLY);
+	fd = open(fname, O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
 		return NULL;
 
@@ -331,7 +331,7 @@ int FAST_FUNC open_zipped(const char *fname, int fail_if_not_compressed)
 	return fd;
 }
 
-void* FAST_FUNC xmalloc_open_zipped_read_close(const char *fname, size_t *maxsz_p)
+void* FAST_FUNC xmalloc_open_zipped_readclose(const char *fname, size_t *maxsz_p)
 {
 # if 1
 	transformer_state_t *xstate;
@@ -374,7 +374,7 @@ void* FAST_FUNC xmalloc_open_zipped_read_close(const char *fname, size_t *maxsz_
 
 	if (!image)
 		bb_perror_msg("read error from '%s'", fname);
-	_close(xstate->src_fd);
+	close(xstate->src_fd);
 	free(xstate);
 	return image;
 # else

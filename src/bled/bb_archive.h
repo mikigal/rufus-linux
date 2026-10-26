@@ -254,7 +254,7 @@ typedef struct transformer_state_t {
 	} magic;
 } transformer_state_t;
 
-typedef int64_t(*unpacker_t)(transformer_state_t* xstate);
+typedef IF_DESKTOP(long long) int(*unpacker_t)(transformer_state_t* xstate);
 typedef int64_t(*get_uncompressed_size_t)(int fd);
 int64_t get_uncompressed_size(int fd, int type);
 void init_transformer_state(transformer_state_t *xstate) FAST_FUNC;
@@ -264,20 +264,31 @@ int check_signature16(transformer_state_t *xstate, unsigned magic16) FAST_FUNC;
 
 static inline int transformer_switch_file(transformer_state_t* xstate)
 {
-	char dst[MAX_PATH];
+	char dst[PATH_MAX];
 	size_t i, last_slash = 0;
 
-	if (xstate->dst_fd > 0) {
-		_close(xstate->dst_fd);
+	if (xstate->dst_fd >= 0) {
+		close(xstate->dst_fd);
 		xstate->dst_fd = -1;
 	}
-	_snprintf_s(dst, sizeof(dst), _TRUNCATE, "%s/%s", xstate->dst_dir, xstate->dst_name);
+	/* Archives created on Windows may use backslashes as path separators */
+	for (i = 0; xstate->dst_name != NULL && xstate->dst_name[i] != 0; i++) {
+		if (xstate->dst_name[i] == '\\')
+			xstate->dst_name[i] = '/';
+	}
+	if (bb_is_unsafe_path(xstate->dst_name)) {
+		bb_error_msg("Refusing to extract '%s' outside of the target directory",
+			xstate->dst_name ? xstate->dst_name : "");
+		return -EINVAL;
+	}
+	if (snprintf(dst, sizeof(dst), "%s/%s", xstate->dst_dir, xstate->dst_name) >= (int)sizeof(dst)) {
+		bb_error_msg("Path too long: '%s'", xstate->dst_name);
+		return -ENAMETOOLONG;
+	}
 	free(xstate->dst_name);
 	xstate->dst_name = NULL;
 	for (i = 0; i < strlen(dst); i++) {
 		if (dst[i] == '/')
-			dst[i] = '\\';
-		if (dst[i] == '\\')
 			last_slash = i;
 	}
 	if (bled_switch != NULL)
@@ -285,7 +296,7 @@ static inline int transformer_switch_file(transformer_state_t* xstate)
 	dst[last_slash] = 0;
 	bb_make_directory(dst, 0, 0);
 	dst[last_slash] = '/';
-	xstate->dst_fd = _openU(dst, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY, _S_IREAD | _S_IWRITE);
+	xstate->dst_fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
 	if (xstate->dst_fd < 0) {
 		bb_error_msg("Could not create '%s' (errno: %d)", dst, errno);
 		return -errno;

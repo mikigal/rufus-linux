@@ -6,11 +6,6 @@
  * Licensed under GPLv2 or later, see file LICENSE in this source tree.
  */
 
-#ifdef _CRTDBG_MAP_ALLOC
-#include <stdlib.h>
-#include <crtdbg.h>
-#endif
-
 #include "libbb.h"
 #include "bb_archive.h"
 #include "bled.h"
@@ -23,7 +18,7 @@ read_t bled_read = NULL;
 write_t bled_write = NULL;
 progress_t bled_progress = NULL;
 switch_t bled_switch = NULL;
-unsigned long* bled_cancel_request;
+uint32_t* bled_cancel_request;
 bool bled_initialized = 0;
 jmp_buf bb_error_jmp;
 char* bb_virtual_buf = NULL;
@@ -34,7 +29,7 @@ bool bb_progress_on_write = 0;
 // So we set our bufsize to 256 KB
 uint32_t BB_BUFSIZE = 0x40000;
 
-static int64_t unpack_none(transformer_state_t *xstate)
+static IF_DESKTOP(long long) int unpack_none(transformer_state_t *xstate)
 {
 	bb_error_msg("This compression type is not supported");
 	return -1;
@@ -70,13 +65,13 @@ int64_t bled_uncompress(const char* src, const char* dst, int type)
 	xstate.src_fd = -1;
 	xstate.dst_fd = -1;
 
-	xstate.src_fd = _openU(src, _O_RDONLY | _O_BINARY, 0);
+	xstate.src_fd = open(src, O_RDONLY | O_CLOEXEC);
 	if (xstate.src_fd < 0) {
 		bb_error_msg("Could not open '%s' (errno: %d)", src, errno);
 		goto err;
 	}
 
-	xstate.dst_fd = _openU(dst, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY, _S_IREAD | _S_IWRITE);
+	xstate.dst_fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
 	if (xstate.dst_fd < 0) {
 		bb_error_msg("Could not open '%s' (errno: %d)", dst, errno);
 		goto err;
@@ -102,15 +97,15 @@ int64_t bled_uncompress(const char* src, const char* dst, int type)
 
 err:
 	free(xstate.dst_name);
-	if (xstate.src_fd > 0)
-		_close(xstate.src_fd);
-	if (xstate.dst_fd > 0)
-		_close(xstate.dst_fd);
+	if (xstate.src_fd >= 0)
+		close(xstate.src_fd);
+	if (xstate.dst_fd >= 0)
+		close(xstate.dst_fd);
 	return ret;
 }
 
-/* Uncompress using Windows handles */
-int64_t bled_uncompress_with_handles(HANDLE hSrc, HANDLE hDst, int type)
+/* Uncompress from file descriptor 'src_fd' to file descriptor 'dst_fd' */
+int64_t bled_uncompress_with_fds(int src_fd, int dst_fd, int type)
 {
 	transformer_state_t xstate;
 
@@ -122,18 +117,11 @@ int64_t bled_uncompress_with_handles(HANDLE hSrc, HANDLE hDst, int type)
 	bb_total_rb = 0;
 	bb_total_wb = 0;
 	init_transformer_state(&xstate);
-	xstate.src_fd = -1;
-	xstate.dst_fd = -1;
+	xstate.src_fd = src_fd;
+	xstate.dst_fd = dst_fd;
 
-	xstate.src_fd = _open_osfhandle((intptr_t)hSrc, _O_RDONLY);
-	if (xstate.src_fd < 0) {
-		bb_error_msg("Could not get source descriptor (errno: %d)", errno);
-		return -1;
-	}
-
-	xstate.dst_fd = _open_osfhandle((intptr_t)hDst, 0);
-	if (xstate.dst_fd < 0) {
-		bb_error_msg("Could not get target descriptor (errno: %d)", errno);
+	if ((src_fd < 0) || (dst_fd < 0)) {
+		bb_error_msg("Invalid file descriptor");
 		return -1;
 	}
 
@@ -180,7 +168,7 @@ int64_t bled_uncompress_to_buffer(const char* src, char* buf, size_t size, int t
 	if (src[0] == 0) {
 		xstate.src_fd = bb_virtual_fd;
 	} else {
-		xstate.src_fd = _openU(src, _O_RDONLY | _O_BINARY, 0);
+		xstate.src_fd = open(src, O_RDONLY | O_CLOEXEC);
 	}
 	if (xstate.src_fd < 0) {
 		bb_error_msg("Could not open '%s' (errno: %d)", src, errno);
@@ -210,8 +198,8 @@ int64_t bled_uncompress_to_buffer(const char* src, char* buf, size_t size, int t
 
 err:
 	free(xstate.dst_name);
-	if ((src[0] != 0) && (xstate.src_fd > 0))
-		_close(xstate.src_fd);
+	if ((src[0] != 0) && (xstate.src_fd >= 0))
+		close(xstate.src_fd);
 	return ret;
 }
 
@@ -232,7 +220,7 @@ int64_t bled_uncompress_to_dir(const char* src, const char* dir, int type)
 	xstate.src_fd = -1;
 	xstate.dst_fd = -1;
 
-	xstate.src_fd = _openU(src, _O_RDONLY | _O_BINARY, 0);
+	xstate.src_fd = open(src, O_RDONLY | O_CLOEXEC);
 	if (xstate.src_fd < 0) {
 		bb_error_msg("Could not open '%s' (errno: %d)", src, errno);
 		goto err;
@@ -260,10 +248,10 @@ int64_t bled_uncompress_to_dir(const char* src, const char* dir, int type)
 
 err:
 	free(xstate.dst_name);
-	if (xstate.src_fd > 0)
-		_close(xstate.src_fd);
-	if (xstate.dst_fd > 0)
-		_close(xstate.dst_fd);
+	if (xstate.src_fd >= 0)
+		close(xstate.src_fd);
+	if (xstate.dst_fd >= 0)
+		close(xstate.dst_fd);
 	return ret;
 }
 
@@ -316,15 +304,15 @@ int64_t bled_get_uncompressed_size(const char* src, int type)
 		goto err;
 	}
 
-	fd = _openU(src, _O_RDONLY | _O_BINARY, 0);
+	fd = open(src, O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
 		return -1;
 
 	ret = get_uncompressed_size(fd, type);
 
 err:
-	if (fd > 0)
-		_close(fd);
+	if (fd >= 0)
+		close(fd);
 	return ret;
 }
 
@@ -338,10 +326,10 @@ err:
  *   void progress_function(const uint64_t read_bytes);
  * - specify the function you want to use when switching files in an archive
  *   void switch_function(const char* filename, const uint64_t filesize);
- * - point to an unsigned long variable, to be used to cancel operations when set to non zero
+ * - point to a 32-bit variable, to be used to cancel operations when set to non zero
  */
 int bled_init(uint32_t buffer_size, printf_t print_function, read_t read_function, write_t write_function,
-	progress_t progress_function, switch_t switch_function, unsigned long* cancel_request)
+	progress_t progress_function, switch_t switch_function, uint32_t* cancel_request)
 {
 	if (bled_initialized)
 		return -1;

@@ -28,7 +28,7 @@ static int read_exact(int fd, void* buf, size_t n)
 {
 	uint8_t* p = (uint8_t*)buf;
 	while (n > 0) {
-		int got = _read(fd, p, (unsigned)n);
+		int got = (int)read(fd, p, n);
 		if (got <= 0)
 			return -1;
 		p += got;
@@ -305,15 +305,18 @@ static int64_t get_uncompress_size_xz(int fd)
 	uint32_t backward_size = get_le32(footer + 4);
 	size_t   index_size = ((size_t)backward_size + 1u) * 4u;
 
+	if (index_size > (size_t)64 * 1024 * 1024)
+		return DECOMP_SIZE_ERROR;   /* sanity cap: 64 MiB */
+
 	/* ---- Read Index block ---- */
 	int64_t index_offset =
 		-(int64_t)XZ_STREAM_FOOTER_SIZE - (int64_t)index_size;
 	if (lseek(fd, index_offset, SEEK_END) < 0)
 		return DECOMP_SIZE_ERROR;
 
-	uint8_t* index_buf = (uint8_t*)
-		_alloca(index_size);
-	if (read_exact(fd, index_buf, index_size))
+	/* The index size comes from the file, so it must not go on the stack */
+	uint8_t* index_buf BB_AUTOFREE = (uint8_t*)malloc(index_size);
+	if (index_buf == NULL || read_exact(fd, index_buf, index_size))
 		return DECOMP_SIZE_ERROR;
 
 	/* ---- Parse Index ---- */
@@ -467,9 +470,9 @@ static int64_t get_uncompress_size_7zip(int fd)
 	int64_t eh_abs = (int64_t)(32u + nh_offset);
 	if (lseek(fd, eh_abs, SEEK_SET) < 0)  return DECOMP_SIZE_ERROR;
 
-	uint8_t* eh = (uint8_t*)
-		_alloca((size_t)nh_size);
-	if (read_exact(fd, eh, (size_t)nh_size)) return DECOMP_SIZE_ERROR;
+	/* The header size comes from the file, so it must not go on the stack */
+	uint8_t* eh BB_AUTOFREE = (uint8_t*)malloc((size_t)nh_size);
+	if (eh == NULL || read_exact(fd, eh, (size_t)nh_size)) return DECOMP_SIZE_ERROR;
 
 	size_t pos = 0;
 	size_t len = (size_t)nh_size;

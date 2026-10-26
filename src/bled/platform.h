@@ -35,8 +35,6 @@
 /* it's a keyword */
 #elif __GNUC_PREREQ(2,7)
 # define inline __inline__
-#elif defined(_MSC_VER)
-#define inline __inline
 #else
 # define inline
 #endif
@@ -55,19 +53,11 @@
  * as the old pointer is never referred to (including comparing it
  * to the new pointer) after the function returns a non-NULL value."
  */
-#if defined(__GNUC__)
 #define RETURNS_MALLOC __attribute__ ((malloc))
 #define PACKED __attribute__ ((__packed__))
 #define ALIGNED(m) __attribute__ ((__aligned__(m)))
 #define PRAGMA_BEGIN_PACKED
 #define PRAGMA_END_PACKED
-#elif defined(_MSC_VER)
-#define RETURNS_MALLOC
-#define PACKED
-#define ALIGNED(m) __declspec(align(m))
-#define PRAGMA_BEGIN_PACKED __pragma(pack(push, 1))
-#define PRAGMA_END_PACKED   __pragma(pack(pop))
-#endif
 
 /* __NO_INLINE__: some gcc's do not honor inlining! :( */
 #if __GNUC_PREREQ(3,0) && !defined(__NO_INLINE__)
@@ -160,39 +150,6 @@
 # define bswap_64 __bswap64
 # define bswap_32 __bswap32
 # define bswap_16 __bswap16
-#elif defined(_MSC_VER) || defined(__MINGW32__)
-#include <stdint.h>
-#ifndef bswap_16
-static __inline uint16_t bswap_16(uint16_t x)
-{
-	x = (x>>8) | (x<<8);
-	return x;
-}
-#endif
-
-#ifndef bswap_32
-static __inline uint32_t bswap_32(uint32_t x)
-{
-	x = ((x<<8)&0xFF00FF00) | ((x>>8)&0x00FF00FF);
-	x = (x>>16) | (x<<16);
-	return x;
-}
-#endif
-
-#ifndef bswap_64
-static __inline uint64_t bswap_64(uint64_t x)
-{
-	union {
-		uint64_t ll;
-		uint32_t l[2];
-	} w, r;
-	w.ll = x;
-	r.l[0] = bswap_32(w.l[1]);
-	r.l[1] = bswap_32(w.l[0]);
-	return r.ll;
-}
-#endif
-
 #else
 # include <byteswap.h>
 # include <endian.h>
@@ -453,35 +410,6 @@ typedef unsigned smalluint;
 # undef HAVE_STRSEP
 # undef HAVE_STRSIGNAL
 # undef HAVE_STRVERSCMP
-# undef HAVE_VASPRINTF
-# undef HAVE_UNLOCKED_STDIO
-# undef HAVE_UNLOCKED_LINE_OPS
-# undef HAVE_NET_ETHERNET_H
-#endif
-
-#if defined(_MSC_VER)
-/* We need to define ssize_t before the getline declaration below (copy/paste from MinGW) */
-#ifndef _SSIZE_T_DEFINED
-#define _SSIZE_T_DEFINED
-#undef ssize_t
-#ifdef _WIN64
-  typedef __int64 ssize_t;
-#else
-  typedef int ssize_t;
-#endif
-#endif
-# undef HAVE_GETLINE
-# undef HAVE_MEMRCHR
-# undef HAVE_MKDTEMP
-# undef HAVE_MNTENT_H
-# undef HAVE_SETBIT
-# undef HAVE_STPCPY
-# undef HAVE_STRCASESTR
-# undef HAVE_STRCHRNUL
-# undef HAVE_STRSEP
-# undef HAVE_STRSIGNAL
-# undef HAVE_STRVERSCMP
-# undef HAVE_SYS_STATFS_H
 # undef HAVE_VASPRINTF
 # undef HAVE_UNLOCKED_STDIO
 # undef HAVE_UNLOCKED_LINE_OPS

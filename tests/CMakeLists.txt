@@ -9,3 +9,6 @@ endfunction()
 
 rufus_add_test(test_compat test_compat.c)
 target_link_libraries(test_compat PRIVATE rufus_compat)
+
+rufus_add_test(test_bled test_bled.c)
+target_link_libraries(test_bled PRIVATE bled)

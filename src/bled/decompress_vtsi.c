@@ -70,7 +70,7 @@ static int check_vtsi_footer(VTSI_FOOTER* footer)
 	uint32_t i, oldsum, calcsum;
 
 	if (footer->magic != VTSI_MAGIC)
-		bb_error_msg_and_err("invalid vtsi magic 0x%llX", footer->magic);
+		bb_error_msg_and_err("invalid vtsi magic 0x%" PRIX64, (uint64_t)footer->magic);
 
 	/* check footer checksum */
 	oldsum = footer->foot_chksum;
