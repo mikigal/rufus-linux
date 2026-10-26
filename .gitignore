@@ -66,3 +66,7 @@ embedded.loc
 /rufus_files
 stamp-h1
 /.vs/rufus
+
+# CMake build trees
+/build*/
+compile_commands.json

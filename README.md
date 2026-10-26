@@ -1,9 +1,11 @@
-Rufus: The Reliable USB Formatting Utility
-==========================================
+Rufus: The Reliable USB Formatting Utility (Linux port)
+=======================================================
 
-[![VS2022 Build Status](https://img.shields.io/github/actions/workflow/status/pbatard/rufus/vs2026.yml?branch=master&style=flat-square&label=VS2026%20Build)](https://github.com/pbatard/rufus/actions/workflows/vs2026.yml)
-[![MinGW Build Status](https://img.shields.io/github/actions/workflow/status/pbatard/rufus/mingw.yml?branch=master&style=flat-square&label=MinGW%20Build)](https://github.com/pbatard/rufus/actions/workflows/mingw.yml)
-[![Coverity Scan Status](https://img.shields.io/coverity/scan/2172.svg?style=flat-square&label=Coverity%20Analysis)](https://scan.coverity.com/projects/pbatard-rufus)  
+> **This is an unofficial, work-in-progress port of [Rufus](https://github.com/pbatard/rufus)
+> to Linux, with a Qt 6 user interface that runs natively under Wayland. It is not
+> affiliated with or supported by the upstream Rufus project. See
+> [LINUX_PORT.md](LINUX_PORT.md) for the porting plan and its current status.**
+
 [![Latest Release](https://img.shields.io/github/release-pre/pbatard/rufus.svg?style=flat-square&label=Latest%20Release)](https://github.com/pbatard/rufus/releases)
 [![Licence](https://img.shields.io/badge/license-GPLv3-blue.svg?style=flat-square&label=License)](https://www.gnu.org/licenses/gpl-3.0.en.html)
 [![Download Stats](https://img.shields.io/github/downloads/pbatard/rufus/total.svg?label=Downloads&style=flat-square)](https://github.com/pbatard/rufus/releases)
@@ -39,14 +41,17 @@ Features
 Compilation
 -----------
 
-Use either Visual Studio 2026 or MinGW and then invoke the `.sln` or `configure`/`make` respectively.
+This port only targets Linux. You need CMake (3.25 or later), a C17 and C++20 compiler
+and Qt 6 (6.5 or later, Widgets module):
 
-#### Visual Studio
+```
+cmake -S . -B build -G Ninja
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
 
-Rufus is an OSI compliant Open Source project. You are entitled to
-download and use the *freely available* [Visual Studio Community Edition](https://www.visualstudio.com/vs/community/)
-to build, run or develop for Rufus. As per the Visual Studio Community Edition license,
-this applies regardless of whether you are an individual or a corporate user.
+Pass `-DRUFUS_BUILD_GUI=OFF` to skip the Qt user interface, or `-DRUFUS_WERROR=ON` to
+make warnings in Rufus' own code fatal.
 
 Additional information
 ----------------------
