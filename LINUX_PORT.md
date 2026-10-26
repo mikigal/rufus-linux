@@ -69,8 +69,16 @@ Wayland, and tracks the progress of the port.
   - **ext2fs**: now the system library.
 - **Unit tests** under `ctest`, and GitHub Actions on Arch (gcc, clang), Fedora and
   Ubuntu.
+- **E2E harness** (`tests/e2e`, §8):
+  - QEMU boot verifier with the serial, VGA text and OCR channels;
+  - marker initramfs and synthetic media builder;
+  - root-in-VM runner with an emulated USB stick.
 
-**Stage 0, remaining**: the E2E harness described in §8.
+  The observation channels are verified.
+
+**Stage 0, remaining**: run the harness tests that need the optional tools from
+`tests/e2e/README.md` (synthetic ISO boots, the root VM runner, the ISO parts of the
+libcdio/wimlib tests).
 
 ---
 
