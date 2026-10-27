@@ -26,7 +26,8 @@ BuildRequires:  pkgconfig(ext2fs)
 BuildRequires:  pkgconfig(hivex)
 BuildRequires:  pkgconfig(libcurl)
 BuildRequires:  pkgconfig(libudev)
-BuildRequires:  pkgconfig(openssl)
+# Not LibreSSL, which openSUSE also has
+BuildRequires:  pkgconfig(openssl) >= 3.0
 %if 0%{?suse_version}
 BuildRequires:  ninja
 %else

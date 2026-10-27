@@ -72,3 +72,6 @@ stamp-h1
 compile_commands.json
 # Python
 __pycache__/
+
+# The signatures of the test data (upstream ignores *.sig)
+!tests/data/**/*.sig

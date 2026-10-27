@@ -154,7 +154,11 @@ static void runCommand(const QString& line)
 			return;
 		}
 		mime.setUrls({ QUrl::fromLocalFile(arg) });
-		QDragEnterEvent enter(pos, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+		// A QPoint, which is all that QDragEnterEvent takes before Qt 6.12 (which deprecates it)
+		QT_WARNING_PUSH
+		QT_WARNING_DISABLE_DEPRECATED
+		QDragEnterEvent enter(pos.toPoint(), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+		QT_WARNING_POP
 		QApplication::sendEvent(test_window, &enter);
 		if (!enter.isAccepted()) {
 			answer(QStringLiteral("ERROR drop refused"));

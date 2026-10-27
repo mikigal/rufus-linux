@@ -24,6 +24,7 @@
  * (test_disk_vm.c).
  */
 
+#include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
@@ -154,7 +155,11 @@ static void test_this_disk(void)
 	drive.devnum = disk;
 	if (partition != 0) {
 		CHECK(GetPartitionDevnode(&drive, partition, devnode, sizeof(devnode)));
-		CHECK((stat(devnode, &part_st) == 0) && (part_st.st_rdev == st.st_dev));
+		// A container has no node for it
+		if ((stat(devnode, &part_st) != 0) && (errno == ENOENT))
+			fprintf(stderr, "There is no %s - skipping its check\n", devnode);
+		else
+			CHECK((stat(devnode, &part_st) == 0) && (part_st.st_rdev == st.st_dev));
 	}
 	CHECK(!GetPartitionDevnode(&drive, 999, devnode, sizeof(devnode)));
 

@@ -491,6 +491,7 @@ static void test_apply(void)
 	// setup.exe is the wrapper, and the original is setup.dll
 	CHECK(GetPeArch((uint8_t*)file_content(tmp_path("media/setup.dll"))) == IMAGE_FILE_MACHINE_AMD64);
 	setup = GetResource(IDR_SETUP_X64, "setup.exe", &setup_size, FALSE);
+	xml = NULL;
 	CHECK(setup != NULL && read_file(tmp_path("media/setup.exe"), (uint8_t**)&xml) == setup_size);
 	CHECK(setup != NULL && memcmp(xml, setup, setup_size) == 0);
 	free(xml);
