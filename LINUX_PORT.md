@@ -46,7 +46,7 @@ Wayland, and tracks the progress of the port.
 | 0. Foundation (build system, compat layer, libraries, CI, test harness) | **done** |
 | 1. Decouple the logic from the UI | **done** |
 | 2. Linux backend, helper, CLI | **done** (the NTFS, exFAT and UDF runs need their tools on the host) |
-| 3. Qt 6 GUI | not started |
+| 3. Qt 6 GUI | **done** (the sway runs of T4 need sway on the host) |
 | 4. Advanced features | not started |
 | 5. Windows To Go | not started |
 | 6. Distribution | not started |
@@ -383,6 +383,84 @@ Done:
   - FreeDOS to its prompt, the Ubuntu-like ISO with its `casper-rw` partition and
     `persistent` kernel parameter, and an extra archive (`--archive`).
 
+**Stage 3 (done)**
+
+- **Main window** (`src/ui/qt/main_window.cpp`): the layout of `IDD_DIALOG` with Qt
+  layouts (sections, collapsible advanced options, the image option or persistence
+  row), rendered from a `rules_state_t`: each user action goes to `rules_on_*()`,
+  then the widgets get rendered from the state, with their signals blocked.
+  - The widgets have the `IDC_*`/`IDS_*` name of their Windows counterpart as their
+    object name, which `apply_localization()` and the tests use. As on Windows, the
+    `.loc` has no dialog texts for en-US: the window sets those of `rufus.rc`.
+  - `rules_entry_text()` (`core/rules_text.c`) renders the dropdown entries as the
+    Windows version does. The persistence slider and units got their rules events
+    (`rules_on_persistence_slider()`, `rules_on_persistence_units()`), and
+    `rules_on_persistence_size()` now follows `EN_CHANGE`/`EN_KILLFOCUS` exactly; the
+    differential test covers all three.
+  - The drive list follows udev (`DeviceMonitor`, a refresh a second after the first
+    event of a burst, queued during an operation), and the progress bar draws its
+    text over the bar, with the paused and error colours and the marquee.
+- **The core in C++**: the core headers compile as C++23 (`std::atomic` for `_Atomic`,
+  `min`/`max` as templates), and the `libintl.h` stub of ms-sys, which hid glibc's from
+  libstdc++, is gone. The callbacks of `ui_iface_t` get marshalled to the GUI thread
+  (`ui_bridge.cpp`): queued for the log, status, progress and events, and blocking
+  queued for the questions.
+- **Operations**: image selection (file dialog, drag and drop, `-i`, Ctrl-SELECT for
+  an archive), the scan and boot check threads, START with the confirmations of
+  upstream (MBR over 2 TB, UDF duration, processes using the drive, MSG_003, several
+  partitions, 4K sectors), the format through `rufus-helper` in a thread (the helper
+  stays for the session: a single polkit prompt), the hash, cancellation with its
+  confirmation, the elapsed time, and after a failure the processes that keep the
+  drive busy (`IDD_LIST`) or a port cycle for "device not ready".
+- **Dialogs** (`dialogs.cpp`, `log_window.cpp`): notification (icons, button sets,
+  "don't show again", "more information"), selection (radio buttons or check boxes,
+  user name and edition of the Windows User Experience, the silent install warning),
+  list, hash, about and license (the RTF of the `.loc` and `license.h` as HTML), update
+  policy and settings, and the log as a window of its own (Wayland does not let it
+  stick to the main window), saved to `$XDG_STATE_HOME/rufus/rufus.log` on exit.
+  - The buttons that open a modal dialog do it once their click has returned, so that
+    an accessibility client (a screen reader, or the tests) gets its answer.
+  - The update check and `IDD_NEW_VERSION`, Fido (DOWNLOAD), saving a drive to an image
+    (IDC_SAVE) and Alt-O wait for stage 4, and say so.
+- **Localization**: the `.loc` of `$RUFUS_LOC`, the installed one or the one of the
+  source tree; the locale of `-l`, the settings or `LC_ALL`/`LC_MESSAGES`/`LANG`. The
+  language menu creates the window again in the selected language, RTL included.
+- **Settings and directories**: `$XDG_CONFIG_HOME/rufus/rufus.ini`, the downloads in
+  `$XDG_DATA_HOME/Rufus` (`FILES_DIR`, as in `%LOCALAPPDATA%\Rufus`), a lock file in
+  `$XDG_RUNTIME_DIR` against a second instance (MSG_001/MSG_002).
+  `SETTING_DARK_MODE` (Ctrl-Alt-D) forces a colour scheme, with the dark palette of
+  the Windows version when the platform theme does not honour the request.
+- **Cheat codes**: an application-wide event filter, ahead of the mnemonics, with
+  every key of the message loop of `WinMain()` (see §6.5). A bare Alt cycles the
+  progress text, also in the helper, which gets the type before and during a format
+  (`IPC_PROGRESS_TYPE`, handed to its worker through a pipe and a thread, as a signal
+  would interrupt the system calls of the format).
+- **Desktop integration**: the taskbar progress over
+  `com.canonical.Unity.LauncherEntry`, `QApplication::alert()`, and a desktop
+  notification for the end of an operation in the background; `rufus.desktop` (the
+  `app_id`), the hicolor icons and `rufus.loc` get installed.
+- **Backend changes**:
+  - virtual disks (the VHDs of Linux): the writable loop devices of files, with
+    partition scanning (not the read-only ones of snaps), and the virtual disks of
+    hypervisors that upstream knows, listed unless Alt-G hides them;
+  - `IPC_CYCLE_PORT` (Alt-C, `rufus-cli cycle`): the helper deauthorizes the USB
+    device and authorizes it again, as upstream disables and enables it;
+  - `rufus_options_t.thread_priority` (Alt-+/-), which the helper turns into a nice
+    value;
+  - `MountVolume()` retries while udev reads the partition table of a drive that was
+    closed after a write (an `ENOENT` race that e2e_media hit once);
+  - `rufus-cli` and `rufus-helper` never called `SetEmbeddedSyslinuxVersions()`, so the
+    boot check compared the Syslinux version of images with 0.00.
+- **Tests (T4, §8.5)**: `tests/gui/test_gui.py` drives the GUI through AT-SPI under
+  headless KWin (and sway, when installed) at 100, 125 and 150% scaling: the layout,
+  eight languages (three RTL ones), the language menu, a write, a question, a
+  cancellation and a failure, an image with persistence and its hashes, an ISOHybrid
+  (selection dialog), the about, license, settings and log dialogs, the taskbar
+  progress and every cheat code, with fake drives and a fake helper, in about 30 s.
+  `tests/e2e/test_gui_vm.py` writes a drive with the GUI and the real helper, as root
+  in the VM, and checks it. e2e_cli also cycles a port and writes to the loop device
+  of a file.
+
 ---
 
 ## 3. Code inventory
@@ -513,8 +591,8 @@ discouraged. Hence:
 
 Other dependencies:
 
-- **System libraries, still to come**: libudev, libblkid, libcurl, OpenSSL (libcrypto),
-  hivex.
+- **System libraries**: libudev, OpenSSL (libcrypto), Qt 6 (Widgets, DBus); still to
+  come: libcurl, hivex.
 - **Runtime tools**: `mkfs.fat`, `mkntfs`, `mkfs.exfat`, `mkudffs`, `mke2fs`, plus
   optionally `qemu-img`.
 
@@ -725,17 +803,22 @@ Notes:
 
 ### 6.5 Cheat codes
 
-All of them are carried over (`rufus.c:3904-4280`). Windows-only ones are mapped:
+All of them are carried over (`rufus.c:3904-4280`, `cheatCode()` in
+`main_window.cpp`). Windows-only ones are mapped:
 
 | Shortcut | Windows | Linux |
 |---|---|---|
-| Alt-G | list VHDs | list virtual disks (loop, nbd, virtio); **used by the tests** |
-| Alt-W | VMware disk detection | virtual disk heuristics |
-| Alt-C | cycle USB port | `USBDEVFS_RESET` |
-| Alt-R | delete registry keys | delete `rufus.ini` |
-| Alt-D | delete app files dir | `$XDG_DATA_HOME/rufus` + cache |
-| Alt-V, Alt-X, Alt-Q, Alt-P | VDS, NoDriveTypeAutorun, indexing, ESP toggle | no-op with a message |
-| Alt-N | NTFS compression via `compact` | to evaluate with ntfs-3g; no-op at first |
+| Alt-G | list VHDs | list virtual disks: the writable loop devices of files, and the virtual disks of hypervisors |
+| Alt-W | VMware disk detection | count VMware virtual disks as virtual disks |
+| Alt-C | cycle USB port | through the helper: deauthorize the USB device, then authorize it again |
+| Alt-+/- | thread priority of the format | nice value of the format in the helper (from the next operation) |
+| Alt-R | delete registry keys | empty `rufus.ini` |
+| Alt-D | delete app files dir | `$XDG_DATA_HOME/Rufus` |
+| Ctrl-Alt-D | dark mode, with a relaunch | the colour scheme (or a dark palette), without a relaunch |
+| Alt-V, Alt-X, Alt-P | VDS, NoDriveTypeAutorun, ESP toggle | a message saying that Linux does not need them |
+| Alt-O | optical disc to ISO | stage 4 (a message until then) |
+| Alt-N, Alt-Q | NTFS compression, indexing | passed to the format (`mkntfs -C`, and no `-I`) |
+| Ctrl-T | test hashes (debug builds) | not carried over |
 
 ---
 
@@ -761,7 +844,7 @@ All of them are carried over (`rufus.c:3904-4280`). Windows-only ones are mapped
 | Save optical disc to ISO | ✅ | read `/dev/sr*` |
 | USB HDDs, non-USB removables, VID:PID filters | ✅ | |
 | Processes blocking the drive | ✅ | helper, `/proc` |
-| 38 languages, RTL, dark mode, cheat codes, drag & drop | ✅ | |
+| 38 languages, RTL, dark mode, cheat codes, drag & drop | ✅ | done (stage 3) |
 | Update check | ⚠️ | notice only; own endpoint |
 | Windows / UEFI Shell ISO download (Fido) | ⚠️ | reimplementation in C |
 | Windows To Go | ⚠️ | NTFS-3G apply + BCD via hivex; high cost |
@@ -786,7 +869,7 @@ and without physical hardware**. The only manual steps are installing the tools 
 | T1 | component tests on **image files**: boot records, DD writes, VHD, bled, ext2fs | none | host | `ctest` |
 | T2 | **end-to-end write** to an emulated USB stick, as root | root **inside a VM** | QEMU/KVM VM booted from the host kernel (virtme-ng) | `ctest -L e2e` |
 | T3 | **boot verification** of the written stick | none | QEMU with SeaBIOS (BIOS) and OVMF (UEFI, later UEFI + Secure Boot) | `ctest -L e2e` |
-| T4 | **GUI end-to-end** under a headless Wayland compositor | none (root in the VM for the full stack) | sway headless or `kwin_wayland --virtual` | `ctest -L gui` |
+| T4 | **GUI end-to-end** under a headless Wayland compositor | none (root in the VM for the full stack) | `kwin_wayland --virtual` and sway headless | `ctest -L gui` |
 | T5 | real ISOs (Ubuntu, Fedora, Debian, Arch, Windows 11, ...) | as T2/T3 | as T2/T3 | `ctest -L slow`, nightly, opt-in download |
 | T6 | real hardware with a dedicated stick, identified by USB serial | root | host | opt-in only |
 
@@ -852,17 +935,26 @@ Setup screen.
 
 ### 8.5 T4: GUI
 
-- **Compositor**: the app runs with `QT_QPA_PLATFORM=wayland` inside `dbus-run-session`,
-  under `sway` (wlroots headless backend) and `kwin_wayland --virtual` (the compositor
-  this port primarily targets).
-- **Driver**: AT-SPI (`python-atspi`), finding widgets by their `IDC_*` object names:
+- **Compositor**: each test gets a headless compositor, `kwin_wayland --virtual` (the
+  compositor this port primarily targets; its scale comes from its output
+  configuration, as its virtual backend ignores `--scale`) or sway (the wlroots
+  headless backend), with a session bus and an accessibility bus of the tests, and the
+  AT-SPI registry, so that nothing depends on systemd or on the desktop of the user.
+- **Driver**: AT-SPI (`python-gobject`), finding widgets by their `IDC_*` object
+  names, which Qt exposes as accessible ids:
   - select the device, choose options, press START, answer dialogs;
-  - assert enabled/disabled matrices, translated labels and the RTL layout.
-- **Screenshots**: with `grim` (sway), compared to baselines with a tolerance, plus
-  in-app captures (`QWidget::grab`) through a test hook.
-- **Helper**: replaced on the host by a fake helper that records the job and replays
-  scripted progress and prompts. The full stack (GUI + real helper + emulated stick)
-  runs inside the T2 VM.
+  - assert enabled states, translated labels, the layout (inside the window, without
+    overlaps) and the RTL mirroring.
+- **Test hooks** (`src/ui/qt/test_hooks.h`), active with their environment variables,
+  for what AT-SPI can't do under Wayland: keys (the cheat codes, and the dropdowns,
+  whose AT-SPI selection does not commit), drag and drop, captures with
+  `QWidget::grab` (with their device pixel ratio), and the language menu, as a
+  headless compositor does not pop up a menu without an input event.
+- **Helper and drives**: on the host, fake drives (`RUFUS_TEST_DEVICES`, through the
+  real filters) and a fake helper (`tests/fake_helper.c`, `RUFUS_FAKE_HELPER`) that
+  records the job and replays progress, a question, a failure or a cancellation. The
+  full stack (GUI + real helper + emulated stick) runs inside the T2 VM
+  (`test_gui_vm.py`).
 
 ### 8.6 Parity with Windows
 
@@ -986,6 +1078,9 @@ Size: S / M / L / XL (relative effort). Each stage ends with a working, testable
     `IDC_FILE_SYSTEM` handler, which returns early as the dropdown is still disabled.
     So when FAT32 replaces FAT16 (drives under 4 GB), it keeps the cluster sizes of
     FAT16, whose default can leave FAT32 with fewer than 65525 clusters.
+- **Notifications** (`stdlg.c`): the "Do not show this message again" check box
+  always sets `SETTING_DISABLE_SECURE_BOOT_NOTICE`, whatever setting the caller gave.
+  The Qt dialog sets the one it got.
 - **Utility code**, fixed in this port:
   - `xml.c` (ezxml): entity replacement uses `strncpy_s(..., _TRUNCATE)`, which
     terminates the string inside the replacement, so any value is cut at its first

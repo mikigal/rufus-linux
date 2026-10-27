@@ -447,6 +447,11 @@ void MainWindow::createWidgets()
 	// accessibility client that pressed them (a screen reader, or the tests) gets its answer
 	connect(select_, &QToolButton::clicked, this, [this] { onSelect(); }, Qt::QueuedConnection);
 	connect(hash_, &QToolButton::clicked, this, &MainWindow::onHash);
+	// IDC_SAVE: saving a drive to an image (vhd_save.c) comes with stage 4 of the port
+	connect(save_, &QToolButton::clicked, this, [] {
+		uprintf("Saving a drive to a VHD image is not available yet");
+		ui_status(FALSE, STATUS_MSG_TIMEOUT, "Save to VHD: not available yet");
+	});
 	connect(start_, &QPushButton::clicked, this, [this] { onStart(); });
 	connect(close_, &QPushButton::clicked, this, &MainWindow::onClose, Qt::QueuedConnection);
 	connect(log_button_, &QToolButton::clicked, this, [this] { log_->toggle(); });
