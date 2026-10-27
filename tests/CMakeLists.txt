@@ -113,4 +113,8 @@ if(RUFUS_E2E_TESTS)
 		WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/e2e")
 	set_tests_properties(e2e_cli PROPERTIES LABELS e2e TIMEOUT 3600
 		ENVIRONMENT "RUFUS_CLI=$<TARGET_FILE:rufus-cli>;RUFUS_HELPER=$<TARGET_FILE:rufus-helper>;RUFUS_TEST_HELPER_VM=$<TARGET_FILE:test_helper_vm>")
+	add_test(NAME e2e_media COMMAND Python3::Interpreter -m unittest -v test_media
+		WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/e2e")
+	set_tests_properties(e2e_media PROPERTIES LABELS e2e TIMEOUT 5400
+		ENVIRONMENT "RUFUS_CLI=$<TARGET_FILE:rufus-cli>;RUFUS_HELPER=$<TARGET_FILE:rufus-helper>")
 endif()

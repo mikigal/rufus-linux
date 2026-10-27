@@ -1695,6 +1695,8 @@ void oracle_image_scan_end(const RUFUS_IMG_REPORT* report, int result, BOOL keep
 			SetPartitionSchemeAndTargetSystem(FALSE);
 			SetFileSystemAndClusterSize(NULL);
 			SetFSFromISO();
+			// NB: The fix of an upstream bug (LINUX_PORT.md §11), as in core/rules.c
+			SetClusterSizes((int)ComboBox_GetCurItemData(hFileSystem));
 			user_changed_label = FALSE;
 			SetProposedLabel(ComboBox_GetCurSel(hDeviceList));
 		} else {

@@ -96,6 +96,87 @@ def build_grub_iso(out_dir: str, extra_cmdline: str = "") -> str:
     return path
 
 
+def build_casper_iso(out_dir: str) -> str:
+    """An Ubuntu-like ISO made by grub-mkrescue: the kernel in /casper, and
+    "boot=casper" on its command line, which Rufus offers persistence for."""
+    path = os.path.join(out_dir, "linux-casper.iso")
+    if os.path.exists(path):
+        return path
+    tree = os.path.join(out_dir, "casper-tree")
+    os.makedirs(os.path.join(tree, "casper"), exist_ok=True)
+    shutil.copyfile(qemu.host_kernel(), os.path.join(tree, "casper", "vmlinuz"))
+    shutil.copyfile(build_initramfs(out_dir), os.path.join(tree, "casper", "initrd"))
+    os.makedirs(os.path.join(tree, "boot", "grub"), exist_ok=True)
+    with open(os.path.join(tree, "boot", "grub", "grub.cfg"), "w") as f:
+        f.write("set timeout=1\n"
+                "set default=0\n"
+                "terminal_output console\n"
+                "menuentry 'Rufus E2E casper' {\n"
+                f"  linux /casper/vmlinuz {CMDLINE} boot=casper\n"
+                "  initrd /casper/initrd\n"
+                "}\n")
+    subprocess.run(["grub-mkrescue", "-o", path, tree, "--", "-volid", "RUFUS_CASPER"],
+                   check=True, capture_output=True)
+    return path
+
+
+def build_syslinux_iso(out_dir: str) -> str:
+    """An ISO that Rufus takes for an isolinux one (Syslinux 4). In ISO mode,
+    Rufus installs its own ldlinux.sys, so isolinux.bin only needs its version
+    string, and the ISO can't boot as such."""
+    path = os.path.join(out_dir, "linux-syslinux.iso")
+    if os.path.exists(path):
+        return path
+    tree = os.path.join(out_dir, "syslinux-tree")
+    _stage_kernel(tree, out_dir)
+    os.makedirs(os.path.join(tree, "isolinux"), exist_ok=True)
+    version = b"ISOLINUX 4.07 2013-07-25 Copyright (C) 1994-2013 H. Peter Anvin et al\0"
+    data = bytearray(2048)
+    data[256:256 + len(version)] = version
+    with open(os.path.join(tree, "isolinux", "isolinux.bin"), "wb") as f:
+        f.write(data)
+    with open(os.path.join(tree, "isolinux", "isolinux.cfg"), "w") as f:
+        f.write("DEFAULT linux\n"
+                "PROMPT 0\n"
+                "TIMEOUT 10\n"
+                "LABEL linux\n"
+                "  KERNEL /boot/vmlinuz\n"
+                f"  APPEND initrd=/boot/initrd {CMDLINE} boot=syslinux\n")
+    subprocess.run(["xorriso", "-as", "mkisofs", "-o", path, "-V", "RUFUS_SL", "-J", "-R", tree],
+                   check=True, capture_output=True)
+    return path
+
+
+def build_windows_like_iso(out_dir: str) -> str:
+    """An ISO that Rufus takes for Windows media (bootmgr, bootmgr.efi), with a
+    UEFI boot loader that is a standalone GRUB, which boots the marker kernel
+    from the drive it was loaded from (FAT or NTFS)."""
+    path = os.path.join(out_dir, "windows-like.iso")
+    if os.path.exists(path):
+        return path
+    tree = os.path.join(out_dir, "windows-tree")
+    _stage_kernel(tree, out_dir)
+    for name in ("bootmgr", "bootmgr.efi"):
+        with open(os.path.join(tree, name), "wb") as f:
+            f.write(b"Not the Windows Boot Manager\0" + b"\0" * 4067)
+    os.makedirs(os.path.join(tree, "efi", "boot"), exist_ok=True)
+    cfg = os.path.join(out_dir, "windows-grub.cfg")
+    with open(cfg, "w") as f:
+        f.write("insmod part_msdos\n"
+                "insmod part_gpt\n"
+                "insmod fat\n"
+                "insmod ntfs\n"
+                "search --no-floppy --file /boot/vmlinuz --set=root\n"
+                f"linux ($root)/boot/vmlinuz {CMDLINE} boot=windows-like\n"
+                "initrd ($root)/boot/initrd\n"
+                "boot\n")
+    subprocess.run(["grub-mkstandalone", "-O", "x86_64-efi", "-o", os.path.join(tree, "efi", "boot", "bootx64.efi"),
+                    f"boot/grub/grub.cfg={cfg}"], check=True, capture_output=True)
+    subprocess.run(["xorriso", "-as", "mkisofs", "-o", path, "-V", "WINDOWS_LIKE", "-J", "-R", tree],
+                   check=True, capture_output=True)
+    return path
+
+
 def blank_stick(path: str, size: int = 256 * 1024 * 1024) -> str:
     with open(path, "wb") as f:
         f.truncate(size)

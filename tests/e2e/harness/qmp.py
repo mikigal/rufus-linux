@@ -57,8 +57,9 @@ class QMP:
                 return reply["return"]
 
     def close(self):
-        try:
-            self.file.close()
-            self.sock.close()
-        except OSError:
-            pass
+        # The file can fail to flush once QEMU is gone, which must not leave the socket open
+        for f in (self.file, self.sock):
+            try:
+                f.close()
+            except OSError:
+                pass

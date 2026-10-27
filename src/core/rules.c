@@ -1134,6 +1134,9 @@ void rules_on_image_scan_end(rules_state_t* m, const RUFUS_IMG_REPORT* img, enum
 		SetPartitionSchemeAndTargetSystem(m, FALSE);
 		SetFileSystemAndClusterSize(m, NULL);
 		SetFSFromISO(m);
+		// NB: Upstream bug: SetFSFromISO() can't refresh the cluster sizes, as the file system
+		// dropdown is disabled during the scan, so a FAT32 that replaces FAT16 kept its sizes
+		SetClusterSizes(m, rules_combo_data(&m->fs));
 		m->user_changed_label = FALSE;
 		SetProposedLabel(m, m->has_device ? 0 : -1);
 	} else {

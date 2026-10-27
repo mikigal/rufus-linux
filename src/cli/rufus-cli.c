@@ -583,6 +583,9 @@ static int cmd_write(int argc, char** argv)
 	rules_on_start(&m);
 	rules_get_options(&m, &opts);
 	opts.disk_size = dev->size;
+	uprintf("Options: boot type %d, partition scheme %d, target %d, %s, cluster size %u, label '%s'",
+		opts.boot_type, opts.partition_type, opts.target_type,
+		(opts.fs_type >= 0) ? FileSystemLabel[opts.fs_type] : "no file system", opts.cluster_size, opts.label);
 	bcd.path = dev->devnode;
 	bcd.is_fixed = drive.is_fixed;
 	if (BootCheck(&bcd) != BOOTCHECK_PROCEED) {

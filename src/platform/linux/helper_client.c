@@ -43,7 +43,7 @@ static ipc_msg_t in, out;
 
 static void HelperExited(helper_t* h)
 {
-	int status;
+	int status = 0;
 
 	// First, as the helper exits at the end of the socket
 	if (h->sock >= 0)

@@ -45,7 +45,7 @@ Wayland, and tracks the progress of the port.
 |---|---|
 | 0. Foundation (build system, compat layer, libraries, CI, test harness) | **done** |
 | 1. Decouple the logic from the UI | **done** |
-| 2. Linux backend, helper, CLI | in progress |
+| 2. Linux backend, helper, CLI | **done** (the NTFS, exFAT and UDF runs need their tools on the host) |
 | 3. Qt 6 GUI | not started |
 | 4. Advanced features | not started |
 | 5. Windows To Go | not started |
@@ -184,7 +184,7 @@ Wayland, and tracks the progress of the port.
   - `tests/test_threads.c` cancels operations from another thread in the middle of their
     work, and formats strings from several threads; it runs clean under ThreadSanitizer.
 
-**Stage 2 (in progress)**
+**Stage 2 (done)**
 
 Steps, each with its tests (unit tests on image files where root is not needed, T2/T3
 in the VM otherwise):
@@ -369,6 +369,19 @@ Done:
     check, after which nothing is left; `tests/e2e/test_cli.py` writes a non-bootable
     drive, the GRUB ISO in ISO mode (booted with UEFI) and in DD mode (booted with
     BIOS), and interrupts a write.
+- **The media of "Done when"** (`tests/e2e/test_media.py`): written with `rufus-cli`
+  through the helper, with the options of the main window, then booted:
+  - non-bootable FAT16, FAT32, ext2 and ext3, checked with their fsck tools; NTFS, exFAT
+    and UDF with ntfsprogs, exfatprogs and udftools (skipped without them). ext4 is not
+    offered, as on Windows (it is for persistence partitions);
+  - DD images: raw (`test_cli.py`), xz and zstd, booted with BIOS;
+  - the GRUB ISO in ISO mode (UEFI on GPT, and BIOS on MBR in `test_format.py`) and in
+    DD mode; the Syslinux ISO in ISO mode, booted with BIOS. The DD mode of a Syslinux
+    ISO would need a real isohybrid image, and is the same code path as for GRUB;
+  - the Windows-like ISO on GPT/UEFI (FAT32), booted with UEFI, and on MBR with NTFS and
+    UEFI:NTFS (with ntfsprogs), booted with UEFI through UEFI:NTFS;
+  - FreeDOS to its prompt, the Ubuntu-like ISO with its `casper-rw` partition and
+    `persistent` kernel parameter, and an extra archive (`--archive`).
 
 ---
 
@@ -827,9 +840,9 @@ already installed:
 | Media | Built with | Exercises |
 |---|---|---|
 | `linux-grub.iso` | `grub-mkrescue` (BIOS + UEFI ISOHybrid) + host kernel + marker initramfs | ISO mode with GRUB2 (incl. Rufus' own `core.img`), DD mode, ISO→ESP |
-| `linux-syslinux.iso` | isolinux + `isohybrid` | Syslinux install, config patching |
-| `casper.iso` | GRUB ISO with an Ubuntu-like `/casper` layout | persistence partition + kernel parameters |
-| `windows-like.iso` | UDF/ISO-9660 tree with `bootmgr`, `efi/boot/bootx64.efi` (a GRUB EFI binary that boots the marker kernel) and a `sources/install.wim` made by wimlib, with a >4 GB variant (slow tier) | Windows detection, UEFI:NTFS chain loading, WIM split, WUE file injection |
+| `linux-syslinux.iso` | `xorriso`, with an isolinux tree whose `isolinux.bin` only holds the version string of Syslinux 4 (no syslinux package needed: Rufus installs its own) | Syslinux install, config patching (ISO mode only) |
+| `linux-casper.iso` | GRUB ISO with an Ubuntu-like `/casper` layout | persistence partition + kernel parameters |
+| `windows-like.iso` | ISO-9660 tree with `bootmgr`, `bootmgr.efi` and `efi/boot/bootx64.efi` (a standalone GRUB that boots the marker kernel from FAT or NTFS). Still to come: a `sources/install.wim` made by wimlib, with a >4 GB variant (slow tier) | Windows detection, UEFI:NTFS chain loading; later WIM split, WUE file injection |
 | `disk.img[.gz/.xz/.zst/.bz2]`, `.vhd`, `.vhdx` | the ISOs above as raw disks, compressed or converted | DD writes, decompression, VHD/VHDX |
 | FreeDOS / MS-DOS | Rufus' own embedded files | DOS boot to a prompt (VGA text) |
 
@@ -968,6 +981,11 @@ Size: S / M / L / XL (relative effort). Each stage ends with a working, testable
     over 4 GB.
   - `SetProposedLabel()` compares `"NO_LABEL"` with `""` instead of with the drive label.
   - The `IDC_FILE_SYSTEM` handler never records FAT16 (index 0) as the user's choice.
+  - Fixed in this port (and in the reference of `tests/test_rules.c`): at the end of an
+    image scan, `SetFSFromISO()` selects its file system through the
+    `IDC_FILE_SYSTEM` handler, which returns early as the dropdown is still disabled.
+    So when FAT32 replaces FAT16 (drives under 4 GB), it keeps the cluster sizes of
+    FAT16, whose default can leave FAT32 with fewer than 65525 clusters.
 - **Utility code**, fixed in this port:
   - `xml.c` (ezxml): entity replacement uses `strncpy_s(..., _TRUNCATE)`, which
     terminates the string inside the replacement, so any value is cut at its first
