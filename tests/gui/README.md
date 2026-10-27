@@ -34,10 +34,11 @@ no root and no USB drive are needed. See section 8.5 of
 On Arch Linux / CachyOS:
 
 ```
-sudo pacman -S --needed kwin sway at-spi2-core python-gobject
+sudo pacman -S --needed kwin at-spi2-core python-gobject
 ```
 
-A compositor that is not installed is skipped.
+sway (optional) is used too when it is installed; a compositor that is not
+installed is skipped.
 
 ## Running
 

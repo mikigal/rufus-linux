@@ -46,7 +46,7 @@ Wayland, and tracks the progress of the port.
 | 0. Foundation (build system, compat layer, libraries, CI, test harness) | **done** |
 | 1. Decouple the logic from the UI | **done** |
 | 2. Linux backend, helper, CLI | **done** (the NTFS, exFAT and UDF runs need their tools on the host) |
-| 3. Qt 6 GUI | **done** (the sway runs of T4 need sway on the host) |
+| 3. Qt 6 GUI | **done** |
 | 4. Advanced features | not started |
 | 5. Windows To Go | not started |
 | 6. Distribution | not started |
@@ -180,7 +180,8 @@ Wayland, and tracks the progress of the port.
     `WindowsErrorString()`, etc.) have one per thread, and the strings given to the
     `ui_iface.h` callbacks are only valid during the call.
   - Upstream terminates the blocking process search (`process.c`) and the update check
-    threads, which will be cancelled cooperatively when they are ported (stages 2 and 4).
+    threads. The process search got ported with cooperative cancellation (stage 2), and
+    there is no update check (see §5.7).
   - `tests/test_threads.c` cancels operations from another thread in the middle of their
     work, and formats strings from several threads; it runs clean under ThreadSanitizer.
 
@@ -420,8 +421,9 @@ Done:
   stick to the main window), saved to `$XDG_STATE_HOME/rufus/rufus.log` on exit.
   - The buttons that open a modal dialog do it once their click has returned, so that
     an accessibility client (a screen reader, or the tests) gets its answer.
-  - The update check and `IDD_NEW_VERSION`, Fido (DOWNLOAD), saving a drive to an image
-    (IDC_SAVE) and Alt-O wait for stage 4, and say so.
+  - Fido (DOWNLOAD), saving a drive to an image (IDC_SAVE) and Alt-O wait for stage 4,
+    and say so. There is no update check (§5.7): `IDD_UPDATE_POLICY` only holds its
+    settings, with Check Now disabled.
 - **Localization**: the `.loc` of `$RUFUS_LOC`, the installed one or the one of the
   source tree; the locale of `-l`, the settings or `LC_ALL`/`LC_MESSAGES`/`LANG`. The
   language menu creates the window again in the selected language, RTL included.
@@ -452,7 +454,8 @@ Done:
   - `rufus-cli` and `rufus-helper` never called `SetEmbeddedSyslinuxVersions()`, so the
     boot check compared the Syslinux version of images with 0.00.
 - **Tests (T4, §8.5)**: `tests/gui/test_gui.py` drives the GUI through AT-SPI under
-  headless KWin (and sway, when installed) at 100, 125 and 150% scaling: the layout,
+  headless KWin at 100, 125 and 150% scaling (and sway, which is optional, when it is
+  installed): the layout,
   eight languages (three RTL ones), the language menu, a write, a question, a
   cancellation and a failure, an image with persistence and its hashes, an ISOHybrid
   (selection dialog), the about, license, settings and log dialogs, the taskbar
@@ -724,8 +727,9 @@ Notes:
 - **Boot loader issuer certificates** (used by the Secure Boot, DBX and SBAT checks) →
   OpenSSL `d2i_PKCS7` + `X509_digest`.
 - **Authenticode checks**: dropped.
-- **Self-update**: replaced by a "new version available" notice, using our own `.ver`
-  endpoint rather than `rufus.ie`.
+- **Self-update and update check**: dropped (decision of 2026-10-27). The packages of
+  the distribution update Rufus, and nothing contacts `rufus.ie` to check for a new
+  version.
 - **Fido**: reimplemented in C with a Qt dialog (~600–900 lines). It does not work under
   `pwsh`: it has a WPF GUI and uses Windows named pipes.
 
@@ -845,7 +849,7 @@ All of them are carried over (`rufus.c:3904-4280`, `cheatCode()` in
 | USB HDDs, non-USB removables, VID:PID filters | ✅ | |
 | Processes blocking the drive | ✅ | helper, `/proc` |
 | 38 languages, RTL, dark mode, cheat codes, drag & drop | ✅ | done (stage 3) |
-| Update check | ⚠️ | notice only; own endpoint |
+| Update check | ❌ | dropped: the packages of the distribution update Rufus |
 | Windows / UEFI Shell ISO download (Fido) | ⚠️ | reimplementation in C |
 | Windows To Go | ⚠️ | NTFS-3G apply + BCD via hivex; high cost |
 | NTFS Chkdsk after writing | ❌ | no equivalent |
@@ -869,7 +873,7 @@ and without physical hardware**. The only manual steps are installing the tools 
 | T1 | component tests on **image files**: boot records, DD writes, VHD, bled, ext2fs | none | host | `ctest` |
 | T2 | **end-to-end write** to an emulated USB stick, as root | root **inside a VM** | QEMU/KVM VM booted from the host kernel (virtme-ng) | `ctest -L e2e` |
 | T3 | **boot verification** of the written stick | none | QEMU with SeaBIOS (BIOS) and OVMF (UEFI, later UEFI + Secure Boot) | `ctest -L e2e` |
-| T4 | **GUI end-to-end** under a headless Wayland compositor | none (root in the VM for the full stack) | `kwin_wayland --virtual` and sway headless | `ctest -L gui` |
+| T4 | **GUI end-to-end** under a headless Wayland compositor | none (root in the VM for the full stack) | `kwin_wayland --virtual` (sway headless, optional) | `ctest -L gui` |
 | T5 | real ISOs (Ubuntu, Fedora, Debian, Arch, Windows 11, ...) | as T2/T3 | as T2/T3 | `ctest -L slow`, nightly, opt-in download |
 | T6 | real hardware with a dedicated stick, identified by USB serial | root | host | opt-in only |
 
@@ -936,9 +940,9 @@ Setup screen.
 ### 8.5 T4: GUI
 
 - **Compositor**: each test gets a headless compositor, `kwin_wayland --virtual` (the
-  compositor this port primarily targets; its scale comes from its output
-  configuration, as its virtual backend ignores `--scale`) or sway (the wlroots
-  headless backend), with a session bus and an accessibility bus of the tests, and the
+  compositor this port targets; its scale comes from its output configuration, as its
+  virtual backend ignores `--scale`), or optionally sway (the wlroots headless backend,
+  skipped when it is not installed), with a session bus and an accessibility bus of the tests, and the
   AT-SPI registry, so that nothing depends on systemd or on the desktop of the user.
 - **Driver**: AT-SPI (`python-gobject`), finding widgets by their `IDC_*` object
   names, which Qt exposes as accessible ids:
@@ -1021,14 +1025,15 @@ Size: S / M / L / XL (relative effort). Each stage ends with a working, testable
 
 - The main window and every dialog of §6.1, plus localization, RTL, dark mode, cheat
   codes, drag & drop, hotplug, taskbar progress, log and settings.
-- **Done when** T4 passes on sway and KWin at 100/125/150% scaling, including a sample
-  of languages with RTL, and every cheat code is reachable.
+- **Done when** T4 passes on KWin at 100/125/150% scaling, including a sample of
+  languages with RTL, and every cheat code is reachable. (sway was dropped from this:
+  the port targets KDE Plasma.)
 
 ### Stage 4: Advanced features (L)
 
 - WUE (hivex, locale/TZ/keyboard mapping), persistence, bad blocks UI, UEFI validation,
   and Secure Boot checks (with T3 under OVMF + Secure Boot).
-- MS-DOS + DOS locale, signed syslinux/grub downloads, DBX/SBAT updates, update check.
+- MS-DOS + DOS locale, signed syslinux/grub downloads, DBX/SBAT updates.
 - VHD/VHDX, optical disc → ISO, and Fido in C with a Qt dialog.
 
 ### Stage 5: Windows To Go (L, optional)
