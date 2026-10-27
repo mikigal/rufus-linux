@@ -222,7 +222,7 @@ static void test_windows_images(void)
 	make_windows_wim("x64.wim", IMAGE_FILE_MACHINE_AMD64);
 	CHECK_EQ_INT(scan("x64.wim"), RULES_SCAN_OK);
 	CHECK(img_report.is_windows_img);
-	CHECK_EQ_INT(img_report.has_efi, 1 | (1 << ARCH_X86_64));
+	CHECK_EQ_INT(img_report.has_efi, 1 | (2 << ARCH_X86_64));
 	CHECK(img_report.has_bootmgr_efi);
 	CHECK_EQ_INT(img_report.wininst_index, 1);
 	CHECK_EQ_INT(img_report.win_version.major, 11);
@@ -231,7 +231,7 @@ static void test_windows_images(void)
 
 	make_windows_wim("riscv.wim", IMAGE_FILE_MACHINE_RISCV64);
 	CHECK_EQ_INT(scan("riscv.wim"), RULES_SCAN_OK);
-	CHECK_EQ_INT(img_report.has_efi, 1 | (1 << ARCH_RISCV_64));
+	CHECK_EQ_INT(img_report.has_efi, 1 | (2 << ARCH_RISCV_64));
 	CHECK_CONTAINS(log_buf, "  Image contains a RISC-V 64 EFI boot manager\n");
 
 	// Without an EFI boot manager, there is nothing to boot

@@ -29,8 +29,12 @@ RUFUS_UPDATE update = { 0 };
 // Directories, which the front end sets up: app_data_dir for the files that Rufus downloads
 // (in a FILES_DIR subdirectory) and temp_dir for temporary files
 char app_dir[MAX_PATH] = "", app_data_dir[MAX_PATH] = "", temp_dir[MAX_PATH] = "/tmp";
-// Settings that the core reads
+// The settings file (see settings.h), and the settings and cheat modes that the core reads
+char* ini_file = NULL;
 BOOL usb_debug = FALSE, expert_mode = FALSE, ignore_boot_marker = FALSE;
+BOOL size_check = TRUE;			// Alt-S: check the size of the image and the cluster size for MS-DOS
+// Windows To Go can use the 'Windows CA 2023' bootloaders (bcdboot /bootex on Windows)
+BOOL bcdboot_supports_ex = FALSE;
 // The sector size that the Syslinux libraries work with (from syslinux.c, for 4K support)
 uint32_t SECTOR_SHIFT = 9, SECTOR_SIZE = 512;
 uint32_t LIBFAT_SECTOR_SHIFT = 9, LIBFAT_SECTOR_SIZE = 512, LIBFAT_SECTOR_MASK = 511;
@@ -40,5 +44,10 @@ sbat_entry_t* sbat_entries = NULL;
 thumbprint_list_t *sb_active_certs = NULL, *sb_revoked_certs = NULL;
 // The context of the operation: the image, and the other files it uses (img_report is in iso.c)
 char *image_path = NULL, *archive_path = NULL, *unattend_xml_path = NULL;
+// The bootloader files that the boot check found in app_data_dir: GRUB's core.img (from
+// format.c) and the sizes of Syslinux's ldlinux.sys and ldlinux.bss (from syslinux.c)
+uint8_t* grub2_buf = NULL;
+long grub2_len = 0;
+unsigned long syslinux_ldlinux_len[2] = { 0, 0 };
 DWORD ErrorStatus = 0, LastWriteError = 0;
 BOOL right_to_left_mode = FALSE;

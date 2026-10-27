@@ -158,12 +158,25 @@ Done:
   the thread, which reports `UM_IMAGE_SCAN_COMPLETED`. What it did to the main window is
   in `rules_on_image_scan_start()`/`rules_on_image_scan_end()`. Covered by
   `tests/test_scan.c` (ISOs, ISOHybrids, Windows images and disk images).
+- **Boot check** (`core/boot_check.c`): `BootCheckThread()`, with `StartBootCheck()` for
+  the thread, which reports `UM_FORMAT_START`. It works on `opts` and a
+  `bootcheck_drive_t` (the block device and whether it is fixed), asks its questions
+  through `ui_ask()` and writes its decisions to `opts`.
+  - The bootloader files are looked up in `app_data_dir` with absolute paths, as the
+    current directory is shared by all the threads.
+  - Downloads fail until `net.c` is ported (`core/download.c`, stage 4), so the files
+    have to be placed in `app_data_dir` by hand.
+  - An image stored on the target is detected through sysfs (the disk of its file
+    system), not through drive letters.
+  - The Windows version checks of the host are gone: the Windows User Experience is
+    always offered, and Windows To Go accepts GPT on removable drives.
+  - `settings.h` only uses the ini file (§5.8): without one, the settings are not saved.
+  - `tests/test_bootcheck.c` covers every question and outcome, with scripted answers
+    and files placed in `app_data_dir`.
 
 Next:
 
-1. `BootCheckThread` in the core. Its questions go through `ui_ask()`, and its decisions
-   to `opts`.
-2. pthreads, atomic `ErrorStatus` and cooperative cancellation.
+1. pthreads, atomic `ErrorStatus` and cooperative cancellation.
 
 ---
 
@@ -777,6 +790,9 @@ Size: S / M / L / XL (relative effort). Each stage ends with a working, testable
     bootloader entries near its end.
   - `FindResourceRva()` (`parser.c`) computes a pointer from a NULL directory before
     checking for it.
+- **Image scan** (`rufus.c`), fixed in this port: for an `install.wim`/`install.esd`, the
+  architecture of the EFI boot manager is stored one bit lower in `has_efi` than for an
+  ISO, so that the Windows To Go `unattend.xml` of an x86_64 image is for x86_32.
 - **Windows User Experience** (`wue.c`), fixed in this port: the first logon commands of
   the "QoL" and "SkuSiPolicy" options are only written when another option of the
   Shell-Setup component (user, privacy, locale, silent install) is selected too.

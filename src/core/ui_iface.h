@@ -60,6 +60,10 @@
 #define IDCLOSE                     8
 #define IDHELP                      9
 
+/* Selection styles (the values of the Windows button styles), for selection_dialog_options_t */
+#define BS_AUTOCHECKBOX             0x00000003		// Check boxes
+#define BS_AUTORADIOBUTTON          0x00000009		// Radio buttons (the default, when the style is 0)
+
 /* To provide a "More information" button on notifications */
 typedef struct {
 	WORD id;					// MORE_INFO_URL, or the IDD_* of a dialog that the front end knows how to open
@@ -100,7 +104,9 @@ typedef struct {
 			const char* dont_display_setting;	// If not NULL, offer a "Don't show this again" check box
 			const notification_info* more_info;	// If not NULL, offer a "More information" button
 		} notification;
-		selection_dialog_options_t* selection;	// In/out: the user name and edition are returned through it
+		// For the Windows User Experience, the front end also sets unattend_username and
+		// unattend_edition_index (see wue.h, and GetEditions() for the editions to offer)
+		selection_dialog_options_t* selection;
 		struct {
 			char** items;
 			int size;

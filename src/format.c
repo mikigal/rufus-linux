@@ -75,8 +75,8 @@ extern const int nb_steps[FS_MAX];
 extern const char* md5sum_name[2];
 extern uint32_t dur_mins, dur_secs;
 extern BOOL use_vds, is_vds_available, has_ffu_support;
-uint8_t *grub2_buf = NULL, *sec_buf = NULL;
-long grub2_len;
+// NB: grub2_buf and grub2_len are now in core/globals.c
+uint8_t *sec_buf = NULL;
 
 /*
  * Convert the fmifs outputs messages (that use an OEM code page) to UTF-8

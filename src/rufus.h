@@ -670,8 +670,12 @@ extern RUFUS_UPDATE update;
 extern RUFUS_IMG_REPORT img_report;
 extern WORD selected_langid;
 extern DWORD ErrorStatus, DownloadStatus, LastWriteError;
+// Downloads (DownloadStatus is the HTTP status). hProgressDialog is the dialog that displays the progress, if any.
+extern uint64_t DownloadToFileOrBufferEx(const char* url, const char* file, const char* user_agent,
+	BYTE** buffer, void* hProgressDialog, BOOL bTaskBarProgress);
+extern DWORD DownloadSignedFile(const char* url, const char* file, void* hProgressDialog, BOOL bPromptOnError);
 extern BOOL op_in_progress, right_to_left_mode;
-extern BOOL large_drive, usb_debug;
+extern BOOL large_drive, usb_debug, expert_mode;
 extern uint8_t *pe256ssp;
 extern uint16_t rufus_version[3], embedded_sl_version[2];
 extern uint32_t pe256ssp_size;
@@ -682,6 +686,9 @@ extern sbat_entry_t* sbat_entries;
 extern thumbprint_list_t *sb_active_certs, *sb_revoked_certs;
 extern int force_update;
 extern unsigned long syslinux_ldlinux_len[2];
+extern uint8_t* grub2_buf;
+extern long grub2_len;
+extern BOOL size_check, bcdboot_supports_ex;
 extern char ubuffer[UBUFFER_SIZE], embedded_sl_version_str[2][12];
 extern char app_dir[MAX_PATH], temp_dir[MAX_PATH], app_data_dir[MAX_PATH], *fido_url;
 // The files of the current operation (the options of the operation are in options.h)

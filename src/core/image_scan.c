@@ -272,7 +272,9 @@ enum rules_scan_result ImageScan(BOOL keep_image_name)
 				if (arch != 0) {
 					uprintf("  Image contains a%s %s EFI boot manager",
 						(arch == ARCH_RISCV_64) ? "" : "n", arch_name[arch]);
-					img_report.has_efi = 1 | (1 << arch);
+					// NB: Upstream sets bit 'arch' rather than bit 'arch + 1' as iso.c does, so that
+					// the boot check took an x86_64 image for an x86_32 one (and so on)
+					img_report.has_efi = 1 | (2 << arch);
 					img_report.has_bootmgr_efi = TRUE;
 					img_report.wininst_index = 1;
 				} else {

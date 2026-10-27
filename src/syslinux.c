@@ -42,7 +42,7 @@
 #include "ntfssect.h"
 
 unsigned char* syslinux_ldlinux[2] = { NULL, NULL };
-unsigned long syslinux_ldlinux_len[2];
+// NB: syslinux_ldlinux_len is now in core/globals.c
 unsigned char* syslinux_mboot = NULL;
 unsigned long syslinux_mboot_len;
 

@@ -3,6 +3,8 @@
 # Upstream files keep their place in src/, to ease merges; new ones live here.
 add_library(rufus_core STATIC
 	analyze.c
+	boot_check.c
+	download.c
 	globals.c
 	image_scan.c
 	options.c

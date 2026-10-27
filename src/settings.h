@@ -2,6 +2,7 @@
  * Rufus: The Reliable USB Formatting Utility
  * Settings access, through either registry or INI file
  * Copyright © 2015-2024 Pete Batard <pete@akeo.ie>
+ * Copyright © 2026 Rufus for Linux contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,13 +17,20 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-#include <windows.h>
-#include <stdint.h>
-#include "rufus.h"
-#include "msapi_utf8.h"
-#include "registry.h"
+
+/*
+ * On Linux, the settings are always in an ini file ($XDG_CONFIG_HOME/rufus/rufus.ini),
+ * which the front end creates and sets as ini_file. Without one, the settings read as
+ * 0/FALSE/"" and are not saved.
+ */
 
 #pragma once
+
+#include <inttypes.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include "rufus.h"
+
 extern char* ini_file;
 
 /*
@@ -78,7 +86,7 @@ static __inline int64_t ReadIniKey64(const char* key) {
 	int64_t val = 0;
 	char* str = get_token_data_file(key, ini_file);
 	if (str != NULL) {
-		val = _strtoi64(str, NULL, 0);
+		val = strtoll(str, NULL, 0);
 		free(str);
 	}
 	return val;
@@ -125,29 +133,30 @@ static __inline BOOL WriteIniKeyStr(const char* key, const char* val) {
 #define WriteIniKeyBool(key, b) WriteIniKey32(key, (b)?1:0)
 
 /*
- * Read and store settings from/to ini file or registry
+ * Read and store settings from/to the ini file
+ * NB: Upstream uses the registry when there is no ini file
  */
 static __inline int64_t ReadSetting64(const char* key) {
-	return (ini_file != NULL)?ReadIniKey64(key):ReadRegistryKey64(REGKEY_HKCU, key);
+	return (ini_file != NULL)?ReadIniKey64(key):0;
 }
 static __inline BOOL WriteSetting64(const char* key, int64_t val) {
-	return (ini_file != NULL)?WriteIniKey64(key, val):WriteRegistryKey64(REGKEY_HKCU, key, val);
+	return (ini_file != NULL)?WriteIniKey64(key, val):FALSE;
 }
 static __inline int32_t ReadSetting32(const char* key) {
-	return (ini_file != NULL)?ReadIniKey32(key):ReadRegistryKey32(REGKEY_HKCU, key);
+	return (ini_file != NULL)?ReadIniKey32(key):0;
 }
 static __inline BOOL WriteSetting32(const char* key, int32_t val) {
-	return (ini_file != NULL)?WriteIniKey32(key, val):WriteRegistryKey32(REGKEY_HKCU, key, val);
+	return (ini_file != NULL)?WriteIniKey32(key, val):FALSE;
 }
 static __inline BOOL ReadSettingBool(const char* key) {
-	return (ini_file != NULL)?ReadIniKeyBool(key):ReadRegistryKeyBool(REGKEY_HKCU, key);
+	return (ini_file != NULL)?ReadIniKeyBool(key):FALSE;
 }
 static __inline BOOL WriteSettingBool(const char* key, BOOL val) {
-	return (ini_file != NULL)?WriteIniKeyBool(key, val):WriteRegistryKeyBool(REGKEY_HKCU, key, val);
+	return (ini_file != NULL)?WriteIniKeyBool(key, val):FALSE;
 }
 static __inline char* ReadSettingStr(const char* key) {
-	return (ini_file != NULL)?ReadIniKeyStr(key):ReadRegistryKeyStr(REGKEY_HKCU, key);
+	return (ini_file != NULL)?ReadIniKeyStr(key):"";
 }
 static __inline BOOL WriteSettingStr(const char* key, char* val) {
-	return (ini_file != NULL)?WriteIniKeyStr(key, val):WriteRegistryKeyStr(REGKEY_HKCU, key, val);
+	return (ini_file != NULL)?WriteIniKeyStr(key, val):FALSE;
 }
