@@ -343,7 +343,8 @@ static void ClearFiles(void)
 static BOOL FindDrive(job_t* job)
 {
 	static rufus_device_t devs[MAX_DRIVES];
-	device_filter_t filter = { .enable_HDDs = TRUE, .list_non_usb_removable_drives = TRUE };
+	device_filter_t filter = { .enable_HDDs = TRUE, .list_non_usb_removable_drives = TRUE, .enable_VHDs = TRUE,
+		.enable_vmdk = TRUE };
 	int i, n = GetDevices(devs, ARRAYSIZE(devs), &filter);
 
 	for (i = 0; i < n; i++) {
@@ -527,6 +528,8 @@ int main(int argc, char** argv)
 	signal(SIGPIPE, SIG_IGN);
 	umask(077);
 	ResetOptions(&opts);
+	// The boot check and the Syslinux installation compare with the versions we embed
+	SetEmbeddedSyslinuxVersions();
 	RemoveAutomountRules();
 
 	while ((r = ipc_recv(SOCK, &in)) != 0) {

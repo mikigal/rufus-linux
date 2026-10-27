@@ -151,6 +151,30 @@ static void test_filters(void)
 	CHECK_CONTAINS(log_buf, "Device eliminated because it was detected as a card larger than 500 GB\n");
 	CHECK(listed(&d, &all));
 
+	// Virtual disks (the loop devices of files, and those of hypervisors), unless Alt-G disabled them
+	d = flash_drive();
+	d.props.is_USB = FALSE;
+	d.props.is_SCSI = TRUE;
+	d.props.is_Removable = FALSE;
+	d.props.is_VHD = TRUE;
+	d.props.vid = d.props.pid = -1;
+	static_strcpy(d.name, "Loop Device (disk.img)");
+	d.size = 64 * GB;
+	none.enable_VHDs = TRUE;
+	CHECK(listed(&d, &none));
+	CHECK_CONTAINS(log_buf, "Found VHD device 'Loop Device (disk.img)'\n");
+	none.enable_VHDs = FALSE;
+	CHECK(!listed(&d, &none));
+	CHECK_CONTAINS(log_buf, "Device eliminated because listing of VHDs is disabled (Alt-G)\n");
+	d.is_system = TRUE;
+	all.enable_VHDs = TRUE;
+	CHECK(!listed(&d, &all));
+	CHECK(IsVHDName("Msft Virtual Disk", FALSE));
+	CHECK(IsVHDName("BHYVE SATA DISK", FALSE));
+	CHECK(!IsVHDName("VMware Virtual disk", FALSE));
+	CHECK(IsVHDName("VMware Virtual disk", TRUE));
+	CHECK(!IsVHDName("QEMU QEMU HARDDISK USB Device", TRUE));
+
 	// Never the system disk, nor the one Rufus runs from
 	d = flash_drive();
 	d.is_system = TRUE;

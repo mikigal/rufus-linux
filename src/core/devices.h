@@ -84,6 +84,9 @@ typedef struct {
 	BOOL enable_HDDs;				// List USB hard drives ("List USB Hard Drives" or Alt-F)
 	BOOL list_non_usb_removable_drives;	// Ctrl-Alt-F
 	BOOL use_fake_units;			// Display sizes with the units of the manufacturers (1 KB = 1000 bytes)
+	BOOL enable_VHDs;				// List virtual disks (Alt-G): writable loop devices backed by a file, and
+									// the virtual disks of hypervisors that upstream knows
+	BOOL enable_vmdk;				// Also count the VMware virtual disks as virtual disks (Alt-W)
 	uint32_t ignore_vid_pid[MAX_IGNORE_USB];	// VID << 16 | PID of the devices to ignore (IgnoreUsb## settings)
 } device_filter_t;
 
@@ -99,6 +102,9 @@ extern void SetDeviceDisplayName(rufus_device_t* dev, const device_filter_t* fil
 
 /* Sort devices by increasing size, as upstream lists them */
 extern void SortDevices(rufus_device_t* devs, int nb_devs);
+
+/* Whether the name of a disk ("<vendor> <model>") is the one of a virtual disk that upstream knows */
+extern BOOL IsVHDName(const char* name, BOOL enable_vmdk);
 
 /* The description of a device that the main window rules use */
 extern void GetRulesDrive(const rufus_device_t* dev, rules_drive_t* drive);

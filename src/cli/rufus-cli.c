@@ -63,7 +63,8 @@ static void usage(FILE* fd)
 	fprintf(fd, "Usage: rufus-cli [-v] <command> [options]\n\n"
 		"Commands:\n"
 		"  list [--hdd] [--non-usb] [--json]\n"
-		"      List the drives that Rufus can write to. --hdd also lists USB hard drives,\n"
+		"      List the drives that Rufus can write to (with the loop devices of files, as\n"
+		"      Windows lists VHDs). --hdd also lists USB hard drives,\n"
 		"      and --non-usb non-USB removable drives (Alt-F and Ctrl-Alt-F in the GUI).\n\n"
 		"  write <device> [--image FILE] [options]\n"
 		"      Write to a drive (through rufus-helper, which pkexec starts as root), with\n"
@@ -132,7 +133,7 @@ static int cmd_list(int argc, char** argv)
 		{ NULL, 0, NULL, 0 }
 	};
 	static rufus_device_t devs[MAX_DRIVES];
-	device_filter_t filter = { 0 };
+	device_filter_t filter = { .enable_VHDs = TRUE };
 	BOOL json = FALSE;
 	char vid_pid[16];
 	int c, i, n;
@@ -420,7 +421,7 @@ static int cmd_write(int argc, char** argv)
 	static rules_state_t m;
 	const ui_iface_t iface = { .log = cli_log, .status = cli_status, .progress = cli_progress,
 		.ask = cli_ask, .event = cli_event };
-	device_filter_t filter = { 0 };
+	device_filter_t filter = { .enable_VHDs = TRUE };
 	const char *image = NULL, *archive = NULL, *label = NULL, *home;
 	int c, i, n, boot = -1, partition = -1, target = -1, fs = -1, passes = -1, image_fd = -1, archive_fd = -1;
 	int bb_log_fd = -1;
@@ -688,6 +689,8 @@ int main(int argc, char** argv)
 	usb_debug = (verbose > 1);
 	ui_set_iface(&iface);
 	load_localization();
+	// The boot check and the Syslinux installation compare with the versions we embed
+	SetEmbeddedSyslinuxVersions();
 
 	if (strcmp(argv[optind], "list") == 0) {
 		r = cmd_list(argc - optind, &argv[optind]);

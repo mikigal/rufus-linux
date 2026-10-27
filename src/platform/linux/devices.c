@@ -218,6 +218,32 @@ static BOOL IsCardReader(struct udev_device* dev)
 	return FALSE;
 }
 
+/*
+ * The loop devices that can be written to like a VHD: backed by a file, not
+ * read-only (which leaves out the squashfs images of snaps), and with partition
+ * scanning, so that the partitions Rufus creates get their devices.
+ */
+static BOOL IsLoopVHD(struct udev_device* dev)
+{
+	char backing_file[MAX_PATH];
+
+	if (strncmp(udev_device_get_sysname(dev), "loop", 4) != 0)
+		return FALSE;
+	sysattr_str(dev, "loop/backing_file", backing_file, sizeof(backing_file));
+	if (backing_file[0] == 0)
+		return FALSE;
+	if (sysattr_u64(dev, "ro") != 0) {
+		uuprintf("Skipping '%s' (read-only loop device of '%s')", udev_device_get_sysname(dev), backing_file);
+		return FALSE;
+	}
+	if (sysattr_u64(dev, "loop/partscan") == 0) {
+		uprintf("Skipping '%s' (loop device of '%s' without partition scanning: use 'losetup -P')",
+			udev_device_get_sysname(dev), backing_file);
+		return FALSE;
+	}
+	return TRUE;
+}
+
 int GetDevices(rufus_device_t* devs, int max_devs, const device_filter_t* filter)
 {
 	struct udev* udev;
@@ -226,9 +252,11 @@ int GetDevices(rufus_device_t* devs, int max_devs, const device_filter_t* filter
 	struct udev_device* dev;
 	disk_set_t system_disks = { 0 }, app_disks = { 0 };
 	const char *syspath, *sysname, *devnode;
+	char backing_file[MAX_PATH];
 	rufus_device_t* d;
 	dev_t devnum;
 	int nb_devs = 0;
+	BOOL is_loop;
 
 	udev = udev_new();
 	if (udev == NULL) {
@@ -258,8 +286,10 @@ int GetDevices(rufus_device_t* devs, int max_devs, const device_filter_t* filter
 			continue;
 		sysname = udev_device_get_sysname(dev);
 		devnode = udev_device_get_devnode(dev);
-		// Loop, RAM, zram, device mapper, RAID, NBD... devices are virtual, and optical drives are not disks
-		if ((devnode == NULL) || (strstr(syspath, "/devices/virtual/") != NULL) ||
+		// RAM, zram, device mapper, RAID, NBD... devices are virtual, and optical drives are not disks.
+		// A loop device is the VHD of Linux, if it is backed by a file (see IsLoopVHD()).
+		is_loop = (strstr(syspath, "/devices/virtual/") != NULL) && IsLoopVHD(dev);
+		if ((devnode == NULL) || ((strstr(syspath, "/devices/virtual/") != NULL) && !is_loop) ||
 			(strncmp(sysname, "sr", 2) == 0) || (strncmp(sysname, "fd", 2) == 0)) {
 			uuprintf("Skipping '%s'", sysname);
 			udev_device_unref(dev);
@@ -282,6 +312,12 @@ int GetDevices(rufus_device_t* devs, int max_devs, const device_filter_t* filter
 		if (udev_device_get_parent_with_subsystem_devtype(dev, "mmc", NULL) != NULL)
 			d->props.is_Removable = TRUE;
 		GetDeviceName(dev, d);
+		if (is_loop) {
+			sysattr_str(dev, "loop/backing_file", backing_file, sizeof(backing_file));
+			static_sprintf(d->name, "Loop Device (%s)", (strrchr(backing_file, '/') == NULL) ? backing_file :
+				&strrchr(backing_file, '/')[1]);
+		}
+		d->props.is_VHD = is_loop || IsVHDName(d->name, filter->enable_vmdk);
 		GetVolumes(udev, dev, d);
 		devnum = udev_device_get_devnum(dev);
 		d->is_system = DiskSetContains(&system_disks, devnum);

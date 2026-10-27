@@ -40,6 +40,27 @@ static const char* usb_speed[USB_SPEED_MAX] = {
 	"???", "1.5 Mbps", "12 Mbps", "480 Mbps", "5 Gbps", "10 Gbps", "20 Gbps", "40 Gbps", "80 Gbps"
 };
 
+BOOL IsVHDName(const char* name, BOOL enable_vmdk)
+{
+	// The Hardware IDs of the VHD devices that upstream knows, as Linux names them
+	static const char* vhd_name[] = {
+		"Arsenal Virtual",
+		"KernSafe Virtual",
+		"Msft Virtual Disk",
+		"BHYVE SATA DISK",
+		"VMware Virtual",	// Enabled through a cheat mode, as this lists primary disks on VMWare instances
+	};
+	size_t i;
+
+	if ((name == NULL) || (name[0] == 0))
+		return FALSE;
+	for (i = 0; i < ARRAYSIZE(vhd_name) - (enable_vmdk ? 0 : 1); i++) {
+		if (strstr(name, vhd_name[i]) != NULL)
+			return TRUE;
+	}
+	return FALSE;
+}
+
 BOOL ShouldListDevice(const rufus_device_t* dev, const device_filter_t* filter)
 {
 	usb_device_props props = dev->props;
@@ -120,6 +141,11 @@ BOOL ShouldListDevice(const rufus_device_t* dev, const device_filter_t* filter)
 		uprintf("Device eliminated because it was detected as a card larger than %s",
 			SizeToHumanReadable(MAX_DEFAULT_LIST_CARD_SIZE, FALSE, FALSE));
 		uprintf("To use such a card, check 'List USB Hard Drives' under 'advanced drive properties'");
+		return FALSE;
+	}
+
+	if (props.is_VHD && (!filter->enable_VHDs)) {
+		uprintf("Device eliminated because listing of VHDs is disabled (Alt-G)");
 		return FALSE;
 	}
 
