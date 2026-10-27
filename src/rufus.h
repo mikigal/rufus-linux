@@ -697,7 +697,6 @@ extern size_t ubuffer_pos;
 extern const int nb_steps[FS_MAX];
 extern sbat_entry_t* sbat_entries;
 extern thumbprint_list_t *sb_active_certs, *sb_revoked_certs;
-extern int force_update;
 extern unsigned long syslinux_ldlinux_len[2];
 extern uint8_t* grub2_buf;
 extern long grub2_len;

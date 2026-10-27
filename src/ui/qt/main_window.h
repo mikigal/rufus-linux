@@ -191,7 +191,6 @@ private:
 	ProgressBar* progress_ = nullptr;
 	QToolButton* lang_ = nullptr;
 	QToolButton* about_ = nullptr;
-	QToolButton* settings_ = nullptr;
 	QToolButton* log_button_ = nullptr;
 	QPushButton* start_ = nullptr;
 	QPushButton* close_ = nullptr;

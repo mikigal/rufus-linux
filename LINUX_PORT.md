@@ -416,14 +416,14 @@ Done:
 - **Dialogs** (`dialogs.cpp`, `log_window.cpp`): notification (icons, button sets,
   "don't show again", "more information"), selection (radio buttons or check boxes,
   user name and edition of the Windows User Experience, the silent install warning),
-  list, hash, about and license (the RTF of the `.loc` and `license.h` as HTML), update
-  policy and settings, and the log as a window of its own (Wayland does not let it
+  list, hash, about and license (the RTF of the `.loc` and `license.h` as HTML), and
+  the log as a window of its own (Wayland does not let it
   stick to the main window), saved to `$XDG_STATE_HOME/rufus/rufus.log` on exit.
   - The buttons that open a modal dialog do it once their click has returned, so that
     an accessibility client (a screen reader, or the tests) gets its answer.
   - Fido (DOWNLOAD), saving a drive to an image (IDC_SAVE) and Alt-O wait for stage 4,
-    and say so. There is no update check (§5.7): `IDD_UPDATE_POLICY` only holds its
-    settings, with Check Now disabled.
+    and say so. There is no update check (§5.7), hence no `IDD_UPDATE_POLICY` (and no
+    IDC_SETTINGS button, which only opens it), `IDD_NEW_VERSION`, Alt-Y or Ctrl-Alt-Y.
 - **Localization**: the `.loc` of `$RUFUS_LOC`, the installed one or the one of the
   source tree; the locale of `-l`, the settings or `LC_ALL`/`LC_MESSAGES`/`LANG`. The
   language menu creates the window again in the selected language, RTL included.
@@ -458,7 +458,7 @@ Done:
   installed): the layout,
   eight languages (three RTL ones), the language menu, a write, a question, a
   cancellation and a failure, an image with persistence and its hashes, an ISOHybrid
-  (selection dialog), the about, license, settings and log dialogs, the taskbar
+  (selection dialog), the about, license and log dialogs, the taskbar
   progress and every cheat code, with fake drives and a fake helper, in about 30 s.
   `tests/e2e/test_gui_vm.py` writes a drive with the GUI and the real helper, as root
   in the VM, and checks it. e2e_cli also cycles a port and writes to the loop device
@@ -759,12 +759,13 @@ Notes:
 | `IDC_SELECT` split button | `QToolButton` (`MenuButtonPopup`) with a SELECT/DOWNLOAD menu; Ctrl+click = extra .zip |
 | `IDC_PROGRESS` with text, states, marquee | `QProgressBar` subclass with its own `paintEvent` |
 | status bar with a `00:00:00` timer | `QStatusBar` + permanent timer widget |
-| toolbar (language/about/settings/log), save, hash | `QToolButton`s with the `res/icons` images |
+| toolbar (language/about/settings/log), save, hash | `QToolButton`s with the `res/icons` images, without settings (§5.7) |
 | `IDD_LOG` docked next to the main window | separate window (Wayland forbids positioning) or a slide-out panel |
 | `IDD_ABOUTBOX`/`IDD_LICENSE` (RichEdit RTF) | `QTextBrowser`; RTF from `license.h` and release notes converted to HTML |
 | `IDD_NOTIFICATION` (OK/YesNo/AbortRetryIgnore, "don't show again", "more information") | custom `QDialog` |
 | `IDD_SELECTION` (≤16 radios/checkboxes, user name field, edition combo, nesting) | custom `QDialog` + `QButtonGroup` |
-| `IDD_LIST`, `IDD_HASH`, `IDD_UPDATE_POLICY`, `IDD_NEW_VERSION` | simple `QDialog`s |
+| `IDD_LIST`, `IDD_HASH` | simple `QDialog`s |
+| `IDD_UPDATE_POLICY`, `IDD_NEW_VERSION` | none: there is no update check (§5.7) |
 | language menu with check mark | `QMenu` with checkable actions |
 | `IFileDialog` | `QFileDialog` (native KDE dialog / portal) |
 
@@ -823,6 +824,7 @@ All of them are carried over (`rufus.c:3904-4280`, `cheatCode()` in
 | Alt-O | optical disc to ISO | stage 4 (a message until then) |
 | Alt-N, Alt-Q | NTFS compression, indexing | passed to the format (`mkntfs -C`, and no `-I`) |
 | Ctrl-T | test hashes (debug builds) | not carried over |
+| Alt-Y, Ctrl-Alt-Y | force the update check | not carried over: there is no update check (§5.7) |
 
 ---
 
@@ -1024,7 +1026,8 @@ Size: S / M / L / XL (relative effort). Each stage ends with a working, testable
 ### Stage 3: Qt 6 GUI (L)
 
 - The main window and every dialog of §6.1, plus localization, RTL, dark mode, cheat
-  codes, drag & drop, hotplug, taskbar progress, log and settings.
+  codes, drag & drop, hotplug, taskbar progress, log and settings (with no update
+  settings, §5.7).
 - **Done when** T4 passes on KWin at 100/125/150% scaling, including a sample of
   languages with RTL, and every cheat code is reachable. (sway was dropped from this:
   the port targets KDE Plasma.)

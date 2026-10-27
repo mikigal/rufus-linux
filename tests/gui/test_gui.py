@@ -140,7 +140,7 @@ class Base:
                  "IDC_TARGET_SYSTEM", "IDC_ADVANCED_DRIVE_PROPERTIES", "IDC_LIST_USB_HDD", "IDC_OLD_BIOS_FIXES",
                  "IDC_UEFI_MEDIA_VALIDATION", "IDC_LABEL", "IDC_FILE_SYSTEM", "IDC_CLUSTER_SIZE",
                  "IDC_ADVANCED_FORMAT_OPTIONS", "IDC_QUICK_FORMAT", "IDC_EXTENDED_LABEL", "IDC_BAD_BLOCKS",
-                 "IDC_NB_PASSES", "IDC_PROGRESS", "IDC_LANG", "IDC_ABOUT", "IDC_SETTINGS", "IDC_LOG", "IDC_START",
+                 "IDC_NB_PASSES", "IDC_PROGRESS", "IDC_LANG", "IDC_ABOUT", "IDC_LOG", "IDC_START",
                  "IDCANCEL", "IDS_DEVICE_TXT", "IDS_BOOT_SELECTION_TXT", "IDS_LABEL_TXT"]
         frame = r.main.get_extents(r.Atspi.CoordType.WINDOW)
         boxes = {}
@@ -387,11 +387,8 @@ class Base:
         r.click("IDOK", about)
         r.dialog_closed("IDD_ABOUTBOX")
 
-        r.click("IDC_SETTINGS")
-        policy = r.dialog("IDD_UPDATE_POLICY")
-        self.assertIn(msg(179), r.text("IDC_POLICY", policy))
-        r.click("IDCANCEL", policy)
-        r.dialog_closed("IDD_UPDATE_POLICY")
+        # No update check, so no settings (IDD_UPDATE_POLICY)
+        self.assertIsNone(r.find("IDC_SETTINGS"))
 
         # The log, from its button and with Ctrl-L
         r.click("IDC_LOG")
@@ -423,8 +420,7 @@ class Base:
                                     ("alt+j", 257, False), ("alt+k", 258, False), ("alt+l", 254, True),
                                     ("alt+m", 319, True), ("alt+n", 260, True), ("alt+q", 290, True),
                                     ("alt+s", 252, False), ("alt+t", 269, True), ("alt+u", 263, True),
-                                    ("alt+w", 265, True), ("alt+y", 259, True), ("ctrl+p", 336, True),
-                                    ("ctrl+alt+e", 347, True), ("ctrl+alt+y", 259, False)):
+                                    ("alt+w", 265, True), ("ctrl+p", 336, True), ("ctrl+alt+e", 347, True)):
             with self.subTest(keys=keys):
                 toggle(keys, number, first)
         # Alt-E: dual UEFI/BIOS

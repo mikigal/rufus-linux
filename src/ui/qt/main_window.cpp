@@ -351,13 +351,12 @@ void MainWindow::createWidgets()
 	about_ = new QToolButton;
 	SET_NAME(about_, IDC_ABOUT);
 	about_->setIcon(toolbarIcon("info"));
-	settings_ = new QToolButton;
-	SET_NAME(settings_, IDC_SETTINGS);
-	settings_->setIcon(toolbarIcon("settings"));
 	log_button_ = new QToolButton;
 	SET_NAME(log_button_, IDC_LOG);
 	log_button_->setIcon(toolbarIcon("log"));
-	for (QToolButton* b : { lang_, about_, settings_, log_button_ }) {
+	// No IDC_SETTINGS: its dialog (IDD_UPDATE_POLICY) only holds the settings of the update check, which
+	// the port does not have
+	for (QToolButton* b : { lang_, about_, log_button_ }) {
 		b->setAutoRaise(true);
 		row->addWidget(b);
 	}
@@ -456,7 +455,6 @@ void MainWindow::createWidgets()
 	connect(close_, &QPushButton::clicked, this, &MainWindow::onClose, Qt::QueuedConnection);
 	connect(log_button_, &QToolButton::clicked, this, [this] { log_->toggle(); });
 	connect(about_, &QToolButton::clicked, this, [this] { ShowAboutDialog(this); }, Qt::QueuedConnection);
-	connect(settings_, &QToolButton::clicked, this, [this] { ShowUpdatePolicyDialog(this); }, Qt::QueuedConnection);
 	connect(lang_, &QToolButton::clicked, this, &MainWindow::showLanguageMenu, Qt::QueuedConnection);
 }
 
@@ -500,7 +498,7 @@ void MainWindow::retranslate()
 		{ old_bios_fixes_, MSG_169 }, { list_usb_hdd_, MSG_170 }, { start_, MSG_171 }, { partition_, MSG_163 },
 		{ target_, MSG_150 }, { image_option_, MSG_305 }, { persistence_slider_, MSG_125 },
 		{ persistence_size_, MSG_125 }, { persistence_units_, MSG_126 }, { about_, MSG_302 },
-		{ settings_, MSG_301 }, { lang_, MSG_273 }, { log_button_, MSG_303 }, { save_, MSG_304 }, { hash_, MSG_272 },
+		{ lang_, MSG_273 }, { log_button_, MSG_303 }, { save_, MSG_304 }, { hash_, MSG_272 },
 	};
 
 	// The 't' commands of the IDD_DIALOG section of the .loc
@@ -532,7 +530,7 @@ void MainWindow::retranslate()
 	hash_->setAccessibleName(lmstr(MSG_314));
 	advanced_device_->setAccessibleName(lmstr(MSG_119));
 	advanced_format_->setAccessibleName(lmstr(MSG_120));
-	for (QToolButton* b : { lang_, about_, settings_, log_button_ })
+	for (QToolButton* b : { lang_, about_, log_button_ })
 		b->setAccessibleName(b->toolTip());
 
 	// The passes of the bad blocks check
@@ -628,7 +626,7 @@ void MainWindow::render()
 	renderCombo(boot_, &m_.boot, m_.boot_enabled);
 	select_->setEnabled(m_.boot_enabled);
 	hash_->setEnabled(m_.hash_enabled);
-	for (QToolButton* b : { lang_, about_, settings_, log_button_ })
+	for (QToolButton* b : { lang_, about_, log_button_ })
 		b->setEnabled(m_.boot_enabled);
 
 	// ToggleImageOptions()
@@ -1343,9 +1341,6 @@ void MainWindow::onEvent(enum ui_event_type type, intptr_t param)
 			QApplication::alert(this);
 		}
 		break;
-	case UM_NO_UPDATE:
-		Notification(MB_ICONINFORMATION | MB_CLOSE, lmprintf(MSG_243), lmprintf(MSG_247));
-		break;
 	case UM_UPDATE_CSM_TOOLTIP:
 		updateCsmHelp();
 		break;
@@ -1483,13 +1478,12 @@ bool MainWindow::cheatCode(int key, Qt::KeyboardModifiers modifiers, bool check_
 		case Qt::Key_E: case Qt::Key_F: case Qt::Key_G: case Qt::Key_H: case Qt::Key_I: case Qt::Key_J:
 		case Qt::Key_K: case Qt::Key_L: case Qt::Key_M: case Qt::Key_N: case Qt::Key_O: case Qt::Key_P:
 		case Qt::Key_Q: case Qt::Key_R: case Qt::Key_S: case Qt::Key_T: case Qt::Key_U: case Qt::Key_V:
-		case Qt::Key_W: case Qt::Key_X: case Qt::Key_Y: case Qt::Key_Z:
+		case Qt::Key_W: case Qt::Key_X: case Qt::Key_Z:
 			break;
 		default:
 			return false;
 		}
-	} else if ((key != Qt::Key_Z) && (key != Qt::Key_D) && (key != Qt::Key_E) && (key != Qt::Key_F) &&
-		(key != Qt::Key_Y)) {
+	} else if ((key != Qt::Key_Z) && (key != Qt::Key_D) && (key != Qt::Key_E) && (key != Qt::Key_F)) {
 		return false;
 	}
 	if (check_only)
@@ -1534,11 +1528,7 @@ bool MainWindow::cheatCode(int key, Qt::KeyboardModifiers modifiers, bool check_
 				uprintf("By using this unofficial cheat mode you forfeit ANY RIGHT to complain if you lose valuable data!");
 			refreshDevices(false);
 			break;
-		// Ctrl-Alt-Y => Force update check to be successful and ignore timestamp errors
-		case Qt::Key_Y:
-			force_update = (force_update > 0) ? 0 : 2;
-			PrintStatusTimeout(lmprintf(MSG_259), force_update);
-			break;
+		// NB: No Ctrl-Alt-Y (force the update check), as there is no update check
 		}
 		return true;
 	}
@@ -1700,11 +1690,7 @@ bool MainWindow::cheatCode(int key, Qt::KeyboardModifiers modifiers, bool check_
 		uprintf("Alt-X (NoDriveTypeAutorun) is not needed on Linux, where Rufus hides the drive from udisks");
 		ui_status(FALSE, STATUS_MSG_TIMEOUT, "NoDriveTypeAutorun: not needed on Linux");
 		break;
-	// Alt-Y => Force the update check to be successful
-	case Qt::Key_Y:
-		force_update = (force_update > 0) ? 0 : 1;
-		PrintStatusTimeout(lmprintf(MSG_259), force_update);
-		break;
+	// NB: No Alt-Y (force the update check), as there is no update check
 	// Alt-Z => Zero the drive
 	case Qt::Key_Z:
 		fast_zeroing = FALSE;

@@ -32,7 +32,6 @@
 #include <QFontDatabase>
 #include <QFrame>
 #include <QGridLayout>
-#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -623,108 +622,5 @@ void ShowAboutDialog(QWidget* parent)
 	QObject::connect(license, &QPushButton::clicked, &dlg, [&dlg] { ShowLicenseDialog(&dlg); }, Qt::QueuedConnection);
 	QObject::connect(ok, &QPushButton::clicked, &dlg, &QDialog::accept);
 	localize(&dlg, IDD_ABOUTBOX);
-	dlg.exec();
-}
-
-/*
- * IDD_UPDATE_POLICY
- */
-
-void ShowUpdatePolicyDialog(QWidget* parent)
-{
-	QDialog dlg(parent);
-	QVBoxLayout* root = new QVBoxLayout(&dlg);
-	QHBoxLayout* top = new QHBoxLayout;
-	QHBoxLayout* bottom = new QHBoxLayout;
-	QLabel* icon = new QLabel;
-	QTextBrowser* policy = new QTextBrowser;
-	QGroupBox* settings = new QGroupBox(QStringLiteral("Settings"));
-	QGridLayout* grid = new QGridLayout(settings);
-	QLabel* frequency_txt = new QLabel(QStringLiteral("Check for updates"));
-	QLabel* betas_txt = new QLabel(QStringLiteral("Include beta versions"));
-	QComboBox* frequency = new QComboBox;
-	QComboBox* betas = new QComboBox;
-	QVBoxLayout* buttons = new QVBoxLayout;
-	QPushButton* check_now = new QPushButton(QStringLiteral("Check Now"));
-	QPushButton* close = new QPushButton(QStringLiteral("Close"));
-	char policy_text[4096];
-	int32_t freq;
-
-	dlg.setObjectName(QStringLiteral("IDD_UPDATE_POLICY"));
-	dlg.setWindowTitle(QStringLiteral("Update policy and settings"));
-	icon->setPixmap(QIcon(QStringLiteral(":/icons/rufus-64.png")).pixmap(48, 48));
-	SET_NAME(icon, IDC_ABOUT_ICON);
-	SET_NAME(policy, IDC_POLICY);
-	static_sprintf(policy_text, update_policy, lmprintf(MSG_179 | MSG_RTF), lmprintf(MSG_180 | MSG_RTF),
-		lmprintf(MSG_181 | MSG_RTF), lmprintf(MSG_182 | MSG_RTF), lmprintf(MSG_183 | MSG_RTF),
-		lmprintf(MSG_184 | MSG_RTF), lmprintf(MSG_185 | MSG_RTF), lmprintf(MSG_186 | MSG_RTF));
-	policy->setHtml(RtfToHtml(policy_text));
-	policy->setOpenExternalLinks(true);
-	policy->setMinimumSize(dlg.fontMetrics().averageCharWidth() * 70, dlg.fontMetrics().height() * 14);
-	top->addWidget(icon, 0, Qt::AlignTop);
-	top->addWidget(policy, 1);
-	root->addLayout(top);
-
-	SET_NAME(settings, IDS_UPDATE_SETTINGS_GRP);
-	SET_NAME(frequency_txt, IDS_UPDATE_FREQUENCY_TXT);
-	SET_NAME(betas_txt, IDS_INCLUDE_BETAS_TXT);
-	SET_NAME(frequency, IDC_UPDATE_FREQUENCY);
-	SET_NAME(betas, IDC_INCLUDE_BETAS);
-	frequency_txt->setBuddy(frequency);
-	betas_txt->setBuddy(betas);
-	frequency->addItem(lmstr(MSG_013), -1);
-	frequency->addItem(lmstr(MSG_030, lmprintf(MSG_014)), 86400);
-	frequency->addItem(lmstr(MSG_015), 604800);
-	frequency->addItem(lmstr(MSG_016), 2629800);
-	freq = ReadSetting32(SETTING_UPDATE_INTERVAL);
-	switch (freq) {
-	case -1:
-		frequency->setCurrentIndex(0);
-		break;
-	case 0:
-	case 86400:
-		frequency->setCurrentIndex(1);
-		break;
-	case 604800:
-		frequency->setCurrentIndex(2);
-		break;
-	case 2629800:
-		frequency->setCurrentIndex(3);
-		break;
-	default:
-		frequency->addItem(lmstr(MSG_017), freq);
-		frequency->setCurrentIndex(4);
-		break;
-	}
-	betas->addItem(lmstr(MSG_008));
-	betas->addItem(lmstr(MSG_009));
-	betas->setCurrentIndex(ReadSettingBool(SETTING_INCLUDE_BETAS) ? 0 : 1);
-	betas->setEnabled(freq >= 0);
-	grid->addWidget(frequency_txt, 0, 0);
-	grid->addWidget(frequency, 0, 1);
-	grid->addWidget(betas_txt, 1, 0);
-	grid->addWidget(betas, 1, 1);
-	SET_NAME(check_now, IDC_CHECK_NOW);
-	// The update check comes with the network code (stage 4 of the port)
-	check_now->setEnabled(false);
-	SET_NAME(close, IDCANCEL);
-	close->setDefault(true);
-	buttons->addWidget(check_now);
-	buttons->addWidget(close);
-	buttons->addStretch(1);
-	bottom->addWidget(settings, 1);
-	bottom->addLayout(buttons);
-	root->addLayout(bottom);
-
-	QObject::connect(frequency, &QComboBox::currentIndexChanged, &dlg, [frequency, betas] {
-		int32_t f = frequency->currentData().toInt();
-		WriteSetting32(SETTING_UPDATE_INTERVAL, (DWORD)f);
-		betas->setEnabled(f >= 0);
-	});
-	QObject::connect(betas, &QComboBox::currentIndexChanged, &dlg, [betas] {
-		WriteSettingBool(SETTING_INCLUDE_BETAS, betas->currentIndex() == 0);
-	});
-	QObject::connect(close, &QPushButton::clicked, &dlg, &QDialog::reject);
-	localize(&dlg, IDD_UPDATE_POLICY);
 	dlg.exec();
 }
