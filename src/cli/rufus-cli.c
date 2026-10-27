@@ -1019,6 +1019,22 @@ out:
 	return r;
 }
 
+// The files that Rufus downloads (the GRUB and Syslinux files of the boot check, the DBX...) go to
+// $XDG_DATA_HOME/Rufus (FILES_DIR), as for the GUI, and the temporary ones to $TMPDIR
+static void init_directories(void)
+{
+	const char* data = getenv("XDG_DATA_HOME");
+	const char* home = getenv("HOME");
+	const char* tmp = getenv("TMPDIR");
+
+	if ((data != NULL) && (data[0] == '/'))
+		static_strcpy(app_data_dir, data);
+	else if ((home != NULL) && (home[0] == '/'))
+		static_sprintf(app_data_dir, "%s/.local/share", home);
+	if ((tmp != NULL) && (tmp[0] == '/'))
+		static_strcpy(temp_dir, tmp);
+}
+
 int main(int argc, char** argv)
 {
 	static const struct option long_options[] = {
@@ -1049,6 +1065,7 @@ int main(int argc, char** argv)
 	}
 	usb_debug = (verbose > 1);
 	ui_set_iface(&iface);
+	init_directories();
 	load_localization();
 	// The boot check and the Syslinux installation compare with the versions we embed
 	SetEmbeddedSyslinuxVersions();
