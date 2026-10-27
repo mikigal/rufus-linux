@@ -39,6 +39,7 @@ find_package(Threads REQUIRED)
 find_package(OpenSSL 3.0 REQUIRED COMPONENTS Crypto)
 # System libraries (vendored ones live under src/)
 pkg_check_modules(EXT2FS REQUIRED IMPORTED_TARGET GLOBAL ext2fs com_err)
+pkg_check_modules(CURL REQUIRED IMPORTED_TARGET GLOBAL libcurl>=7.85)
 
 add_subdirectory(src)
 

@@ -509,7 +509,7 @@ enum bootcheck_return BootCheck(const bootcheck_drive_t* drive)
 							continue;
 						img_report.grub2_version[i] = 0;
 						static_sprintf(url, "%s/%s-%s/%s", FILES_URL, grub, img_report.grub2_version, core_img);
-						grub2_len = (long)DownloadSignedFile(url, tmp2, NULL, FALSE);
+						grub2_len = (long)DownloadSignedFile(url, tmp2, MAIN_WINDOW_PROGRESS, FALSE);
 						img_report.grub2_version[i] = c;
 					}
 					if (grub2_len <= 0) {
@@ -541,7 +541,7 @@ enum bootcheck_return BootCheck(const bootcheck_drive_t* drive)
 								static_sprintf(tmp2, "%s/%s-%s", files_dir, syslinux, embedded_sl_version_str[0]);
 								IGNORE_RETVAL(mkdir_p(tmp2, 0755));
 								static_sprintf(url, "%s/%s-%s/%s", FILES_URL, syslinux, embedded_sl_version_str[0], old_c32_name[i]);
-								len = DownloadSignedFile(url, tmp, NULL, TRUE);
+								len = DownloadSignedFile(url, tmp, MAIN_WINDOW_PROGRESS, TRUE);
 								if (len == 0) {
 									uprintf("Could not download file - cancelling");
 									ret = BOOTCHECK_DOWNLOAD_ERROR;
@@ -583,14 +583,14 @@ enum bootcheck_return BootCheck(const bootcheck_drive_t* drive)
 						static_sprintf(url, "%s/%s-%s%s/%s.%s", FILES_URL, syslinux, img_report.sl_version_str,
 							img_report.sl_version_ext, ldlinux, ldlinux_ext[i]);
 						static_sprintf(tmp, "%s/%s", files_dir, &url[sizeof(FILES_URL)]);
-						syslinux_ldlinux_len[i] = DownloadSignedFile(url, tmp, NULL, (*img_report.sl_version_ext == 0));
+						syslinux_ldlinux_len[i] = DownloadSignedFile(url, tmp, MAIN_WINDOW_PROGRESS, (*img_report.sl_version_ext == 0));
 						if ((syslinux_ldlinux_len[i] == 0) && (DownloadStatus == 404) && (*img_report.sl_version_ext != 0)) {
 							// Couldn't locate the file on the server => try to download without the version extra
 							uprintf("Extended version was not found, trying main version...");
 							static_sprintf(url, "%s/%s-%s/%s.%s", FILES_URL, syslinux, img_report.sl_version_str,
 								ldlinux, ldlinux_ext[i]);
 							static_sprintf(tmp, "%s/%s", files_dir, &url[sizeof(FILES_URL)]);
-							syslinux_ldlinux_len[i] = DownloadSignedFile(url, tmp, NULL, (*img_report.sl_version_ext == 0));
+							syslinux_ldlinux_len[i] = DownloadSignedFile(url, tmp, MAIN_WINDOW_PROGRESS, (*img_report.sl_version_ext == 0));
 							if (syslinux_ldlinux_len[i] != 0) {
 								// Duplicate the file so that the user won't be prompted to download again
 								static_sprintf(tmp2, "%s/%s-%s%s/%s.%s", files_dir, syslinux, img_report.sl_version_str,
@@ -630,7 +630,7 @@ enum bootcheck_return BootCheck(const bootcheck_drive_t* drive)
 				static_sprintf(tmp2, "%s/%s-%s", files_dir, syslinux, embedded_sl_version_str[1]);
 				IGNORE_RETVAL(mkdir_p(tmp2, 0755));
 				static_sprintf(url, "%s/%s-%s/%s.%s", FILES_URL, syslinux, embedded_sl_version_str[1], ldlinux, ldlinux_ext[2]);
-				if (DownloadSignedFile(url, tmp, NULL, TRUE) == 0) {
+				if (DownloadSignedFile(url, tmp, MAIN_WINDOW_PROGRESS, TRUE) == 0) {
 					ret = BOOTCHECK_DOWNLOAD_ERROR;
 					goto out;
 				}
@@ -649,7 +649,7 @@ enum bootcheck_return BootCheck(const bootcheck_drive_t* drive)
 			if (Notification(MB_YESNO | MB_ICONWARNING, lmprintf(MSG_115), lmprintf(MSG_337, "diskcopy.dll")) != IDYES)
 				goto out;
 			IGNORE_RETVAL(mkdir_p(files_dir, 0755));
-			if (DownloadToFileOrBufferEx(DISKCOPY_URL, tmp, SYMBOL_SERVER_USER_AGENT, NULL, NULL, FALSE) != DISKCOPY_SIZE) {
+			if (DownloadToFileOrBufferEx(DISKCOPY_URL, tmp, SYMBOL_SERVER_USER_AGENT, NULL, MAIN_WINDOW_PROGRESS, FALSE) != DISKCOPY_SIZE) {
 				ret = BOOTCHECK_DOWNLOAD_ERROR;
 				goto out;
 			}
@@ -671,7 +671,7 @@ enum bootcheck_return BootCheck(const bootcheck_drive_t* drive)
 				static_sprintf(tmp2, "%s/grub4dos-%s", files_dir, GRUB4DOS_VERSION);
 				IGNORE_RETVAL(mkdir_p(tmp2, 0755));
 				static_sprintf(url, "%s/grub4dos-%s/grldr", FILES_URL, GRUB4DOS_VERSION);
-				if (DownloadSignedFile(url, tmp, NULL, TRUE) == 0) {
+				if (DownloadSignedFile(url, tmp, MAIN_WINDOW_PROGRESS, TRUE) == 0) {
 					ret = BOOTCHECK_DOWNLOAD_ERROR;
 					goto out;
 				}

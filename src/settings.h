@@ -57,6 +57,7 @@ extern char* ini_file;
 #define SETTING_FORCE_LARGE_FAT32_FORMAT    "ForceLargeFat32Formatting"
 #define SETTING_IGNORE_BOOT_MARKER          "IgnoreBootMarker"
 #define SETTING_INCLUDE_BETAS               "CheckForBetas"
+#define SETTING_LAST_DBX_CHECK              "LastDBXCheck"
 #define SETTING_LAST_UPDATE                 "LastUpdateCheck"
 #define SETTING_LOCALE                      "Locale"
 #define SETTING_UPDATE_INTERVAL             "UpdateCheckInterval"

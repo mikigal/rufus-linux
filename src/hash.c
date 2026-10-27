@@ -77,6 +77,7 @@
 #include "ui_iface.h"
 #include "winpe.h"
 #include "localization.h"
+#include "download.h"
 
 #if (defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || defined(__i386) || \
      defined(_X86_) || defined(__I86__) || defined(__x86_64__))
@@ -2080,10 +2081,12 @@ static BOOL IsRevokedBySbat(uint8_t* buf, uint32_t len)
 	sbat_entry_t entry;
 
 	// Fall back to embedded sbat_level.txt if we couldn't access remote
+	LockSecureBootData();
 	if (sbat_entries == NULL) {
 		sbat_level_txt = safe_strdup(db_sbat_level_txt);
 		sbat_entries = GetSbatEntries(sbat_level_txt);
 	}
+	UnlockSecureBootData();
 	assert(sbat_entries != NULL);
 	if (sbat_entries == NULL)
 		return FALSE;
@@ -2138,9 +2141,16 @@ static BOOL IsRevokedByDbx(uint8_t* hash, uint8_t* buf, uint32_t len)
 	if (i == ARCH_UNKNOWN)
 		goto out;
 
-	// TODO: Prefer a more recent downloaded DBX over the embedded one, as upstream
-	// does with UseLocalDbx(), once the DBX updates of net.c are ported.
 	static_sprintf(dbx_name, "dbx_%s.bin", efi_archname[i]);
+	if (UseLocalDbx(i)) {
+		char path[MAX_PATH];
+		static_sprintf(path, "%s/%s/%s", app_data_dir, FILES_DIR, dbx_name);
+		dbx_size = read_file(path, &dbx_data);
+		needs_free = (dbx_data != NULL);
+		if (needs_free) {
+			duprintf("  Using local %s for revocation check", path);
+		}
+	}
 	if (dbx_size == 0) {
 		dbx_data = (BYTE*)GetResource(IDR_DBX + i, dbx_name, &dbx_size, FALSE);
 	}
@@ -2240,10 +2250,12 @@ static BOOL IsRevokedByCert(cert_info_t* info)
 		return FALSE;
 
 	// Fall back to embedded Secure Boot thumbprints if we couldn't access remote
+	LockSecureBootData();
 	if (sb_revoked_certs == NULL) {
 		sb_revoked_txt = safe_strdup(db_sb_revoked_txt);
 		sb_revoked_certs = GetThumbprintEntries(sb_revoked_txt);
 	}
+	UnlockSecureBootData();
 	assert(sb_revoked_certs != NULL && sb_revoked_certs->count != 0);
 	if (sb_revoked_certs == NULL)
 		return FALSE;
@@ -2273,10 +2285,12 @@ BOOL IsSignedBySecureBootAuthority(uint8_t* buf, uint32_t len)
 		return FALSE;
 
 	// Fall back to embedded Secure Boot thumbprints if we couldn't access remote
+	LockSecureBootData();
 	if (sb_active_certs == NULL) {
 		sb_active_txt = safe_strdup(db_sb_active_txt);
 		sb_active_certs = GetThumbprintEntries(sb_active_txt);
 	}
+	UnlockSecureBootData();
 	// If we still manage to get an empty list at this stage, I sure wanna know about it!
 	assert(sb_active_certs != NULL && sb_active_certs->count != 0);
 	if (sb_active_certs == NULL || sb_active_certs->count == 0)

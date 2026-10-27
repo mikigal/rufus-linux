@@ -20,7 +20,8 @@
 /*
  * BootCheck() on image reports set up by the tests, with scripted answers
  * (test_ui.h). The bootloader files are either placed in app_data_dir by the
- * test, or downloaded, which fails until the downloads are ported.
+ * test, or downloaded, which fails as nothing listens where the downloads go
+ * ($RUFUS_TEST_URL_PREFIX, see tests/CMakeLists.txt).
  */
 
 #include <limits.h>
@@ -422,8 +423,10 @@ static void test_bootloader_files(void)
 	answer(1, IDNO);
 	CHECK_BOOTCHECK(BOOTCHECK_CANCEL);
 	CHECK(asked_msg(0, MSG_115));
-	answer(1, IDYES);
+	// The failed download gets reported
+	answer(2, IDYES, IDOK);
 	CHECK_BOOTCHECK(BOOTCHECK_DOWNLOAD_ERROR);
+	CHECK(asked_msg(1, MSG_044));
 	cache_file("syslinux-6.03/ldlinux.sys", "ldlinux.sys");
 	cache_file("syslinux-6.03/ldlinux.bss", "ldlinux.bss!");
 	answer(0);
@@ -433,6 +436,7 @@ static void test_bootloader_files(void)
 	// With an extra version, the main version is tried too
 	static_strcpy(img_report.sl_version_ext, "/2014-10-06");
 	log_buf[0] = 0;
+	// No error message for an extra version (as the embedded version may be used instead)
 	answer(1, IDYES);
 	CHECK_BOOTCHECK(BOOTCHECK_DOWNLOAD_ERROR);
 	CHECK_CONTAINS(log_buf, "Downloading " FILES_URL "/syslinux-6.03/2014-10-06/ldlinux.sys\n");
@@ -455,8 +459,10 @@ static void test_bootloader_files(void)
 	CHECK_BOOTCHECK(BOOTCHECK_PROCEED);
 	CHECK(asked_msg(0, MSG_083));
 	CHECK(!opts.use_own_c32[1]);
-	answer(1, IDYES);
+	// The failed download gets reported
+	answer(2, IDYES, IDOK);
 	CHECK_BOOTCHECK(BOOTCHECK_DOWNLOAD_ERROR);
+	CHECK(asked_msg(1, MSG_044));
 	snprintf(name, sizeof(name), "syslinux-%s/vesamenu.c32", embedded_sl_version_str[0]);
 	cache_file(name, "vesamenu.c32");
 	answer(0);
@@ -564,8 +570,10 @@ static void test_boot_selections(void)
 	CHECK(asked_msg(0, MSG_103));
 	answer(1, IDNO);
 	CHECK_BOOTCHECK(BOOTCHECK_PROCEED);
-	answer(1, IDYES);
+	// The failed download gets reported
+	answer(2, IDYES, IDOK);
 	CHECK_BOOTCHECK(BOOTCHECK_DOWNLOAD_ERROR);
+	CHECK(asked_msg(1, MSG_044));
 	snprintf(name, sizeof(name), "syslinux-%s/ldlinux.c32", embedded_sl_version_str[1]);
 	cache_file(name, "ldlinux.c32");
 	answer(0);
@@ -576,8 +584,10 @@ static void test_boot_selections(void)
 	answer(1, IDCANCEL);
 	CHECK_BOOTCHECK(BOOTCHECK_CANCEL);
 	CHECK(asked_msg(0, MSG_103));
-	answer(1, IDYES);
+	// The failed download gets reported
+	answer(2, IDYES, IDOK);
 	CHECK_BOOTCHECK(BOOTCHECK_DOWNLOAD_ERROR);
+	CHECK(asked_msg(1, MSG_044));
 	cache_file("grub4dos-" GRUB4DOS_VERSION "/grldr", "grldr");
 	answer(0);
 	CHECK_BOOTCHECK(BOOTCHECK_PROCEED);

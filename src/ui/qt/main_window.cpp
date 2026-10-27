@@ -125,6 +125,10 @@ static QComboBox* newCombo(const char* name)
 	return combo;
 }
 
+// The DBX update check runs once per session, some time after the start
+static bool dbx_check_started = false;
+static const int dbx_check_delay = 15000;
+
 MainWindow::MainWindow(LogWindow* log, QWidget* parent) : QMainWindow(parent), log_(log)
 {
 	rules_init(&m_);
@@ -174,6 +178,23 @@ MainWindow::MainWindow(LogWindow* log, QWidget* parent) : QMainWindow(parent), l
 		queued_hotplug_event_ = false;
 		refreshDevices(false);
 	});
+
+	// The DBX updates, once a day, when nothing is going on (as the update check of upstream)
+	if (!dbx_check_started) {
+		QTimer* idle = new QTimer(this);
+		connect(idle, &QTimer::timeout, this, [this, idle] {
+			if (dbx_check_started) {
+				idle->stop();
+				return;
+			}
+			if (m_.op_in_progress || format_running_ || cycling_ || (QApplication::activeModalWidget() != nullptr))
+				return;
+			dbx_check_started = true;
+			idle->stop();
+			std::thread([] { CheckForDBXUpdatesDaily(); }).detach();
+		});
+		idle->start(dbx_check_delay);
+	}
 
 	// The cheat codes, ahead of the mnemonics of the widgets
 	qApp->installEventFilter(this);

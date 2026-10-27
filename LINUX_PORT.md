@@ -47,7 +47,7 @@ Wayland, and tracks the progress of the port.
 | 1. Decouple the logic from the UI | **done** |
 | 2. Linux backend, helper, CLI | **done** (the NTFS, exFAT and UDF runs need their tools on the host) |
 | 3. Qt 6 GUI | **done** |
-| 4. Advanced features | not started |
+| 4. Advanced features | in progress |
 | 5. Windows To Go | not started |
 | 6. Distribution | not started |
 
@@ -162,8 +162,7 @@ Wayland, and tracks the progress of the port.
   through `ui_ask()` and writes its decisions to `opts`.
   - The bootloader files are looked up in `app_data_dir` with absolute paths, as the
     current directory is shared by all the threads.
-  - Downloads fail until `net.c` is ported (`core/download.c`, stage 4), so the files
-    have to be placed in `app_data_dir` by hand.
+  - The files get downloaded into `app_data_dir` (`core/download.c`, stage 4).
   - An image stored on the target is detected through sysfs (the disk of its file
     system), not through drive letters.
   - The Windows version checks of the host are gone: the Windows User Experience is
@@ -357,8 +356,8 @@ Done:
   - `rufus-cli write <device>` sets the options through the rules of the main window,
     runs the boot check (questions on the terminal, or `--iso`/`--dd` and `--yes`) and
     asks for the confirmation of upstream (MSG_003), then writes through the helper.
-    SIGINT cancels, and `--archive` adds a zip archive. Downloads are not there yet
-    (`download.c` is a stub), so the boot files must already be in `app_data_dir`.
+    SIGINT cancels, and `--archive` adds a zip archive. The boot files get downloaded
+    as in the GUI (stage 4).
   - Cleaning up no longer depends on the operation: `udevadm` runs after a
     cancellation (`RunCommand()` refuses to), and the drive gets a change event once its
     rule is gone, or udisks would keep ignoring it.
@@ -463,6 +462,30 @@ Done:
   `tests/e2e/test_gui_vm.py` writes a drive with the GUI and the real helper, as root
   in the VM, and checks it. e2e_cli also cycles a port and writes to the loop device
   of a file.
+
+**Stage 4 (in progress)**
+
+- **Downloads** (`core/download.c`, the port of `net.c` without the update check): libcurl
+  with the options of the WinInet session of upstream (user agent, timeouts, no
+  compression, redirections only to HTTPS), the progress on the main window, the
+  cancellation, the `.bak` of a file being replaced, and the errors as `errno`.
+  - `DownloadSignedFile()` checks the `.sig` of the bootloader files with the key of
+    `pki.c`; the boot check and `rufus-cli` download them into `app_data_dir`, and
+    report a failed download as upstream (MSG_044). The helper never downloads.
+  - Upstream refuses a file without a length, which HTTP/2 servers may omit; here it
+    gets downloaded, into a buffer that grows.
+  - The GUI gets `sbat_level.txt`, `sb_active.txt` and `sb_revoked.txt` when it starts,
+    as `CheckForFidoThread()` does, and checks for DBX updates once a day, some time
+    after the start and when nothing is going on, as the update check of upstream
+    did (asking before it downloads them). As the AppStore version of upstream, this
+    does not depend on an update setting. `IsRevokedByDbx()` uses a downloaded DBX
+    when it is more recent than the embedded one (`UseLocalDbx()`).
+  - Test hook: `$RUFUS_TEST_URL_PREFIX` maps every URL to a server of the tests
+    (`https://rufus.ie/x` to `<prefix>/rufus.ie/x`). The unit and GUI tests point it to
+    a port where nothing listens, so that they never reach the network.
+  - `tests/test_download.c` serves files, redirections, errors, truncated and slow
+    transfers from a server on 127.0.0.1, and a real signed file of rufus.ie (in
+    `tests/data/download`), as is and tampered with.
 
 ---
 
@@ -594,8 +617,8 @@ discouraged. Hence:
 
 Other dependencies:
 
-- **System libraries**: libudev, OpenSSL (libcrypto), Qt 6 (Widgets, DBus); still to
-  come: libcurl, hivex.
+- **System libraries**: libudev, OpenSSL (libcrypto), libcurl, Qt 6 (Widgets, DBus);
+  still to come: hivex.
 - **Runtime tools**: `mkfs.fat`, `mkntfs`, `mkfs.exfat`, `mkudffs`, `mke2fs`, plus
   optionally `qemu-img`.
 

@@ -43,7 +43,7 @@ target_include_directories(rufus_core PUBLIC
 	"${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(rufus_core
 	PUBLIC rufus_compat bled rufus_cdio syslinux_fat wim mssys m Threads::Threads OpenSSL::Crypto
-	PRIVATE rufus_warnings)
+	PRIVATE rufus_warnings PkgConfig::CURL)
 
 # The payloads that rufus.rc embeds (see resource.c)
 file(STRINGS resources.h resource_lines REGEX "^RESOURCE\\(")

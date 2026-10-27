@@ -35,6 +35,7 @@ extern "C" {
 #include "devices.h"
 #include "image_scan.h"
 #include "boot_check.h"
+#include "download.h"
 #include "progress.h"
 #include "platform.h"
 #include "helper_client.h"

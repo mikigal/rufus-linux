@@ -4,9 +4,10 @@ function(rufus_add_test name)
 	target_include_directories(${name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 	target_link_libraries(${name} PRIVATE rufus_warnings)
 	add_test(NAME ${name} COMMAND ${name})
-	# Exit code 77 means that a prerequisite (e.g. an external tool) is missing
+	# Exit code 77 means that a prerequisite (e.g. an external tool) is missing. The downloads
+	# go to a port where nothing listens (see download.c), unless a test serves them.
 	set_tests_properties(${name} PROPERTIES SKIP_RETURN_CODE 77
-		ENVIRONMENT "RUFUS_TEST_DATA=${CMAKE_CURRENT_SOURCE_DIR}/data;RUFUS_SOURCE_DIR=${PROJECT_SOURCE_DIR}")
+		ENVIRONMENT "RUFUS_TEST_DATA=${CMAKE_CURRENT_SOURCE_DIR}/data;RUFUS_SOURCE_DIR=${PROJECT_SOURCE_DIR};RUFUS_TEST_URL_PREFIX=http://127.0.0.1:9")
 endfunction()
 
 rufus_add_test(test_compat test_compat.c)
@@ -47,6 +48,9 @@ target_link_libraries(test_scan PRIVATE rufus_core)
 
 rufus_add_test(test_bootcheck test_bootcheck.c)
 target_link_libraries(test_bootcheck PRIVATE rufus_core)
+
+rufus_add_test(test_download test_download.c)
+target_link_libraries(test_download PRIVATE rufus_core)
 
 rufus_add_test(test_threads test_threads.c)
 target_link_libraries(test_threads PRIVATE rufus_core)

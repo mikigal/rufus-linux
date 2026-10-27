@@ -22,6 +22,8 @@
 #include <stdio.h>
 #include <strings.h>
 
+#include <thread>
+
 #include <QApplication>
 #include <QFileInfo>
 #include <QLockFile>
@@ -159,6 +161,8 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 	ApplyColorScheme();
+	// The Secure Boot revocation data of the server, as CheckForFidoThread() of upstream
+	std::thread([] { FetchRemoteSecureBootData(); }).detach();
 	// The main window closes itself (also to be created again in another language)
 	app.setQuitOnLastWindowClosed(false);
 

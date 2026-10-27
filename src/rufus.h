@@ -686,6 +686,8 @@ extern void CancelOperation(void);
 // Downloads (DownloadStatus is the HTTP status). hProgressDialog is the dialog that displays the progress, if any.
 extern uint64_t DownloadToFileOrBufferEx(const char* url, const char* file, const char* user_agent,
 	BYTE** buffer, void* hProgressDialog, BOOL bTaskBarProgress);
+#define DownloadToFileOrBuffer(url, file, buffer, hProgressDialog, bTaskBarProgress) \
+	DownloadToFileOrBufferEx(url, file, NULL, buffer, hProgressDialog, bTaskBarProgress)
 extern DWORD DownloadSignedFile(const char* url, const char* file, void* hProgressDialog, BOOL bPromptOnError);
 extern BOOL op_in_progress, right_to_left_mode;
 extern BOOL large_drive, usb_debug, expert_mode;

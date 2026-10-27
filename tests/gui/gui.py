@@ -236,6 +236,8 @@ class Rufus:
             "RUFUS_TEST_CONTROL": "1",
             "RUFUS_FAKE_HELPER": os.environ.get("RUFUS_FAKE_HELPER", ""),
             "RUFUS_FAKE_HELPER_LOG": self.helper_log,
+            # Nothing listens there: no download reaches the network (see download.c)
+            "RUFUS_TEST_URL_PREFIX": "http://127.0.0.1:9",
             "LANG": "en_US.UTF-8",
             "LC_ALL": "",
             "LC_MESSAGES": "",
