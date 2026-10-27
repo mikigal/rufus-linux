@@ -144,6 +144,11 @@ if(RUFUS_E2E_TESTS)
 		WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/e2e")
 	set_tests_properties(e2e_media PROPERTIES LABELS e2e TIMEOUT 5400
 		ENVIRONMENT "RUFUS_CLI=$<TARGET_FILE:rufus-cli>;RUFUS_HELPER=$<TARGET_FILE:rufus-helper>;RUFUS_TEST_MKWIM=$<TARGET_FILE:rufus-test-mkwim>")
+	# Real ISOs (T5): ctest -L slow, which downloads them (about 11 GB) with RUFUS_TEST_DOWNLOAD=1
+	add_test(NAME e2e_real_isos COMMAND Python3::Interpreter -m unittest -v test_real_isos
+		WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/e2e")
+	set_tests_properties(e2e_real_isos PROPERTIES LABELS slow TIMEOUT 14400
+		ENVIRONMENT "RUFUS_CLI=$<TARGET_FILE:rufus-cli>;RUFUS_HELPER=$<TARGET_FILE:rufus-helper>")
 	# The GUI with the real helper and drive (tests/gui/vm_write.py)
 	if(RUFUS_BUILD_GUI)
 		add_test(NAME e2e_gui COMMAND Python3::Interpreter -m unittest -v test_gui_vm
