@@ -48,7 +48,7 @@ Wayland, and tracks the progress of the port.
 | 3. Qt 6 GUI | **done** |
 | 4. Advanced features | **done** (T3 under Secure Boot with UEFI:NTFS needs mkntfs or mkfs.exfat on the host) |
 | 5. Windows To Go | **dropped** (decision of 2026-10-27) |
-| 6. Distribution | not started |
+| 6. Distribution | **done** |
 
 **Stage 0 (done)**
 
@@ -80,8 +80,7 @@ Wayland, and tracks the progress of the port.
 
   OVMF has no UAS driver, and SeaBIOS boots UAS only on USB 2, as on real hardware.
 
-**Follow-up**: run `ctest -L e2e` in GitHub Actions once the repository is pushed
-(hosted runners expose KVM).
+The end-to-end tests run in GitHub Actions since stage 6 (§8.7).
 
 **Stage 1 (done)**
 
@@ -584,6 +583,47 @@ came with stage 2 (and their GUI with stage 3); the rest is here.
   mkfs.exfat), a Windows-like ISO on NTFS goes through UEFI:NTFS and its NTFS driver,
   which are then refused the unsigned boot loader of the media.
 
+**Stage 6 (done)**
+
+- **Installation**: the AppStream metainfo (`io.github.mikigal.rufus_linux`, as
+  appstreamcli wants a reverse DNS id; the desktop file stays `rufus.desktop`, the
+  Wayland app_id), man pages for `rufus` and `rufus-cli`, and a screenshot. The front
+  ends look for the helper and the localization file relative to their executable first
+  (`GetInstalledFile()`, with the paths that CMake computes from the install
+  directories), so that a tree that got moved works. wimlib no longer links libntfs-3g
+  (only Windows To Go needed its NTFS-3G mode).
+- **Packages** (`packaging/`), each with a script that builds the one of the commit:
+  - Debian 13 and Ubuntu 26.04 (`debian/`, debhelper), Fedora and openSUSE Tumbleweed
+    (`rpm/rufus.spec`), Arch Linux (the PKGBUILDs of the AUR packages `rufus` and
+    `rufus-bin`). The version is the one of the release tag, or the one of the project
+    with the date and hash of the commit (`packaging/version.sh`).
+  - A portable tree with its own Qt (6.8, from the Qt installer) and libraries, built on
+    Ubuntu 24.04 with linuxdeploy: an AppImage, and the same tree as a `tar.gz`, which
+    `rufus-bin` installs in `/opt/rufus`, with a polkit action for its helper. Its
+    `AppRun` starts `rufus`, or `rufus-cli` under that name or with `--cli`. Root can't
+    read the FUSE mount of an AppImage, which the helper needs, so an AppImage runs from
+    the copy that its runtime extracts (`APPIMAGE_EXTRACT_AND_RUN`); without the polkit
+    action of an installation, pkexec shows its generic prompt.
+- **CI** (§8.7): `linux.yml` builds and runs the unit tests on each of these
+  distributions (and with clang), the GUI tests under KWin (sway does not start in a
+  container), and the end-to-end tests with KVM. `release.yml` builds the packages, installs them, and with
+  a release tag publishes them and the AUR packages (once the `AUR_SSH_PRIVATE_KEY`
+  secret has the key of the account). Both run on the branches under `ci/` without
+  publishing anything.
+- **Real ISOs** (T5, `tests/e2e/test_real_isos.py`, `ctest -L slow`): Ubuntu 26.04.1
+  (ISO mode with persistence, and DD mode), Fedora 44, Debian 13.7, Arch Linux 2026.10
+  and Windows 11 (NTFS with UEFI:NTFS and the Windows User Experience, FAT32 with a split
+  `install.wim`, MBR for BIOS), written by `rufus-cli` through the helper, then booted
+  under BIOS, UEFI and UEFI with Secure Boot to their menu, the shell of the live system
+  or Windows Setup. They found that `rufus-cli` had no directory for its downloads (so
+  that the `core.img` of a `/boot/grub2` GRUB, as Fedora's, did not get downloaded, and
+  Fedora did not boot with BIOS). Real hardware (T6) was checked by hand: Windows and
+  Linux media boot.
+- The other distributions of CI found: a constructor of `QDragEnterEvent` that only
+  Qt 6.12 has, signatures of test data that the `.gitignore` of upstream kept out of the
+  repository, warnings of clang, and the udev of Ubuntu 24.04, which gives a UAS disk
+  `ID_BUS=scsi` (Rufus itself uses sysfs).
+
 ---
 
 ## 3. Code inventory
@@ -1008,8 +1048,8 @@ and without physical hardware**. The only manual steps are installing the tools 
 | T2 | **end-to-end write** to an emulated USB stick, as root | root **inside a VM** | QEMU/KVM VM booted from the host kernel (virtme-ng) | `ctest -L e2e` |
 | T3 | **boot verification** of the written stick | none | QEMU with SeaBIOS (BIOS) and OVMF (UEFI, and UEFI + Secure Boot) | `ctest -L e2e` |
 | T4 | **GUI end-to-end** under a headless Wayland compositor | none (root in the VM for the full stack) | `kwin_wayland --virtual` (sway headless, optional) | `ctest -L gui` |
-| T5 | real ISOs (Ubuntu, Fedora, Debian, Arch, Windows 11, ...) | as T2/T3 | as T2/T3 | `ctest -L slow`, nightly, opt-in download |
-| T6 | real hardware with a dedicated stick, identified by USB serial | root | host | opt-in only |
+| T5 | real ISOs (Ubuntu, Fedora, Debian, Arch, Windows 11) | as T2/T3 | as T2/T3 | `ctest -L slow`, opt-in download (`RUFUS_TEST_DOWNLOAD=1`) |
+| T6 | real hardware with a dedicated stick | root | host | by hand |
 
 ### 8.2 T2: writing to an emulated USB stick, as root, without root on the host
 
@@ -1063,7 +1103,7 @@ already installed:
 | `linux-grub.iso` | `grub-mkrescue` (BIOS + UEFI ISOHybrid) + host kernel + marker initramfs | ISO mode with GRUB2 (incl. Rufus' own `core.img`), DD mode, ISO→ESP |
 | `linux-syslinux.iso` | `xorriso`, with an isolinux tree whose `isolinux.bin` only holds the version string of Syslinux 4 (no syslinux package needed: Rufus installs its own) | Syslinux install, config patching (ISO mode only) |
 | `linux-casper.iso` | GRUB ISO with an Ubuntu-like `/casper` layout | persistence partition + kernel parameters |
-| `windows-like.iso` | ISO-9660 tree with `bootmgr`, `bootmgr.efi` and `efi/boot/bootx64.efi` (a standalone GRUB that boots the marker kernel from FAT or NTFS). Still to come: a >4 GB `install.wim` variant (slow tier) | Windows detection, UEFI:NTFS chain loading; later WIM split |
+| `windows-like.iso` | ISO-9660 tree with `bootmgr`, `bootmgr.efi` and `efi/boot/bootx64.efi` (a standalone GRUB that boots the marker kernel from FAT or NTFS). The split of a >4 GB `install.wim` is checked with a real Windows ISO (T5) | Windows detection, UEFI:NTFS chain loading |
 | `windows11-like.iso` | `windows-like.iso` with the `sources/boot.wim` (with a SYSTEM hive) and `sources/install.wim` (Windows 11 24H2) of `rufus-test-mkwim` | Windows User Experience |
 | `disk.img[.gz/.xz/.zst/.bz2]`, `.vhd`, `.vhdx` | the ISOs above as raw disks, compressed or converted | DD writes, decompression, VHD/VHDX |
 | FreeDOS / MS-DOS | Rufus' own embedded files | DOS boot to a prompt (VGA text) |
@@ -1111,9 +1151,17 @@ the autonomous loop.
 
 ### 8.7 CI
 
-GitHub-hosted Linux runners expose KVM, so T0–T4 (except the slow tier) can run on every
-push. On the host: `ctest` for T0/T1, `ctest -L e2e` for T2/T3, and `ctest -L gui` for
-T4.
+On release tags and on the branches under `ci/` (`.github/workflows/linux.yml`):
+
+- T0/T1 (`ctest`) in containers of Arch Linux (gcc and clang), Fedora, openSUSE
+  Tumbleweed, Debian 13 and Ubuntu 26.04;
+- T4 (`ctest -L gui`) in an Arch Linux container, under KWin, as a user (without the
+  file capabilities of `kwin_wayland`, which a container can't give);
+- T2/T3 (`ctest -L e2e`) on the runner itself (Ubuntu 24.04, which exposes KVM), with
+  the GUI off (its Qt is too old) and the generic kernel of Ubuntu for the VMs
+  (`RUFUS_E2E_KERNEL`).
+
+The slow tier (T5) downloads about 11 GB and a Windows ISO, and runs by hand.
 
 ---
 
@@ -1182,12 +1230,14 @@ Size: S / M / L / XL (relative effort). Each stage ends with a working, testable
 - NTFS-3G apply, ESP, BCD from the template via hivex, SanPolicy, and `unattend.xml` in
   `Panther`. Dropped on 2026-10-27 (see §5.6).
 
-### Stage 6: Distribution (S)
+### Stage 6: Distribution (S), done
 
-- PKGBUILD (Arch/CachyOS) first, then .deb/.rpm.
-- `.desktop` file, AppStream metainfo, hicolor icons, polkit action, man page.
-- Flatpak is **not** possible with a pkexec helper. AppImage is possible as a secondary
-  format (polkit then shows the generic `pkexec` prompt).
+- PKGBUILD (Arch/CachyOS, AUR `rufus` and `rufus-bin`), .deb (Debian, Ubuntu), .rpm
+  (Fedora, openSUSE), AppImage and a portable archive, built and published by CI.
+- `.desktop` file, AppStream metainfo, hicolor icons, polkit action, man pages.
+- Flatpak is **not** possible with a pkexec helper. The AppImage runs from its extracted
+  copy, and pkexec shows its generic prompt for it.
+- T5 with real ISOs.
 
 ---
 

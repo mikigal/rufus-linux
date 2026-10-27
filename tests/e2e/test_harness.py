@@ -132,25 +132,26 @@ class RootVM(unittest.TestCase):
     def _check_stick(self, uas: bool):
         stick = media.blank_stick(os.path.join(WORK, f"root-{int(uas)}.img"), 64 * 1024 * 1024)
         driver = "uas" if uas else "usb-storage"
-        # Find the stick through udev like Rufus will, check its bus and
-        # driver, then write a marker to it as root. usb-storage only scans a
+        # Find the stick in sysfs, as Rufus does (the udev properties of a UAS
+        # disk depend on the version of udev), check the driver of its USB
+        # interface, then write a marker to it as root. usb-storage only scans a
         # new device after a delay (delay_use, 1 s by default), so wait for the
         # disk itself to show up rather than just for udev to settle.
         script = (
             "set -e; dev=; "
             "for i in $(seq 300); do udevadm settle; "
             "  for d in /sys/block/sd*; do [ -e \"$d\" ] || continue; "
-            "    if udevadm info -q property -n /dev/${d##*/} | grep -qx ID_BUS=usb; then dev=/dev/${d##*/}; fi; done; "
+            "    case \"$(readlink -f \"$d\")\" in */usb*) dev=/dev/${d##*/};; esac; done; "
             "  [ -n \"$dev\" ] && break; sleep 0.2; done; "
-            "udevadm info -q property -n $dev | grep -x ID_BUS=usb; "
-            f"udevadm info -q property -n $dev | grep -x ID_USB_DRIVER={driver}; "
+            "iface=$(readlink -f /sys/block/${dev##*/}/device/../../..); "
+            "echo \"USB_DRIVER=$(basename \"$(readlink \"$iface/driver\")\")\"; "
             "printf RUFUS-E2E-ROOT-WRITE | dd of=$dev bs=512 seek=1 conv=fsync status=none; "
             "id -u"
         )
         result = runner.run_in_vm(script, stick=stick, uas=uas)
         output = result.stdout.decode(errors="replace") + result.stderr.decode(errors="replace")
         self.assertEqual(result.returncode, 0, output[-3000:])
-        self.assertIn(f"ID_USB_DRIVER={driver}", output)
+        self.assertIn(f"USB_DRIVER={driver}\n", output)
         self.assertRegex(output, r"(?m)^0$")
         with open(stick, "rb") as f:
             f.seek(512)

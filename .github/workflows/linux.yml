@@ -93,7 +93,7 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
-  # The GUI tests (T4), under headless compositors, with the fake helper
+  # The GUI tests (T4), under a headless KWin, with the fake helper (sway does not start in a container)
   gui:
     name: GUI tests
     runs-on: ubuntu-latest
@@ -104,10 +104,9 @@ jobs:
         run: |
           pacman -Syu --noconfirm --needed base-devel git cmake ninja qt6-base qt6-wayland \
             e2fsprogs dosfstools openssl curl hivex python python-gobject at-spi2-core dbus \
-            kwin sway ttf-dejavu mesa libcap
+            kwin ttf-dejavu mesa libcap
           # The capabilities of kwin_wayland are not for a container, which then can't run it
           setcap -r /usr/bin/kwin_wayland
-          setcap -r /usr/bin/sway || true
           useradd -m tester
 
       - uses: actions/checkout@v5
