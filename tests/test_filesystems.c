@@ -237,6 +237,10 @@ static void test_other(void)
 	CHECK(!FormatPartition(path, 0, 64 * MB, 512, 3000, FS_FAT32, "BAD", FP_QUICK));
 	CHECK_EQ_INT(ErrorStatus, RUFUS_ERROR(ERROR_INVALID_PARAMETER));
 	ErrorStatus = 0;
+	// Not enough clusters for FAT32
+	CHECK(!FormatPartition(path, 0, 64 * MB, 512, 4096, FS_FAT32, "BAD", FP_QUICK));
+	CHECK_EQ_INT(ErrorStatus, RUFUS_ERROR(APPERR(ERROR_INVALID_CLUSTER_SIZE)));
+	ErrorStatus = 0;
 }
 
 static void test_labels(void)

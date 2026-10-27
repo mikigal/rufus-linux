@@ -131,12 +131,15 @@ BOOL EnterPrivateMountNamespace(void)
 char* MountVolume(const char* devnode, const char* fs_type, BOOL read_only)
 {
 	char dir[] = RUFUS_RUN_DIR "/mnt-XXXXXX";
+	// The names of the files of the image are UTF-8, whatever the defaults of the kernel are
+	const char* data = (strcmp(fs_type, "vfat") == 0) ? "utf8,shortname=mixed" :
+		((strcmp(fs_type, "exfat") == 0) || (strcmp(fs_type, "ntfs3") == 0)) ? "iocharset=utf8" : NULL;
 
 	if ((mkdir_p(RUFUS_RUN_DIR, 0700) != 0) || (mkdtemp(dir) == NULL)) {
 		uprintf("Could not create a mount point in '%s': %s", RUFUS_RUN_DIR, WindowsErrorString());
 		return NULL;
 	}
-	if (mount(devnode, dir, fs_type, MS_NOSUID | MS_NODEV | MS_NOEXEC | (read_only ? MS_RDONLY : 0), NULL) != 0) {
+	if (mount(devnode, dir, fs_type, MS_NOSUID | MS_NODEV | MS_NOEXEC | (read_only ? MS_RDONLY : 0), data) != 0) {
 		uprintf("Could not mount %s (%s) on '%s': %s", devnode, fs_type, dir, WindowsErrorString());
 		rmdir(dir);
 		return NULL;

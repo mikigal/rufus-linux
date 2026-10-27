@@ -6,6 +6,7 @@ add_library(rufus_platform STATIC
 	devices.c
 	disk.c
 	filesystems.c
+	format_thread.c
 	mounts.c
 	processes.c
 	../../format_ext.c

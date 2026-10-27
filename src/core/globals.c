@@ -26,6 +26,7 @@
 #include "rufus.h"
 
 RUFUS_UPDATE update = { 0 };
+uint16_t rufus_version[3] = { RUFUS_VERSION_MAJOR, RUFUS_VERSION_MINOR, RUFUS_VERSION_PATCH };
 // Directories, which the front end sets up: app_data_dir for the files that Rufus downloads
 // (in a FILES_DIR subdirectory) and temp_dir for temporary files
 char app_dir[MAX_PATH] = "", app_data_dir[MAX_PATH] = "", temp_dir[MAX_PATH] = "/tmp";
@@ -33,6 +34,7 @@ char app_dir[MAX_PATH] = "", app_data_dir[MAX_PATH] = "", temp_dir[MAX_PATH] = "
 char* ini_file = NULL;
 BOOL usb_debug = FALSE, expert_mode = FALSE, ignore_boot_marker = FALSE;
 BOOL size_check = TRUE;			// Alt-S: check the size of the image and the cluster size for MS-DOS
+BOOL large_drive = FALSE;		// The drive of the operation is over 1 TB (and may produce short writes)
 // The estimated duration of a format, which the front end computes (for UDF)
 uint32_t dur_mins = 0, dur_secs = 0;
 // Windows To Go can use the 'Windows CA 2023' bootloaders (bcdboot /bootex on Windows)

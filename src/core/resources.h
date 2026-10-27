@@ -20,7 +20,8 @@
 /*
  * The RCDATA resources of rufus.rc, as RESOURCE(id, path relative to res/).
  * Left out: hogger.exe (Windows only) and embedded.loc (the .loc file is
- * installed with the application instead).
+ * installed with the application instead). Added: the icon of the
+ * application, which is not an RCDATA resource upstream.
  */
 
 RESOURCE(IDR_SL_LDLINUX_V4_BSS, "syslinux/ldlinux_v4.bss")
@@ -74,3 +75,4 @@ RESOURCE(IDR_DBX_AA64, "dbx/dbx_aarch64.efiauth2")
 RESOURCE(IDR_DBX_IA64, "dbx/dbx_ia64.efiauth2")
 RESOURCE(IDR_DBX_RISCV64, "dbx/dbx_riscv64.efiauth2")
 RESOURCE(IDR_DBX_LOONGARCH64, "dbx/dbx_loongarch64.efiauth2")
+RESOURCE(IDR_RUFUS_ICON, "icons/rufus.ico")

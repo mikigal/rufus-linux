@@ -288,6 +288,21 @@ Done:
     wait for stage 4.
   - `tests/test_write.c` checks them on image files, with ms-sys identifying the boot
     records.
+- **Format pipeline** (`platform/linux/format_thread.c`): `FormatDrive()` is
+  `FormatThread()`, in the order of §5.5: hide the drive from udisks, unmount it and
+  open it exclusively; zero it, write an image to it, or clear its tables; partition
+  it; release it and format the persistence and main partitions; take it back for the
+  MBR, SBR and PBR; mount the main partition (in a private namespace when the caller is
+  single threaded) for the ISO extraction, Grub4DOS, KolibriOS, Windows 7 EFI setup,
+  `md5sum.txt`, extended label (`core/autorun.c`) and extra archive; unmount.
+  `StartFormat()` runs it in a thread, which reports `UM_FORMAT_COMPLETED`.
+  - Not ported yet, and refused rather than silently skipped: Syslinux, DOS, bad
+    blocks, WinPE, the Windows User Experience and Windows To Go.
+  - `FormatPartition()` refuses FAT32 volumes with fewer than 65525 clusters, as
+    FormatEx does: mkfs.fat creates them, and UEFI firmwares then take them for FAT16.
+  - `tests/e2e/test_format.py` runs the pipeline in the VM (`tests/test_format_vm.c`),
+    and boots the result in QEMU: FAT32/MBR and ext4/GPT non-bootable drives, the
+    synthetic GRUB ISO in ISO mode (GPT, UEFI) and in DD mode (BIOS and UEFI).
 
 ---
 

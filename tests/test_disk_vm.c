@@ -441,11 +441,11 @@ static void test_formatting(void)
 	CHECK(GetPartitionDevnode(&drive, 1, p1, sizeof(p1)));
 	CHECK(GetPartitionDevnode(&drive, 2, p2, sizeof(p2)));
 	// The mkfs tools open the partitions exclusively, which a drive that is held prevents
-	CHECK(!FormatPartition(p1, layout.part[0].offset, layout.part[0].size, drive.sector_size, 4096, FS_FAT32, "RUFUS", FP_QUICK));
+	CHECK(!FormatPartition(p1, layout.part[0].offset, layout.part[0].size, drive.sector_size, 0, FS_FAT32, "RUFUS", FP_QUICK));
 	CloseDrive(&drive);
 	WaitForUdev(5000);
 	ErrorStatus = 0;
-	CHECK(FormatPartition(p1, layout.part[0].offset, layout.part[0].size, drive.sector_size, 4096, FS_FAT32, "RUFUS", FP_QUICK));
+	CHECK(FormatPartition(p1, layout.part[0].offset, layout.part[0].size, drive.sector_size, 0, FS_FAT32, "RUFUS", FP_QUICK));
 	CHECK(FormatPartition(p2, layout.part[1].offset, layout.part[1].size, drive.sector_size, 0, FS_EXT4, "casper-rw",
 		FP_QUICK | FP_CREATE_PERSISTENCE_CONF));
 	WaitForUdev(5000);

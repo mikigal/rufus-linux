@@ -3,6 +3,7 @@
 # Upstream files keep their place in src/, to ease merges; new ones live here.
 add_library(rufus_core STATIC
 	analyze.c
+	autorun.c
 	boot_check.c
 	boot_records.c
 	devices.c
@@ -30,6 +31,10 @@ add_library(rufus_core STATIC
 	../vhd.c
 	../wue.c
 	../xml.c)
+target_compile_definitions(rufus_core PRIVATE
+	RUFUS_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+	RUFUS_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+	RUFUS_VERSION_PATCH=${PROJECT_VERSION_PATCH})
 target_include_directories(rufus_core PUBLIC
 	"${CMAKE_CURRENT_SOURCE_DIR}"
 	"${PROJECT_SOURCE_DIR}/src")

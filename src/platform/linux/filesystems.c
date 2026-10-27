@@ -135,6 +135,12 @@ BOOL FormatPartition(const char* devnode, uint64_t offset, uint64_t size, uint32
 	} else {
 		uprintf("Using cluster size: %d bytes", cluster_size);
 	}
+	// FormatEx refuses these, but mkfs.fat creates a volume that UEFI firmwares take for FAT16
+	if ((fs_type == FS_FAT32) && (cluster_size != 0) && (size / cluster_size < 65525)) {
+		uprintf("FAT32 must have at least 65525 clusters, try to specify a smaller cluster size or use the default");
+		ErrorStatus = RUFUS_ERROR(APPERR(ERROR_INVALID_CLUSTER_SIZE));
+		return FALSE;
+	}
 	uprintf("%s format was selected", (flags & FP_QUICK) ? "Quick" : "Slow");
 	// mkntfs and mkfs.exfat zero the volume themselves
 	if (!(flags & FP_QUICK) && (fs_type != FS_NTFS) && (fs_type != FS_EXFAT) && !ZeroVolume(devnode, size))

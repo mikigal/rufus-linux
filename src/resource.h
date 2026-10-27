@@ -87,6 +87,8 @@
 #define IDR_DBX_IA64                    705
 #define IDR_DBX_RISCV64                 706
 #define IDR_DBX_LOONGARCH64             707
+// Linux: the icon of the application, which SetAutorun() writes (ExtractAppIcon() upstream)
+#define IDR_RUFUS_ICON                  799
 #define IDM_SELECT                      901
 #define IDM_DOWNLOAD                    902
 #define IDC_DEVICE                      1001
