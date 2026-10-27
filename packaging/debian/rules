@@ -1,0 +1,10 @@
+#!/usr/bin/make -f
+# The unit tests need tools that the build does not (mtools, xorriso, qemu-img...): CI runs them
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+%:
+	dh $@ --buildsystem=cmake+ninja
+
+override_dh_auto_configure:
+	dh_auto_configure -- -DRUFUS_BUILD_TESTS=OFF

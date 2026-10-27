@@ -1,0 +1,33 @@
+# Maintainer: mikigal <mikigal.priv at gmail dot com>
+# The release workflow sets pkgver and sha256sums (.github/workflows/release.yml)
+
+pkgname=rufus
+pkgver=4.16.0
+pkgrel=1
+pkgdesc="Create bootable USB drives from ISO and disk images (unofficial Linux port of Rufus)"
+arch=('x86_64')
+url="https://github.com/mikigal/rufus-linux"
+license=('GPL-3.0-or-later')
+depends=('curl' 'dosfstools' 'e2fsprogs' 'gcc-libs' 'glibc' 'hicolor-icon-theme' 'hivex' 'ntfs-3g'
+         'openssl' 'polkit' 'qt6-base' 'qt6-wayland' 'systemd' 'systemd-libs')
+makedepends=('cmake' 'ninja')
+optdepends=('exfatprogs: format drives in exFAT'
+            'udftools: format drives in UDF'
+            'libisoburn: save drives to ISO images')
+conflicts=('rufus-bin')
+source=("$url/releases/download/v$pkgver/rufus-linux-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+	# The unit tests need tools that the build does not (mtools, xorriso, qemu-img...): CI runs them
+	cmake -S "rufus-linux-$pkgver" -B build -G Ninja \
+		-DCMAKE_BUILD_TYPE=None \
+		-DCMAKE_INSTALL_PREFIX=/usr \
+		-DCMAKE_INSTALL_LIBEXECDIR=lib/rufus \
+		-DRUFUS_BUILD_TESTS=OFF
+	cmake --build build
+}
+
+package() {
+	DESTDIR="$pkgdir" cmake --install build
+}

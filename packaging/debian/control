@@ -1,0 +1,41 @@
+Source: rufus
+Section: utils
+Priority: optional
+Maintainer: mikigal <mikigal.priv@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+               cmake (>= 3.25),
+               ninja-build,
+               pkgconf,
+               qt6-base-dev (>= 6.5),
+               libext2fs-dev,
+               comerr-dev,
+               libssl-dev,
+               libcurl4-openssl-dev,
+               libhivex-dev,
+               libudev-dev
+Standards-Version: 4.7.0
+Homepage: https://github.com/mikigal/rufus-linux
+Rules-Requires-Root: no
+
+Package: rufus
+Architecture: amd64
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         pkexec | policykit-1,
+         qt6-wayland,
+         dosfstools,
+         ntfs-3g,
+         udev
+Recommends: exfatprogs,
+            udftools,
+            xorriso
+Description: create bootable USB drives from ISO and disk images
+ Rufus is a utility that helps format and create bootable USB flash drives,
+ from Windows and Linux ISO images, disk images (compressed or not, VHD and
+ VHDX) or FreeDOS. It can customize the installation of Windows 11, download
+ Windows ISOs, add a persistent partition to Linux live drives and check drives
+ for bad blocks.
+ .
+ This is an unofficial port of Rufus to Linux, with a Qt 6 user interface that
+ runs natively under Wayland, and a command line interface (rufus-cli). It is
+ not affiliated with or supported by the upstream Rufus project.

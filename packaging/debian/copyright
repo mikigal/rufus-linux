@@ -1,0 +1,57 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: rufus-linux
+Source: https://github.com/mikigal/rufus-linux
+
+Files: *
+Copyright: 2011-2026 Pete Batard <pete@akeo.ie>
+           2026 Rufus for Linux contributors
+License: GPL-3+
+
+Files: src/bled/*
+Copyright: BusyBox authors
+           2014-2026 Pete Batard <pete@akeo.ie>
+License: GPL-2+
+
+Files: src/ms-sys/*
+Copyright: 2001-2016 Henrik Carlqvist
+           2012-2026 Pete Batard <pete@akeo.ie>
+License: GPL-2+
+
+Files: src/syslinux/*
+Copyright: 1998-2014 H. Peter Anvin and the Syslinux authors
+License: GPL-2+
+
+Files: src/libcdio/*
+Copyright: 2000-2026 Rocky Bernstein, Herbert Valerio Riedel and the libcdio authors
+License: GPL-3+
+
+Files: src/wimlib/*
+Copyright: 2012-2024 Eric Biggers
+License: LGPL-3+ or GPL-3+
+
+License: GPL-2+
+ This program is free software; you can redistribute it and/or modify it under
+ the terms of the GNU General Public License as published by the Free Software
+ Foundation; either version 2 of the License, or (at your option) any later
+ version.
+ .
+ On Debian systems, the full text of the GNU General Public License version 2
+ can be found in /usr/share/common-licenses/GPL-2.
+
+License: GPL-3+
+ This program is free software: you can redistribute it and/or modify it under
+ the terms of the GNU General Public License as published by the Free Software
+ Foundation, either version 3 of the License, or (at your option) any later
+ version.
+ .
+ On Debian systems, the full text of the GNU General Public License version 3
+ can be found in /usr/share/common-licenses/GPL-3.
+
+License: LGPL-3+
+ This library is free software: you can redistribute it and/or modify it under
+ the terms of the GNU Lesser General Public License as published by the Free
+ Software Foundation, either version 3 of the License, or (at your option) any
+ later version.
+ .
+ On Debian systems, the full text of the GNU Lesser General Public License
+ version 3 can be found in /usr/share/common-licenses/LGPL-3.

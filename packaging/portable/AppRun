@@ -1,0 +1,32 @@
+#!/bin/sh
+# Rufus: The Reliable USB Formatting Utility
+# The entry point of the AppImage and of the portable archive: rufus, or rufus-cli when it is called
+# rufus-cli (a symbolic link) or with --cli
+# Copyright © 2026 Rufus for Linux contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# The helper runs as root (through pkexec), and root can't read the FUSE mount of an AppImage, so an
+# AppImage runs from the copy that its runtime extracts (and removes when Rufus exits)
+if [ -n "$APPIMAGE" ] && [ -z "$APPIMAGE_EXTRACT_AND_RUN" ]; then
+	export APPIMAGE_EXTRACT_AND_RUN=1 RUFUS_ARGV0="${ARGV0:-$0}"
+	exec "$APPIMAGE" "$@"
+fi
+if [ -z "$APPDIR" ]; then
+	APPDIR=$(dirname "$(readlink -f "$0")")
+	export APPDIR
+fi
+# The hooks of linuxdeploy (Qt)
+for hook in "$APPDIR"/apprun-hooks/*.sh; do
+	if [ -e "$hook" ]; then
+		. "$hook"
+	fi
+done
+name=$(basename "${RUFUS_ARGV0:-${ARGV0:-$0}}")
+unset RUFUS_ARGV0
+if [ "$name" = "rufus-cli" ] || [ "$1" = "--cli" ]; then
+	if [ "$1" = "--cli" ]; then
+		shift
+	fi
+	exec "$APPDIR/usr/bin/rufus-cli" "$@"
+fi
+exec "$APPDIR/usr/bin/rufus" "$@"

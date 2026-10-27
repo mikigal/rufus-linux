@@ -1,0 +1,37 @@
+# Maintainer: mikigal <mikigal.priv at gmail dot com>
+# The release workflow sets pkgver and sha256sums (.github/workflows/release.yml)
+
+pkgname=rufus-bin
+pkgver=4.16.0
+pkgrel=1
+pkgdesc="Create bootable USB drives from ISO and disk images (unofficial Linux port of Rufus, portable build)"
+arch=('x86_64')
+url="https://github.com/mikigal/rufus-linux"
+license=('GPL-3.0-or-later')
+# The portable build has its own Qt and libraries, but not the ones of the graphics stack
+depends=('dosfstools' 'fontconfig' 'freetype2' 'glibc' 'hicolor-icon-theme' 'libglvnd' 'libxkbcommon'
+         'ntfs-3g' 'polkit' 'systemd' 'wayland')
+optdepends=('exfatprogs: format drives in exFAT'
+            'udftools: format drives in UDF'
+            'libisoburn: save drives to ISO images')
+provides=('rufus')
+conflicts=('rufus')
+options=('!strip' '!debug')
+source=("$url/releases/download/v$pkgver/rufus-$pkgver-x86_64.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+	local dir="rufus-$pkgver-x86_64"
+	install -d "$pkgdir/opt/rufus" "$pkgdir/usr/bin"
+	cp -a "$dir/." "$pkgdir/opt/rufus/"
+	ln -s /opt/rufus/AppRun "$pkgdir/usr/bin/rufus"
+	ln -s /opt/rufus/AppRun "$pkgdir/usr/bin/rufus-cli"
+	# The desktop integration, and the polkit action of the helper where it is
+	install -Dm644 "$dir/usr/share/applications/rufus.desktop" -t "$pkgdir/usr/share/applications"
+	install -Dm644 "$dir/usr/share/metainfo/"*.metainfo.xml -t "$pkgdir/usr/share/metainfo"
+	cp -a "$dir/usr/share/icons" "$pkgdir/usr/share/"
+	install -Dm644 "$dir/usr/share/man/man1/"*.1 -t "$pkgdir/usr/share/man/man1"
+	sed 's|>/usr/libexec/rufus-helper<|>/opt/rufus/usr/libexec/rufus-helper<|' \
+		"$dir/usr/share/polkit-1/actions/ie.rufus.helper.policy" |
+		install -Dm644 /dev/stdin "$pkgdir/usr/share/polkit-1/actions/ie.rufus.helper.policy"
+}
