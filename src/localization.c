@@ -329,8 +329,9 @@ void apply_localization(int dlg_id, loc_set_text_t set_text, void* ctx)
  */
 char* lmprintf(uint32_t msg_id, ...)
 {
-	static int buf_id = 0;
-	static char buf[LOC_MESSAGE_NB][LOC_MESSAGE_SIZE];
+	// NB: The buffers are per thread, as the worker threads format messages too
+	static _Thread_local int buf_id = 0;
+	static _Thread_local char buf[LOC_MESSAGE_NB][LOC_MESSAGE_SIZE];
 	char *format = NULL;
 	size_t pos = 0;
 	va_list args;

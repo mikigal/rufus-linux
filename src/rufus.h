@@ -669,7 +669,20 @@ typedef struct {
 extern RUFUS_UPDATE update;
 extern RUFUS_IMG_REPORT img_report;
 extern WORD selected_langid;
-extern DWORD ErrorStatus, DownloadStatus, LastWriteError;
+/*
+ * The status of the operation in progress, which the worker threads update and check for
+ * cancellation (see CancelOperation()), and the last write error. Both are read and written
+ * from several threads, so they are atomic: a plain read or assignment is an atomic load or
+ * store.
+ */
+extern _Atomic(DWORD) ErrorStatus, LastWriteError;
+extern DWORD DownloadStatus;
+/*
+ * Cancel the operation in progress (scan, boot check, hash, format...). The worker threads
+ * stop at their next cancellation point, as there is no way to terminate a thread (upstream
+ * terminates some of them).
+ */
+extern void CancelOperation(void);
 // Downloads (DownloadStatus is the HTTP status). hProgressDialog is the dialog that displays the progress, if any.
 extern uint64_t DownloadToFileOrBufferEx(const char* url, const char* file, const char* user_agent,
 	BYTE** buffer, void* hProgressDialog, BOOL bTaskBarProgress);
@@ -719,6 +732,8 @@ extern void _UpdateProgressWithInfo(int op, int msg, uint64_t processed, uint64_
 #define UpdateProgressWithInfoForce(op, msg, processed, total) _UpdateProgressWithInfo(op, msg, processed, total, TRUE)
 // hProgressDialog is an opaque handle of the front end, for a dialog that has its own progress bar (NULL for none)
 #define UpdateProgressWithInfoInit(hProgressDialog, bNoAltMode) UpdateProgressWithInfo(OP_INIT, (int)bNoAltMode, (uint64_t)(uintptr_t)hProgressDialog, 0)
+// The progress bar of the main window, for UpdateProgressWithInfoInit() (hMainDialog upstream)
+#define MAIN_WINDOW_PROGRESS        ((void*)(uintptr_t)-1)
 extern const char* StrError(DWORD error_code, BOOL use_default_locale);
 extern char* GuidToString(const GUID* guid, BOOL bDecorated);
 extern GUID StringToGuid(const char* str);

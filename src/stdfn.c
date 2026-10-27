@@ -208,7 +208,7 @@ uint32_t htab_hash(char* str, htab_table* htab)
 
 const char* GetEditionName(DWORD ProductType)
 {
-	static char unknown_edition_str[64] = "";
+	static _Thread_local char unknown_edition_str[64] = "";
 
 	// From: https://docs.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-getproductinfo
 	// These values can be found in the winnt.h header.

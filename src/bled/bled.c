@@ -18,7 +18,7 @@ read_t bled_read = NULL;
 write_t bled_write = NULL;
 progress_t bled_progress = NULL;
 switch_t bled_switch = NULL;
-uint32_t* bled_cancel_request;
+_Atomic(uint32_t)* bled_cancel_request;
 bool bled_initialized = 0;
 jmp_buf bb_error_jmp;
 char* bb_virtual_buf = NULL;
@@ -329,7 +329,7 @@ err:
  * - point to a 32-bit variable, to be used to cancel operations when set to non zero
  */
 int bled_init(uint32_t buffer_size, printf_t print_function, read_t read_function, write_t write_function,
-	progress_t progress_function, switch_t switch_function, uint32_t* cancel_request)
+	progress_t progress_function, switch_t switch_function, _Atomic(uint32_t)* cancel_request)
 {
 	if (bled_initialized)
 		return -1;

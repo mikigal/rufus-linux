@@ -44,8 +44,8 @@ Wayland, and tracks the progress of the port.
 | Stage | Status |
 |---|---|
 | 0. Foundation (build system, compat layer, libraries, CI, test harness) | **done** |
-| 1. Decouple the logic from the UI | in progress |
-| 2. Linux backend, helper, CLI | not started |
+| 1. Decouple the logic from the UI | **done** |
+| 2. Linux backend, helper, CLI | next |
 | 3. Qt 6 GUI | not started |
 | 4. Advanced features | not started |
 | 5. Windows To Go | not started |
@@ -84,9 +84,7 @@ Wayland, and tracks the progress of the port.
 **Follow-up**: run `ctest -L e2e` in GitHub Actions once the repository is pushed
 (hosted runners expose KVM).
 
-**Stage 1 (in progress)**
-
-Done:
+**Stage 1 (done)**
 
 - **`librufus-core`** (`src/core`, plus the ported upstream files, which stay in
   `src/`): built without any Windows header.
@@ -173,10 +171,20 @@ Done:
   - `settings.h` only uses the ini file (§5.8): without one, the settings are not saved.
   - `tests/test_bootcheck.c` covers every question and outcome, with scripted answers
     and files placed in `app_data_dir`.
+- **Threads and cancellation**: the threads of the core (hash, image scan, boot check)
+  are pthreads, and only cooperative cancellation exists.
+  - `ErrorStatus` and `LastWriteError` are C11 atomics. `CancelOperation()` sets
+    `ErrorStatus`, which the workers check: ISO scan and extraction, hashes, WIM split,
+    bled decompression, external commands (which get terminated) and write retries.
+  - The helpers that return a static buffer (`lmprintf()`, `SizeToHumanReadable()`,
+    `WindowsErrorString()`, etc.) have one per thread, and the strings given to the
+    `ui_iface.h` callbacks are only valid during the call.
+  - Upstream terminates the blocking process search (`process.c`) and the update check
+    threads, which will be cancelled cooperatively when they are ported (stages 2 and 4).
+  - `tests/test_threads.c` cancels operations from another thread in the middle of their
+    work, and formats strings from several threads; it runs clean under ThreadSanitizer.
 
-Next:
-
-1. pthreads, atomic `ErrorStatus` and cooperative cancellation.
+Next: stage 2.
 
 ---
 

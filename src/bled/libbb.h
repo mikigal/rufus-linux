@@ -19,6 +19,7 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <setjmp.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -130,7 +131,7 @@ extern void (*bled_progress) (const int64_t processed_bytes);
 extern void (*bled_switch) (const char* filename, const uint64_t filesize);
 extern int (*bled_read)(int fd, void* buf, unsigned int count);
 extern int (*bled_write)(int fd, const void* buf, unsigned int count);
-extern uint32_t* bled_cancel_request;
+extern _Atomic(uint32_t)* bled_cancel_request;
 
 #define xfunc_die() longjmp(bb_error_jmp, 1)
 #define bb_printf(...) do { if (bled_printf != NULL) bled_printf(__VA_ARGS__); \
@@ -232,7 +233,7 @@ static inline int full_read(int fd, void *buf, unsigned int count) {
 		errno = E2BIG;
 		return -1;
 	}
-	if ((bled_cancel_request != NULL) && (__atomic_load_n(bled_cancel_request, __ATOMIC_RELAXED) != 0)) {
+	if ((bled_cancel_request != NULL) && (atomic_load_explicit(bled_cancel_request, memory_order_relaxed) != 0)) {
 		errno = EINTR;
 		return -1;
 	}

@@ -318,7 +318,7 @@ char* wchar_to_utf8(const wchar_t* wstr)
 char *_printbits(size_t const size, void const * const ptr, int leading_zeroes)
 {
 	// sizeof(uintmax_t) so that we have enough space to store whatever is thrown at us
-	static char str[sizeof(uintmax_t) * 8 + 3];
+	static _Thread_local char str[sizeof(uintmax_t) * 8 + 3];
 	size_t i;
 	uint8_t* b = (uint8_t*)ptr;
 	uintmax_t mask, lzmask = 0, val = 0;
@@ -459,7 +459,7 @@ const char *WindowsErrorString(void)
 
 char* GuidToString(const GUID* guid, BOOL bDecorated)
 {
-	static char guid_string[MAX_GUID_STRING_LENGTH];
+	static _Thread_local char guid_string[MAX_GUID_STRING_LENGTH];
 
 	if (guid == NULL) return NULL;
 	sprintf(guid_string, bDecorated ? "{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}" :
@@ -507,25 +507,25 @@ static __inline uint16_t upo2(uint16_t v)
 char* SizeToHumanReadable(uint64_t size, BOOL copy_to_log, BOOL fake_units)
 {
 	int suffix;
-	static char str_size[32];
+	static _Thread_local char str_size[32];
 	const char* dir = ((right_to_left_mode) && (!copy_to_log)) ? LEFT_TO_RIGHT_MARK : "";
 	double hr_size = (double)size;
 	double t;
 	uint16_t i_size;
-	char **_msg_table = copy_to_log ? default_msg_table : msg_table;
+	char* const* _msg_table = copy_to_log ? default_msg_table : msg_table;
 	const double divider = fake_units ? 1000.0 : 1024.0;
 	// NB: Used until a localization file has been loaded
-	static char* default_units[MSG_MAX - MSG_000] = { NULL };
+	static char* const default_units[MSG_MAX - MSG_000] = {
+		[MSG_020 - MSG_000] = "bytes",
+		[MSG_021 - MSG_000] = "KB",
+		[MSG_022 - MSG_000] = "MB",
+		[MSG_023 - MSG_000] = "GB",
+		[MSG_024 - MSG_000] = "TB",
+		[MSG_025 - MSG_000] = "PB",
+	};
 
-	if ((msg_table == NULL) || (_msg_table[MSG_020 - MSG_000] == NULL)) {
-		default_units[MSG_020 - MSG_000] = "bytes";
-		default_units[MSG_021 - MSG_000] = "KB";
-		default_units[MSG_022 - MSG_000] = "MB";
-		default_units[MSG_023 - MSG_000] = "GB";
-		default_units[MSG_024 - MSG_000] = "TB";
-		default_units[MSG_025 - MSG_000] = "PB";
+	if ((msg_table == NULL) || (_msg_table[MSG_020 - MSG_000] == NULL))
 		_msg_table = default_units;
-	}
 
 	for (suffix = 0; suffix < MAX_SIZE_SUFFIXES - 1; suffix++) {
 		if (hr_size < divider)
@@ -556,7 +556,7 @@ char* TimestampToHumanReadable(uint64_t ts)
 	uint64_t rem = ts, divisor = 10000000000ULL;
 	uint16_t data[6];
 	int i;
-	static char str[64];
+	static _Thread_local char str[64];
 
 	for (i = 0; i < 6; i++) {
 		data[i] = (uint16_t) ((divisor == 0)?rem:(rem / divisor));

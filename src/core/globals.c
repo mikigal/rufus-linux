@@ -49,5 +49,10 @@ char *image_path = NULL, *archive_path = NULL, *unattend_xml_path = NULL;
 uint8_t* grub2_buf = NULL;
 long grub2_len = 0;
 unsigned long syslinux_ldlinux_len[2] = { 0, 0 };
-DWORD ErrorStatus = 0, LastWriteError = 0;
+_Atomic(DWORD) ErrorStatus = 0, LastWriteError = 0;
 BOOL right_to_left_mode = FALSE;
+
+void CancelOperation(void)
+{
+	ErrorStatus = RUFUS_ERROR(ERROR_CANCELLED);
+}

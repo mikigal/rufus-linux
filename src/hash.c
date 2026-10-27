@@ -1945,7 +1945,7 @@ void* HashThread(void* param)
 	read_bufnum = 0;
 	proc_bufnum = 1;
 	read_size[proc_bufnum] = 1;	// To avoid early loop exit
-	UpdateProgressWithInfoInit(NULL, FALSE);
+	UpdateProgressWithInfoInit(MAIN_WINDOW_PROGRESS, FALSE);
 
 	for (processed_bytes = 0; read_size[proc_bufnum] != 0; processed_bytes += read_size[proc_bufnum]) {
 		// 0. Update the progress and check for cancel

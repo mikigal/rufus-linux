@@ -313,10 +313,11 @@ void _UpdateProgressWithInfo(int op, int msg, uint64_t processed, uint64_t total
 		bProgressBar = FALSE;
 		bNoAltMode = (BOOL)msg;
 		if (hProgressDialog != NULL) {
-			// Use the progress bar of the dialog provided, if any (UM_PROGRESS_INIT resets it)
-			hProgressBar = hProgressDialog;
+			// Use the progress bar of the dialog provided, or of the main window (NULL for
+			// ui_progress()), if any. UM_PROGRESS_INIT resets it.
+			hProgressBar = (hProgressDialog == MAIN_WINDOW_PROGRESS) ? NULL : hProgressDialog;
 			bProgressBar = TRUE;
-			ui_event(UM_PROGRESS_INIT, (intptr_t)hProgressDialog);
+			ui_event(UM_PROGRESS_INIT, (intptr_t)hProgressBar);
 		}
 	} else if (bProgressBar || (op > 0)) {
 		uint64_t dl_total_time = current_time - start_time;

@@ -48,6 +48,9 @@ target_link_libraries(test_scan PRIVATE rufus_core)
 rufus_add_test(test_bootcheck test_bootcheck.c)
 target_link_libraries(test_bootcheck PRIVATE rufus_core)
 
+rufus_add_test(test_threads test_threads.c)
+target_link_libraries(test_threads PRIVATE rufus_core)
+
 # The rules are checked against the original Windows functions (rules_oracle/rules_win.c)
 rufus_add_test(test_rules test_rules.c rules_oracle/rules_win.c)
 target_link_libraries(test_rules PRIVATE rufus_core)

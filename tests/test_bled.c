@@ -33,7 +33,7 @@
 #define PAYLOAD_SIZE (600 * 1024)
 
 static char data_dir[4096];
-static uint32_t cancel_request;
+static _Atomic(uint32_t) cancel_request;
 
 static void test_printf(const char* format, ...)
 {
@@ -188,9 +188,9 @@ static void test_cancel(void)
 {
 	char* buf = malloc(PAYLOAD_SIZE);
 
-	__atomic_store_n(&cancel_request, 1, __ATOMIC_RELAXED);
+	cancel_request = 1;
 	CHECK(bled_uncompress_to_buffer(fixture("payload.gz"), buf, PAYLOAD_SIZE, BLED_COMPRESSION_GZIP) < 0);
-	__atomic_store_n(&cancel_request, 0, __ATOMIC_RELAXED);
+	cancel_request = 0;
 	free(buf);
 }
 

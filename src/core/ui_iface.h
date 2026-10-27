@@ -24,7 +24,9 @@
  * ui_set_iface(). The callbacks may be invoked from any thread: the front end
  * is responsible for marshalling them to its own UI thread (the Qt GUI uses
  * queued connections, and blocking queued ones for the questions, which gives
- * the same semantics as SendMessage() had on Windows).
+ * the same semantics as SendMessage() had on Windows). The strings they get
+ * are only valid during the call (they are often per-thread buffers), so they
+ * must be copied to be used later.
  */
 
 #pragma once

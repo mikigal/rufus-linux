@@ -68,7 +68,7 @@ int64_t bled_uncompress_from_buffer_to_buffer(const char* src, const size_t src_
  *   (it is read atomically, so it may be set from another thread)
  */
 int bled_init(uint32_t buffer_size, printf_t print_function, read_t read_function, write_t write_function,
-    progress_t progress_function, switch_t switch_function, uint32_t* cancel_request);
+    progress_t progress_function, switch_t switch_function, _Atomic(uint32_t)* cancel_request);
 
 /* This call frees any resource used by the library */
 void bled_exit(void);
