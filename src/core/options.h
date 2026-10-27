@@ -81,6 +81,9 @@ typedef struct {
 	BOOL lock_drive;				// Alt-, (unset to not lock the drive)
 	BOOL use_rufus_mbr;				// Alt-A (unset to not install the Rufus MBR)
 	BOOL detect_fakes;				// Alt-B: detect fake drives during the bad blocks check
+
+	/* The environment of the user */
+	char locale[64];				// As in LC_CTYPE (e.g. "pl_PL.UTF-8"): the keyboard and codepage of DOS
 } rufus_options_t;
 
 /* The options of the current operation */

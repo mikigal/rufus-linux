@@ -53,3 +53,13 @@ extern void ToValidLabel(char* Label, BOOL bFAT, uint64_t disk_size);
 extern BOOL FormatLargeFAT32(int fd, uint64_t PartitionOffset, uint64_t PartitionLength, DWORD SectorSize,
 	DWORD ClusterSize, LPCSTR FSName, LPCSTR Label, DWORD Flags);
 extern BOOL FormatExtFs(const char* devnode, DWORD BlockSize, LPCSTR FSName, LPCSTR Label, DWORD Flags);
+
+/*
+ * From syslinux.c: write ldlinux.sys to the volume mounted on mount_point, patch
+ * it with its sectors, and return the Syslinux boot sector in bootsect (of
+ * sector_size), for WriteSyslinuxBootsect() once the volume is unmounted.
+ */
+extern BOOL InstallSyslinux(const char* volume, const char* mount_point, int file_system, uint32_t sector_size,
+	uint8_t* bootsect);
+extern BOOL WriteSyslinuxBootsect(int fd, uint64_t offset, uint32_t sector_size, int file_system,
+	const uint8_t* bootsect);

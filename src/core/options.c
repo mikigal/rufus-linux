@@ -25,6 +25,10 @@ rufus_options_t opts;
 // The defaults of the rufus.c globals that these options replace
 void ResetOptions(rufus_options_t* o)
 {
+	static const char* locale_vars[] = { "LC_ALL", "LC_CTYPE", "LANG" };
+	const char* value;
+	int i;
+
 	memset(o, 0, sizeof(*o));
 	o->fs_type = FS_UNKNOWN;
 	o->image_option = -1;
@@ -32,4 +36,12 @@ void ResetOptions(rufus_options_t* o)
 	o->lock_drive = TRUE;
 	o->use_rufus_mbr = TRUE;
 	o->detect_fakes = TRUE;
+	// The helper gets these from the options it receives, not from its own environment
+	for (i = 0; i < ARRAYSIZE(locale_vars); i++) {
+		value = getenv(locale_vars[i]);
+		if ((value != NULL) && (value[0] != 0)) {
+			static_strcpy(o->locale, value);
+			break;
+		}
+	}
 }

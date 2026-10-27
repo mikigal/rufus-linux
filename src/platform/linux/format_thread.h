@@ -28,6 +28,9 @@ typedef struct {
 	const char* syspath;			// sysfs path of the drive, for the automount suppression
 	int image_fd;					// The image to write in DD mode, or -1
 	BOOL private_mounts;			// Mount the volumes in a mount namespace of the process (single threaded callers only)
+	int bb_log_fd;					// The report of the bad blocks check (truncated if none were found), or -1
+									// for a file in temp_dir (deleted if none were found)
+	const char* bb_log_path;		// The path of bb_log_fd, to show to the user
 } format_target_t;
 
 /*

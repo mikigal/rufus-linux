@@ -5,9 +5,11 @@
 
 """Runs tests/test_disk_vm.c as root in a VM, against an emulated USB stick
 (BOT and UAS): identity checks, busy drives, unmounting, exclusive opens,
-partition refresh, automount suppression and private mounts. Run with:
+partition refresh, automount suppression and private mounts. Also runs
+tests/test_badblocks.c there, against device-mapper devices. Run with:
 
-    RUFUS_TEST_DISK_VM=build/tests/test_disk_vm python3 -m unittest -v test_disk
+    RUFUS_TEST_DISK_VM=build/tests/test_disk_vm RUFUS_TEST_BADBLOCKS=build/tests/test_badblocks \
+        python3 -m unittest -v test_disk
 """
 
 import os
@@ -18,6 +20,7 @@ import unittest
 from harness import media, qemu, runner
 
 TEST = os.environ.get("RUFUS_TEST_DISK_VM")
+BADBLOCKS = os.environ.get("RUFUS_TEST_BADBLOCKS")
 
 # usb-storage scans a new device after a delay, so wait for the stick first
 SCRIPT = r"""
@@ -58,6 +61,15 @@ class DiskAccess(unittest.TestCase):
 
     def test_uas_stick(self):
         self._check(uas=True)
+
+    def test_bad_blocks(self):
+        if BADBLOCKS is None or not os.access(BADBLOCKS, os.X_OK):
+            self.skipTest("RUFUS_TEST_BADBLOCKS does not point to test_badblocks")
+        script = "modprobe loop; modprobe dm_mod; udevadm settle\nRUFUS_TEST_VM=1 " + os.path.abspath(BADBLOCKS) + "\n"
+        result = runner.run_in_vm(script, timeout=300)
+        output = result.stdout.decode(errors="replace") + result.stderr.decode(errors="replace")
+        self.assertEqual(result.returncode, 0, output[-6000:])
+        self.assertIn("BAD BLOCKS TESTS PASSED", output)
 
 
 if __name__ == "__main__":

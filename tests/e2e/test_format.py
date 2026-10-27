@@ -93,6 +93,32 @@ class FormatPipeline(unittest.TestCase):
         stick = self._format("iso-uefi", "iso-uefi", self._iso())
         self._boot(stick, "uefi")
 
+    def test_iso_mode_bios(self):
+        # The GRUB of the host must be the one of the embedded core.img (GRUB2_PACKAGE_VERSION)
+        stick = self._format("iso-bios", "iso-bios", self._iso())
+        self._boot(stick, "bios")
+
+    def test_syslinux4(self):
+        stick = self._format("syslinux4", "syslinux4")
+        vm = qemu.VM("bios")
+        vm.add_usb_stick(stick)
+        with vm:
+            # Without a syslinux.cfg, Syslinux stops at its prompt
+            text = vm.wait_for("vga", r"(?s)SYSLINUX 4\.\d+ .*\nboot:", timeout=60)
+            self.assertIsNotNone(text, f"vga:\n{vm.vga_text()}")
+
+    def test_freedos(self):
+        stick = self._format("freedos", "freedos")
+        vm = qemu.VM("bios")
+        vm.add_usb_stick(stick)
+        with vm:
+            # The language menu of CONFIG.SYS picks the Polish keyboard after 5 seconds
+            text = vm.wait_for("vga", r"(?s)FreeDOS KEYB .*Keyboard layout *: .*:PL \[852\].*C:\\>", timeout=90)
+            self.assertIsNotNone(text, f"vga:\n{vm.vga_text()}")
+
+    def test_bad_blocks(self):
+        self._format("badblocks", "badblocks")
+
     def test_dd_mode(self):
         iso = self._iso()
         stick = self._format("dd", "dd", iso)

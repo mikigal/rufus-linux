@@ -18,23 +18,24 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/* Memory leaks detection - define _CRTDBG_MAP_ALLOC as preprocessor macro */
-#ifdef _CRTDBG_MAP_ALLOC
-#include <stdlib.h>
-#include <crtdbg.h>
-#endif
+/*
+ * On Linux, the files get written to the mounted volume, with their FAT
+ * attributes set through the FAT ioctls.
+ */
 
-#include <windows.h>
-#include <windowsx.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
 #include "rufus.h"
 #include "options.h"
 #include "missing.h"
 #include "resource.h"
-#include "msapi_utf8.h"
 
 #include "dos.h"
 
@@ -42,123 +43,54 @@ static BYTE* DiskImage = NULL;
 static DWORD DiskImageSize;
 
 /*
- * FAT time conversion, from ReactOS' time.c
+ * FAT time conversion. FAT has local times, which the vfat driver converts
+ * with the time zone of the kernel (UTC unless the RTC keeps local time).
  */
-#define TICKSPERMIN        600000000
-#define TICKSPERSEC        10000000
-#define TICKSPERMSEC       10000
-#define SECSPERDAY         86400
-#define SECSPERHOUR        3600
-#define SECSPERMIN         60
-#define MINSPERHOUR        60
-#define HOURSPERDAY        24
-#define EPOCHWEEKDAY       1
-#define DAYSPERWEEK        7
-#define EPOCHYEAR          1601
-#define DAYSPERNORMALYEAR  365
-#define DAYSPERLEAPYEAR    366
-#define MONSPERYEAR        12
-
-typedef struct _TIME_FIELDS {
-	short Year;
-	short Month;
-	short Day;
-	short Hour;
-	short Minute;
-	short Second;
-	short Milliseconds;
-} TIME_FIELDS, *PTIME_FIELDS;
-
-#define ARGUMENT_PRESENT(ArgumentPointer) \
-	((CHAR*)((ULONG_PTR)(ArgumentPointer)) != (CHAR*)NULL)
-
-static const UCHAR MonthLengths[2][MONSPERYEAR] =
+static struct timespec FatDateTimeToTimespec(FAT_DATE Date, FAT_TIME Time)
 {
-	{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 },
-	{ 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }
-};
+	struct tm tm = { 0 };
+	struct timespec ts = { 0 };
 
-static __inline int IsLeapYear(int Year)
-{
-	return Year % 4 == 0 && (Year % 100 != 0 || Year % 400 == 0) ? 1 : 0;
+	tm.tm_year = Date.Year + 80;
+	tm.tm_mon = Date.Month - 1;
+	tm.tm_mday = Date.Day;
+	tm.tm_hour = Time.Hour;
+	tm.tm_min = Time.Minute;
+	tm.tm_sec = Time.DoubleSeconds * 2;
+	if ((Date.Month >= 1) && (Date.Month <= 12) && (Date.Day >= 1))
+		ts.tv_sec = timegm(&tm);
+	return ts;
 }
 
-static int DaysSinceEpoch(int Year)
+// Write a file in one go
+static BOOL WriteDOSFile(const char* filename, const uint8_t* data, size_t size, DWORD attributes,
+	const struct timespec* times)
 {
-	int Days;
-	Year--; /* Don't include a leap day from the current year */
-	Days = Year * DAYSPERNORMALYEAR + Year / 4 - Year / 100 + Year / 400;
-	Days -= (EPOCHYEAR - 1) * DAYSPERNORMALYEAR + (EPOCHYEAR - 1) / 4 - (EPOCHYEAR - 1) / 100 + (EPOCHYEAR - 1) / 400;
-	return Days;
-}
+	int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+	size_t written = 0;
+	ssize_t w;
 
-static BOOLEAN RtlTimeFieldsToTime(PTIME_FIELDS TimeFields, PLARGE_INTEGER Time)
-{
-	int CurMonth;
-	TIME_FIELDS IntTimeFields;
-
-	memcpy(&IntTimeFields,
-		TimeFields,
-		sizeof(TIME_FIELDS));
-
-	if (TimeFields->Milliseconds < 0 || TimeFields->Milliseconds > 999 ||
-		TimeFields->Second < 0 || TimeFields->Second > 59 ||
-		TimeFields->Minute < 0 || TimeFields->Minute > 59 ||
-		TimeFields->Hour < 0 || TimeFields->Hour > 23 ||
-		TimeFields->Month < 1 || TimeFields->Month > 12 ||
-		TimeFields->Day < 1 ||
-		TimeFields->Day >
-		MonthLengths[IsLeapYear(TimeFields->Year)][TimeFields->Month - 1] ||
-		TimeFields->Year < 1601) {
+	if (fd < 0) {
+		uprintf("Unable to create file '%s': %s.", filename, WindowsErrorString());
 		return FALSE;
 	}
-
-	/* Compute the time */
-	Time->QuadPart = DaysSinceEpoch(IntTimeFields.Year);
-	for (CurMonth = 1; CurMonth < IntTimeFields.Month; CurMonth++) {
-		Time->QuadPart += MonthLengths[IsLeapYear(IntTimeFields.Year)][CurMonth - 1];
+	while (written < size) {
+		w = write(fd, &data[written], size - written);
+		if (w <= 0) {
+			uprintf("Could not write file '%s': %s.", filename, WindowsErrorString());
+			close(fd);
+			return FALSE;
+		}
+		written += (size_t)w;
 	}
-	Time->QuadPart += IntTimeFields.Day - 1;
-	Time->QuadPart *= SECSPERDAY;
-	Time->QuadPart += IntTimeFields.Hour * SECSPERHOUR + IntTimeFields.Minute * SECSPERMIN +
-		IntTimeFields.Second;
-	Time->QuadPart *= TICKSPERSEC;
-	Time->QuadPart += IntTimeFields.Milliseconds * TICKSPERMSEC;
-
+	if ((times != NULL) && (futimens(fd, times) != 0))
+		uprintf("Could not set timestamps: %s", WindowsErrorString());
+	SetFileAttributesFd(fd, attributes);
+	if (close(fd) != 0) {
+		uprintf("Could not write file '%s': %s.", filename, WindowsErrorString());
+		return FALSE;
+	}
 	return TRUE;
-}
-
-static void FatDateTimeToSystemTime(PLARGE_INTEGER SystemTime, PFAT_DATETIME FatDateTime, UCHAR TenMs OPTIONAL)
-{
-	TIME_FIELDS TimeFields;
-
-	/* Setup time fields */
-	TimeFields.Year = FatDateTime->Date.Year + 1980;
-	TimeFields.Month = FatDateTime->Date.Month;
-	TimeFields.Day = FatDateTime->Date.Day;
-	TimeFields.Hour = FatDateTime->Time.Hour;
-	TimeFields.Minute = FatDateTime->Time.Minute;
-	TimeFields.Second = (FatDateTime->Time.DoubleSeconds << 1);
-
-	/* Adjust up to 10 milliseconds
-	* if the parameter was supplied
-	*/
-	if (ARGUMENT_PRESENT(TenMs)) {
-		TimeFields.Second += TenMs / 100;
-		TimeFields.Milliseconds = (TenMs % 100) * 10;
-	} else {
-		TimeFields.Milliseconds = 0;
-	}
-
-	/* Fix seconds value that might get beyond the bound */
-	if (TimeFields.Second > 59)
-		TimeFields.Second = 0;
-
-	/* Perform conversion to system time if possible */
-	if (!RtlTimeFieldsToTime(&TimeFields, SystemTime)) {
-		/* Set to default time if conversion failed */
-		SystemTime->QuadPart = 0;
-	}
 }
 
 /* http://www.multiboot.ru/msdos8.htm & http://en.wikipedia.org/wiki/Windows_Me#Real_mode_DOS
@@ -204,22 +136,19 @@ static BOOL Patch_IO_SYS(size_t filestart, size_t filesize)
 /* Extract the file identified by FAT RootDir index 'entry' to 'path' */
 static BOOL ExtractFAT(int entry, const char* path)
 {
-	HANDLE hFile;
-	DWORD Size;
 	char filename[MAX_PATH];
 	size_t i, pos, fnamepos;
 	size_t filestart, filesize;
-	FAT_DATETIME LastAccessTime;
-	LARGE_INTEGER liCreationTime, liLastAccessTime, liLastWriteTime;
-	FILETIME ftCreationTime, ftLastAccessTime, ftLastWriteTime;
+	struct timespec times[2];
+	FAT_TIME midnight = { .Value = 0 };
 	PDIR_ENTRY dir_entry = (PDIR_ENTRY)&DiskImage[FAT12_ROOTDIR_OFFSET + entry*FAT_BYTES_PER_DIRENT];
 
 	if ((path == NULL) || ((safe_strlen(path) + 14) > sizeof(filename))) {
 		uprintf("invalid path supplied for MS-DOS FAT extraction");
 		return FALSE;
 	}
-	static_strcpy(filename, path);
-	pos = strlen(path);
+	static_sprintf(filename, "%s/", path);
+	pos = strlen(filename);
 	fnamepos = pos;
 
 	for(i=0; i<8; i++) {
@@ -249,37 +178,12 @@ static BOOL ExtractFAT(int entry, const char* path)
 		Patch_IO_SYS(filestart, filesize);
 	}
 
-	/* Create a file, using the same attributes as found in the FAT */
-	hFile = CreateFileA(filename, GENERIC_READ|GENERIC_WRITE, FILE_SHARE_READ,
-		NULL, CREATE_ALWAYS, dir_entry->Attributes, NULL);
-	if (hFile == INVALID_HANDLE_VALUE) {
-		uprintf("Unable to create file '%s': %s.", filename, WindowsErrorString());
+	/* Create a file, using the same attributes and timestamps as found in the FAT */
+	// NB: The creation time can't be set on Linux
+	times[0] = FatDateTimeToTimespec(dir_entry->LastAccessDate, midnight);
+	times[1] = FatDateTimeToTimespec(dir_entry->LastWriteDateTime.Date, dir_entry->LastWriteDateTime.Time);
+	if (!WriteDOSFile(filename, &DiskImage[filestart], filesize, dir_entry->Attributes, times))
 		return FALSE;
-	}
-
-	if (!WriteFileWithRetry(hFile, &DiskImage[filestart], (DWORD)filesize, &Size, WRITE_RETRIES)) {
-		uprintf("Could not write file '%s': %s.", filename, WindowsErrorString());
-		safe_closehandle(hFile);
-		return FALSE;
-	}
-
-	/* Restore timestamps from FAT */
-	FatDateTimeToSystemTime(&liCreationTime, &dir_entry->CreationDateTime, dir_entry->CreationTimeTenMs);
-	ftCreationTime.dwHighDateTime = liCreationTime.HighPart;
-	ftCreationTime.dwLowDateTime = liCreationTime.LowPart;
-	LastAccessTime.Value = 0;
-	LastAccessTime.Date = dir_entry->LastAccessDate;
-	FatDateTimeToSystemTime(&liLastAccessTime, &LastAccessTime, 0);
-	ftLastAccessTime.dwHighDateTime = liLastAccessTime.HighPart;
-	ftLastAccessTime.dwLowDateTime = liLastAccessTime.LowPart;
-	FatDateTimeToSystemTime(&liLastWriteTime, &dir_entry->LastWriteDateTime, 0);
-	ftLastWriteTime.dwHighDateTime = liLastWriteTime.HighPart;
-	ftLastWriteTime.dwLowDateTime = liLastWriteTime.LowPart;
-	if (!SetFileTime(hFile, &ftCreationTime, &ftLastAccessTime, &ftLastWriteTime)) {
-		uprintf("Could not set timestamps: %s\n", WindowsErrorString());
-	}
-
-	safe_closehandle(hFile);
 	uprintf("Successfully wrote '%s' (%zu bytes)", filename, filesize);
 
 	return TRUE;
@@ -291,8 +195,8 @@ static BOOL ExtractMSDOS(const char* path)
 {
 	int i, j;
 	BOOL r = FALSE;
-	DWORD size = DISKCOPY_SIZE;
-	HANDLE dll_handle = INVALID_HANDLE_VALUE;
+	FILE* dll_file = NULL;
+	size_t size = 0;
 	uint8_t* diskcopy_buffer;
 	char locale_path[MAX_PATH];
 	char diskcopy_dll_path[MAX_PATH];
@@ -306,10 +210,11 @@ static BOOL ExtractMSDOS(const char* path)
 	// There should be a diskcopy.dll in the user's AppData directory.
 	// Since we're working with a known copy of diskcopy.dll, just load it in memory
 	// (after locking and validating it) and point to the known disk image resource buffer.
-	static_sprintf(diskcopy_dll_path, "%s\\%s\\diskcopy.dll", app_data_dir, FILES_DIR);
-	dll_handle = CreateFileU(diskcopy_dll_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-	if (dll_handle == INVALID_HANDLE_VALUE || !ReadFile(dll_handle, diskcopy_buffer, size, &size, NULL) ||
-		size != DISKCOPY_SIZE || !BufferMatchesHash(diskcopy_buffer, size, DISKCOPY_HASH)) {
+	static_sprintf(diskcopy_dll_path, "%s/%s/diskcopy.dll", app_data_dir, FILES_DIR);
+	dll_file = fopen(diskcopy_dll_path, "rbe");
+	if (dll_file != NULL)
+		size = fread(diskcopy_buffer, 1, DISKCOPY_SIZE, dll_file);
+	if ((size != DISKCOPY_SIZE) || !BufferMatchesHash(diskcopy_buffer, size, DISKCOPY_HASH)) {
 		uprintf("'diskcopy.dll' was either not found or is invalid");
 		goto out;
 	}
@@ -317,9 +222,11 @@ static BOOL ExtractMSDOS(const char* path)
 	DiskImageSize = DISKCOPY_IMAGE_SIZE;
 
 	// Reduce the visible mess by placing all the locale files into a subdir
-	static_strcpy(locale_path, path);
-	static_strcat(locale_path, "LOCALE\\");
-	CreateDirectoryA(locale_path, NULL);
+	static_sprintf(locale_path, "%s/LOCALE", path);
+	if ((mkdir(locale_path, 0755) != 0) && (errno != EEXIST)) {
+		uprintf("Could not create '%s': %s", locale_path, WindowsErrorString());
+		goto out;
+	}
 
 	for (i = 0, r = TRUE; r && i < FAT_FN_DIR_ENTRY_LAST; i++) {
 		if (DiskImage[FAT12_ROOTDIR_OFFSET + i * FAT_BYTES_PER_DIRENT] == FAT_DIRENT_DELETED)
@@ -336,7 +243,8 @@ static BOOL ExtractMSDOS(const char* path)
 		r = SetDOSLocale(path, FALSE);
 
 out:
-	safe_closehandle(dll_handle);
+	if (dll_file != NULL)
+		fclose(dll_file);
 	safe_free(diskcopy_buffer);
 	return r;
 }
@@ -359,7 +267,6 @@ BOOL ExtractFreeDOS(const char* path)
 	char filename[MAX_PATH], locale_path[MAX_PATH];
 	BYTE* res_data;
 	DWORD res_size;
-	HANDLE hFile;
 	int i;
 
 	if ((path == NULL) || ((safe_strlen(path) + 14) > sizeof(filename))) {
@@ -368,33 +275,24 @@ BOOL ExtractFreeDOS(const char* path)
 	}
 
 	// Reduce the visible mess by placing all the locale files into a subdir
-	static_strcpy(locale_path, path);
-	static_strcat(locale_path, "LOCALE\\");
-	CreateDirectoryA(locale_path, NULL);
+	static_sprintf(locale_path, "%s/LOCALE", path);
+	if ((mkdir(locale_path, 0755) != 0) && (errno != EEXIST)) {
+		uprintf("Could not create '%s': %s", locale_path, WindowsErrorString());
+		return FALSE;
+	}
 
 	for (i = 0; i < ARRAYSIZE(res_name); i++) {
-		res_data = (BYTE*)GetResource(hMainInstance, MAKEINTRESOURCEA(res_id[i]), _RT_RCDATA, res_name[i], &res_size, FALSE);
-
-		static_strcpy(filename, ((i<2) ? path : locale_path));
-		static_strcat(filename, res_name[i]);
-
-		hFile = CreateFileA(filename, GENERIC_READ|GENERIC_WRITE, FILE_SHARE_READ, NULL,
-			CREATE_ALWAYS, (i<2)?(FILE_ATTRIBUTE_HIDDEN|FILE_ATTRIBUTE_SYSTEM):FILE_ATTRIBUTE_NORMAL, NULL);
-		if ((hFile == NULL) || (hFile == INVALID_HANDLE_VALUE)) {
-			uprintf("Unable to create file '%s': %s.", filename, WindowsErrorString());
+		res_data = GetResource(res_id[i], res_name[i], &res_size, FALSE);
+		if (res_data == NULL)
 			return FALSE;
-		}
 
-		if (!WriteFileWithRetry(hFile, res_data, res_size, NULL, WRITE_RETRIES)) {
-			uprintf("Could not write file '%s': %s.", filename, WindowsErrorString());
-			safe_closehandle(hFile);
-			return FALSE;
-		}
+		static_sprintf(filename, "%s/%s", (i<2) ? path : locale_path, res_name[i]);
 
 		// We don't restore timestamps for FreeDOS, as there's no metadata in the files,
 		// thus we would need to have a separate header with each file's timestamps
-
-		safe_closehandle(hFile);
+		if (!WriteDOSFile(filename, res_data, res_size,
+			(i<2)?(FILE_ATTRIBUTE_HIDDEN|FILE_ATTRIBUTE_SYSTEM):FILE_ATTRIBUTE_NORMAL, NULL))
+			return FALSE;
 		uprintf("Successfully wrote '%s' (%d bytes)", filename, res_size);
 
 		if ((i == 4) || (i == 10) || (i == 16) || (i == 22) || (i == ARRAYSIZE(res_name)-1))

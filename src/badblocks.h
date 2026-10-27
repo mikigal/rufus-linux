@@ -18,8 +18,10 @@
  * %End-Header%
  */
 
-#include <windows.h>
 #include <stdint.h>
+#include <stdio.h>
+
+#include "rufus.h"
 
 #include "ext2fs/ext2fs.h"
 
@@ -53,5 +55,6 @@ typedef struct {
 /*
  * Shared prototypes
  */
-BOOL BadBlocks(HANDLE hPhysicalDrive, ULONGLONG disk_size, int nb_passes,
+/* hPhysicalDrive must be opened with O_DIRECT */
+BOOL BadBlocks(int hPhysicalDrive, uint64_t disk_size, int nb_passes,
 	int flash_type, badblocks_report *report, FILE* fd);

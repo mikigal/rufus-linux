@@ -33,10 +33,12 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -52,6 +54,7 @@
 #include "filesystems.h"
 #include "disk.h"
 #include "vhd.h"
+#include "badblocks.h"
 #include "resource.h"
 #include "localization.h"
 #include "../res/grub/grub_version.h"
@@ -83,15 +86,119 @@ static BOOL NotSupportedYet(const char* what, DWORD error)
 	return FALSE;
 }
 
+// The local time, in the format of the reports of upstream
+static void LocalTime(char* str, size_t len, const char* format)
+{
+	struct tm lt;
+	time_t now = time(NULL);
+
+	localtime_r(&now, &lt);
+	strftime(str, len, format, &lt);
+}
+
+/*
+ * The bad blocks check, with its report in target->bb_log_fd, or in a file of
+ * temp_dir. The drive gets O_DIRECT for the check, and its MBR/GPT cleared after.
+ */
+static BOOL CheckBadBlocks(const format_target_t* target, drive_t* drive, uint32_t sector_size)
+{
+	badblocks_report report = { 0 };
+	char logfile[MAX_PATH], date[32];
+	const char* bb_msg;
+	FILE* log_fd;
+	int sel = opts.nb_passes_sel, flags, fd, r;
+	BOOL ret = FALSE;
+
+	flags = fcntl(drive->fd, F_GETFL);
+	if ((flags < 0) || (fcntl(drive->fd, F_SETFL, flags | O_DIRECT) != 0)) {
+		uprintf("Could not access the drive directly: %s", WindowsErrorString());
+		ErrorStatus = RUFUS_ERROR(ERROR_NOT_SUPPORTED);
+		return FALSE;
+	}
+	do {
+		if (target->bb_log_fd >= 0) {
+			static_strcpy(logfile, (target->bb_log_path != NULL) ? target->bb_log_path : "");
+			fd = dup(target->bb_log_fd);
+			log_fd = (fd < 0) ? NULL : fdopen(fd, "w+");
+			if ((log_fd == NULL) && (fd >= 0))
+				close(fd);
+			if ((log_fd != NULL) && (ftruncate(fileno(log_fd), 0) != 0))
+				uprintf("Could not truncate the bad blocks report: %s", WindowsErrorString());
+		} else {
+			LocalTime(date, sizeof(date), "%Y%m%d_%H%M%S");
+			static_sprintf(logfile, "%s/rufus_%s.log", temp_dir, date);
+			log_fd = fopen(logfile, "w+e");
+		}
+		if (log_fd == NULL) {
+			uprintf("Error: Could not create log file for bad blocks check");
+			goto out;
+		}
+		LocalTime(date, sizeof(date), "%Y.%m.%d %H:%M:%S");
+		fprintf(log_fd, APPLICATION_NAME " bad blocks check started on: %s", date);
+		fflush(log_fd);
+
+		if (!BadBlocks(drive->fd, drive->size, (sel >= 2) ? 4 : sel +1, sel, &report, log_fd)) {
+			uprintf("Bad blocks: Check failed.");
+			if (!IS_ERROR(ErrorStatus))
+				ErrorStatus = RUFUS_ERROR(APPERR(ERROR_BADBLOCKS_FAILURE));
+			fcntl(drive->fd, F_SETFL, flags);
+			ClearMBRGPT(drive->fd, drive->size, sector_size);
+			fclose(log_fd);
+			if (target->bb_log_fd < 0)
+				unlink(logfile);
+			goto out;
+		}
+		uprintf("Bad Blocks: Check completed, %d bad block%s found. (%d/%d/%d errors)",
+			report.bb_count, (report.bb_count==1)?"":"s",
+			report.num_read_errors, report.num_write_errors, report.num_corruption_errors);
+		r = IDOK;
+		if (report.bb_count) {
+			bb_msg = lmprintf(MSG_011, report.bb_count, report.num_read_errors, report.num_write_errors,
+				report.num_corruption_errors);
+			fprintf(log_fd, "%s", bb_msg);
+			LocalTime(date, sizeof(date), "%Y.%m.%d %H:%M:%S");
+			fprintf(log_fd, APPLICATION_NAME " bad blocks check ended on: %s", date);
+			fclose(log_fd);
+			r = Notification(MB_ABORTRETRYIGNORE | MB_ICONWARNING, lmprintf(MSG_010), lmprintf(MSG_012, bb_msg, logfile));
+		} else {
+			// We didn't get any errors => delete the log file
+			if (target->bb_log_fd >= 0)
+				IGNORE_RETVAL(ftruncate(fileno(log_fd), 0));
+			fclose(log_fd);
+			if (target->bb_log_fd < 0)
+				unlink(logfile);
+		}
+	} while (r == IDRETRY);
+	if (r == IDABORT) {
+		ErrorStatus = RUFUS_ERROR(ERROR_CANCELLED);
+		goto out;
+	}
+	ret = TRUE;
+
+out:
+	if (fcntl(drive->fd, F_SETFL, flags) != 0)
+		uprintf("Could not restore the access to the drive: %s", WindowsErrorString());
+	// Especially after destructive badblocks test, you must zero the MBR/GPT completely
+	// before repartitioning. Else, all kind of bad things happen.
+	if (ret && !ClearMBRGPT(drive->fd, drive->size, sector_size)) {
+		uprintf("Could not zero MBR/GPT");
+		if (!IS_ERROR(ErrorStatus))
+			ErrorStatus = RUFUS_ERROR(ERROR_WRITE_FAULT);
+		ret = FALSE;
+	}
+	return ret;
+}
+
 BOOL FormatDrive(const format_target_t* target)
 {
-	BOOL windows_to_go, ret = FALSE;
+	BOOL windows_to_go, install_syslinux = FALSE, ret = FALSE;
 	uint8_t extra_partitions = 0;
 	uint32_t ClusterSize, sector_size;
 	uint64_t main_offset = 0, main_size = 0;
 	DWORD Flags;
 	char label[64], main_dev[32], casper_dev[32], path[MAX_PATH], src[MAX_PATH];
 	char* mount_point = NULL;
+	uint8_t* syslinux_bootsect = NULL;
 	partition_layout_t layout = { 0 };
 	drive_t drive = { .fd = -1 };
 	struct stat st;
@@ -176,8 +283,8 @@ BOOL FormatDrive(const format_target_t* target)
 	}
 
 	if (opts.bad_blocks) {
-		NotSupportedYet("The bad blocks check", ERROR_NOT_SUPPORTED);
-		goto out;
+		if (!CheckBadBlocks(target, &drive, sector_size))
+			goto out;
 	}
 
 	// Write an image file
@@ -296,8 +403,8 @@ BOOL FormatDrive(const format_target_t* target)
 		} else if ( (opts.boot_type == BT_SYSLINUX_V4) || (opts.boot_type == BT_SYSLINUX_V6) ||
 			((opts.boot_type == BT_IMAGE) && (HAS_SYSLINUX(img_report) || HAS_REACTOS(img_report)) &&
 				(!HAS_WINDOWS(img_report) || !opts.allow_dual_uefi_bios)) ) {
-			NotSupportedYet("Syslinux", ERROR_INSTALL_FAILURE);
-			goto out;
+			// NB: Syslinux is installed through the mounted volume, and its boot sector written once unmounted
+			install_syslinux = TRUE;
 		} else {
 			PrintInfoDebug(0, MSG_229);
 			if (!WritePBR(drive.fd, main_offset, sector_size, opts.fs_type)) {
@@ -317,13 +424,26 @@ BOOL FormatDrive(const format_target_t* target)
 		ErrorStatus = RUFUS_ERROR(APPERR(ERROR_CANT_MOUNT_VOLUME));
 		goto out;
 	}
+	if (install_syslinux) {
+		syslinux_bootsect = calloc(1, sector_size);
+		if ((syslinux_bootsect == NULL) ||
+			!InstallSyslinux(main_dev, mount_point, opts.fs_type, sector_size, syslinux_bootsect)) {
+			ErrorStatus = RUFUS_ERROR(ERROR_INSTALL_FAILURE);
+			goto out;
+		}
+	}
 	if (opts.boot_type == BT_NON_BOOTABLE) {
 		if (opts.extended_label)
 			SetAutorun(mount_point);
 	} else {
 		if ((opts.boot_type == BT_MSDOS) || (opts.boot_type == BT_FREEDOS)) {
-			NotSupportedYet("DOS", ERROR_CANNOT_COPY);
-			goto out;
+			UpdateProgress(OP_FILE_COPY, -1.0f);
+			PrintInfoDebug(0, MSG_230);
+			if (!ExtractDOS(mount_point)) {
+				if (!IS_ERROR(ErrorStatus))
+					ErrorStatus = RUFUS_ERROR(ERROR_CANNOT_COPY);
+				goto out;
+			}
 		} else if (opts.boot_type == BT_GRUB4DOS) {
 			static_sprintf(src, "%s/%s/grub4dos-%s/grldr", app_data_dir, FILES_DIR, GRUB4DOS_VERSION);
 			static_sprintf(path, "%s/grldr", mount_point);
@@ -394,7 +514,19 @@ out:
 		if (!UnmountVolume(mount_point) && !IS_ERROR(ErrorStatus))
 			ErrorStatus = RUFUS_ERROR(ERROR_WRITE_FAULT);
 		free(mount_point);
+		mount_point = NULL;
+		// And the boot sector of Syslinux, once the volume is no longer mounted
+		if (ret && (syslinux_bootsect != NULL)) {
+			WaitForUdev(DRIVE_ACCESS_TIMEOUT);
+			if (!OpenDrive(target->devnode, target->diskseq, DRIVE_OPEN_WRITE | DRIVE_OPEN_EXCLUSIVE, &drive) ||
+				!WriteSyslinuxBootsect(drive.fd, main_offset, sector_size, opts.fs_type, syslinux_bootsect)) {
+				if (!IS_ERROR(ErrorStatus))
+					ErrorStatus = RUFUS_ERROR(ERROR_WRITE_FAULT);
+				ret = FALSE;
+			}
+		}
 	}
+	free(syslinux_bootsect);
 	CloseDrive(&drive);
 	WaitForUdev(DRIVE_ACCESS_TIMEOUT);
 	RemoveAutomountRules();

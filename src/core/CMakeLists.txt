@@ -21,6 +21,8 @@ add_library(rufus_core STATIC
 	../cregex_compile.c
 	../cregex_parse.c
 	../cregex_vm.c
+	../dos.c
+	../dos_locale.c
 	../hash.c
 	../iso.c
 	../localization.c

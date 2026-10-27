@@ -20,18 +20,21 @@
 #include <malloc.h>
 #include <string.h>
 #include <time.h>
-#include <setjmp.h>
-#include <windows.h>
 #include <stdint.h>
+#include <unistd.h>
 
 #include "rufus.h"
 #include "options.h"
 #include "resource.h"
-#include "msapi_utf8.h"
 #include "localization.h"
 
 #include "badblocks.h"
-#include "file.h"
+
+/*
+ * On Linux, the drive is a file descriptor, which the caller opens with
+ * O_DIRECT (or the blocks read back would come from the page cache), and the
+ * status gets updated from the test loops, at most once per second.
+ */
 
 FILE* log_fd = NULL;
 static const char abort_msg[] = "Too many bad blocks, aborting test\n";
@@ -266,7 +269,7 @@ static int bb_output (blk64_t bad, enum error_types error_type)
 
 	error_code = bb_badblocks_list_add(bb_list, bad);
 	if (error_code) {
-		uprintf("%sError %d adding to in-memory bad block list", bb_prefix, error_code);
+		uprintf("%sError %ld adding to in-memory bad block list", bb_prefix, (long)error_code);
 		return 0;
 	}
 
@@ -315,15 +318,31 @@ static void print_status(void)
 	UpdateProgress(OP_BADBLOCKS, (((cur_pattern-1)*100.0f) + percent) / nr_pattern);
 }
 
-static void CALLBACK alarm_intr(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime)
+static uint64_t GetTickMs(void)
 {
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
+
+// What the timer of upstream does every second (but the cancellation gets checked on every call)
+static void alarm_intr(void)
+{
+	static uint64_t last_update = 0;
+	uint64_t now;
+
 	if (!num_blocks)
 		return;
-	if (ErrorStatus) {
+	if (ErrorStatus && !cancel_ops) {
 		uprintf("%sInterrupting at block %" PRIu64 "\n", bb_prefix,
-			(unsigned long long) currently_testing);
+			(uint64_t) currently_testing);
 		cancel_ops = -1;
 	}
+	now = GetTickMs();
+	if (now - last_update < 1000)
+		return;
+	last_update = now;
 	print_status();
 }
 
@@ -335,7 +354,7 @@ static void pattern_fill(unsigned char *buffer, unsigned int pattern,
 
 	if (pattern == (unsigned int) ~0) {
 		PrintInfo(3500, MSG_236);
-		srand((unsigned int)GetTickCount64());
+		srand((unsigned int)GetTickMs());
 		for (ptr = buffer; ptr < buffer + n; ptr++) {
 			// coverity[dont_call]
 			(*ptr) = rand() % (1 << (8 * sizeof(char)));
@@ -365,7 +384,27 @@ static void pattern_fill(unsigned char *buffer, unsigned int pattern,
  * Perform a read of a sequence of blocks; return the number of blocks
  *    successfully sequentially read.
  */
-static int64_t do_read (HANDLE hDrive, unsigned char * buffer, uint64_t tryout,
+static int64_t rw_blocks(int hDrive, BOOL write, unsigned char* buffer, uint64_t tryout,
+	uint64_t block_size, blk64_t current_block)
+{
+	size_t done = 0, size = (size_t)(tryout * block_size);
+	off_t offset = (off_t)(current_block * block_size);
+	ssize_t r;
+
+	alarm_intr();
+	while (done < size) {
+		r = write ? pwrite(hDrive, &buffer[done], size - done, offset + (off_t)done) :
+			pread(hDrive, &buffer[done], size - done, offset + (off_t)done);
+		if ((r < 0) && (errno == EINTR))
+			continue;
+		if (r <= 0)
+			break;
+		done += (size_t)r;
+	}
+	return (done == 0) ? -1 : (int64_t)done;
+}
+
+static int64_t do_read (int hDrive, unsigned char * buffer, uint64_t tryout,
 					    uint64_t block_size, blk64_t current_block)
 {
 	int64_t got;
@@ -374,11 +413,11 @@ static int64_t do_read (HANDLE hDrive, unsigned char * buffer, uint64_t tryout,
 		print_status();
 
 	/* Try the read */
-	got = read_sectors(hDrive, block_size, current_block, tryout, buffer);
+	got = rw_blocks(hDrive, FALSE, buffer, tryout, block_size, current_block);
 	if (got < 0)
 		got = 0;
 	if (got & 511)
-		uprintf("%sWeird value (%lld) in do_read\n", bb_prefix, got);
+		uprintf("%sWeird value (%" PRId64 ") in do_read\n", bb_prefix, got);
 	got /= block_size;
 	return got;
 }
@@ -387,7 +426,7 @@ static int64_t do_read (HANDLE hDrive, unsigned char * buffer, uint64_t tryout,
  * Perform a write of a sequence of blocks; return the number of blocks
  *    successfully sequentially written.
  */
-static int64_t do_write(HANDLE hDrive, unsigned char * buffer, uint64_t tryout,
+static int64_t do_write(int hDrive, unsigned char * buffer, uint64_t tryout,
 					    uint64_t block_size, blk64_t current_block)
 {
 	int64_t got;
@@ -396,16 +435,16 @@ static int64_t do_write(HANDLE hDrive, unsigned char * buffer, uint64_t tryout,
 		print_status();
 
 	/* Try the write */
-	got = write_sectors(hDrive, block_size, current_block, tryout, buffer);
+	got = rw_blocks(hDrive, TRUE, buffer, tryout, block_size, current_block);
 	if (got < 0)
 		got = 0;
 	if (got & 511)
-		uprintf("%sWeird value (%lld) in do_write\n", bb_prefix, got);
+		uprintf("%sWeird value (%" PRId64 ") in do_write\n", bb_prefix, got);
 	got /= block_size;
 	return got;
 }
 
-static unsigned int test_rw(HANDLE hDrive, blk64_t last_block, size_t block_size, blk64_t first_block,
+static unsigned int test_rw(int hDrive, blk64_t last_block, size_t block_size, blk64_t first_block,
 							size_t blocks_at_once, int pattern_type, int nb_passes)
 {
 	const unsigned int pattern[BADLOCKS_PATTERN_TYPES][BADBLOCK_PATTERN_COUNT] =
@@ -451,7 +490,7 @@ static unsigned int test_rw(HANDLE hDrive, blk64_t last_block, size_t block_size
 		if (cancel_ops)
 			goto out;
 		if (opts.detect_fakes && (pat_idx == 0)) {
-			srand((unsigned int)GetTickCount64());
+			srand((unsigned int)GetTickMs());
 			id_offset = rand() * (block_size - sizeof(blk64_t)) / RAND_MAX;
 			uprintf("%sUsing offset %zu for fake device check\n", bb_prefix, id_offset);
 		}
@@ -567,7 +606,7 @@ out:
 	return bb_count;
 }
 
-BOOL BadBlocks(HANDLE hPhysicalDrive, ULONGLONG disk_size, int nb_passes,
+BOOL BadBlocks(int hPhysicalDrive, uint64_t disk_size, int nb_passes,
 			   int flash_type, badblocks_report *report, FILE* fd)
 {
 	errcode_t error_code;
@@ -578,23 +617,16 @@ BOOL BadBlocks(HANDLE hPhysicalDrive, ULONGLONG disk_size, int nb_passes,
 	num_write_errors = 0;
 	num_corruption_errors = 0;
 	report->bb_count = 0;
-	if (fd != NULL) {
-		log_fd = fd;
-	} else {
-		log_fd = freopen(NULL, "w", stderr);
-	}
+	log_fd = (fd != NULL) ? fd : stderr;
 
 	error_code = bb_badblocks_list_create(&bb_list, 0);
 	if (error_code) {
-		uprintf("%sError %d while creating in-memory bad blocks list", bb_prefix, error_code);
+		uprintf("%sError %ld while creating in-memory bad blocks list", bb_prefix, (long)error_code);
 		return FALSE;
 	}
 
 	cancel_ops = 0;
-	/* use a timer to update status every second */
-	SetTimer(hMainDialog, TID_BADBLOCKS_UPDATE, 1000, alarm_intr);
 	report->bb_count = test_rw(hPhysicalDrive, last_block, BADBLOCK_BLOCK_SIZE, 0, BB_BLOCKS_AT_ONCE, flash_type, nb_passes);
-	KillTimer(hMainDialog, TID_BADBLOCKS_UPDATE);
 	free(bb_list->list);
 	free(bb_list);
 	report->num_read_errors = num_read_errors;

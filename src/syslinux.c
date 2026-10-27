@@ -15,99 +15,107 @@
  * ----------------------------------------------------------------------- */
 
 /* Memory leaks detection - define _CRTDBG_MAP_ALLOC as preprocessor macro */
-#ifdef _CRTDBG_MAP_ALLOC
-#include <stdlib.h>
-#include <crtdbg.h>
-#endif
+/*
+ * On Linux, ldlinux.sys gets written through the mounted volume, its sectors
+ * get mapped with FIEMAP (or FIBMAP), whatever the file system (upstream uses
+ * libfat for FAT and the NTFS extents for NTFS), and the boot sector is
+ * returned to the caller, which writes it once the volume is unmounted.
+ */
 
-#include <windows.h>
-#include <windowsx.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
-#include <malloc.h>
-#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <linux/fs.h>
+#include <linux/fiemap.h>
 
 #include "rufus.h"
 #include "options.h"
 #include "missing.h"
 #include "resource.h"
-#include "msapi_utf8.h"
 #include "localization.h"
-
-#include "drive.h"
 
 #include "syslinux.h"
 #include "syslxfs.h"
 #include "libfat.h"
 #include "setadv.h"
-#include "ntfssect.h"
 
 unsigned char* syslinux_ldlinux[2] = { NULL, NULL };
 // NB: syslinux_ldlinux_len is now in core/globals.c
 unsigned char* syslinux_mboot = NULL;
-unsigned long syslinux_mboot_len;
+DWORD syslinux_mboot_len;
 
 /* Workaround for 4K support */
 // NB: SECTOR_SHIFT, SECTOR_SIZE and the LIBFAT_SECTOR_* variables are now in core/globals.c
 
-/*
- * Wrapper for ReadFile suitable for libfat
- */
-int libfat_readfile(intptr_t pp, void *buf, size_t secsize, libfat_sector_t sector)
+// The sectors of a file on its volume, from FIEMAP, or from FIBMAP if the file system lacks it
+static int MapFileSectors(int fd, libfat_sector_t* sectors, int max_sectors)
 {
-	LARGE_INTEGER offset;
-	DWORD bytes_read;
+	const int max_extents = 256;
+	struct fiemap* fm = calloc(1, sizeof(struct fiemap) + max_extents * sizeof(struct fiemap_extent));
+	uint64_t off;
+	uint32_t i;
+	int n = 0, blk, block_size, j;
 
-	offset.QuadPart = (LONGLONG) sector * secsize;
-	if (!SetFilePointerEx((HANDLE) pp, offset, NULL, FILE_BEGIN)) {
-		uprintf("Could not set pointer to position %llu: %s", offset.QuadPart, WindowsErrorString());
-		return 0;
+	if (fm == NULL)
+		return -1;
+	fm->fm_length = FIEMAP_MAX_OFFSET;
+	fm->fm_flags = FIEMAP_FLAG_SYNC;
+	fm->fm_extent_count = max_extents;
+	if (ioctl(fd, FS_IOC_FIEMAP, fm) == 0) {
+		for (i = 0; (i < fm->fm_mapped_extents) && (n < max_sectors); i++) {
+			if (fm->fm_extents[i].fe_flags & (FIEMAP_EXTENT_UNKNOWN | FIEMAP_EXTENT_DELALLOC |
+				FIEMAP_EXTENT_ENCODED | FIEMAP_EXTENT_NOT_ALIGNED | FIEMAP_EXTENT_DATA_INLINE)) {
+				uprintf("The extents of 'ldlinux.sys' can't be used for booting");
+				n = -1;
+				break;
+			}
+			for (off = 0; (off < fm->fm_extents[i].fe_length) && (n < max_sectors); off += SECTOR_SIZE)
+				sectors[n++] = (fm->fm_extents[i].fe_physical + off) >> SECTOR_SHIFT;
+		}
+		free(fm);
+		return n;
 	}
-
-	if (!ReadFile((HANDLE) pp, buf, (DWORD) secsize, &bytes_read, NULL)) {
-		uprintf("Could not read sector %llu: %s", sector, WindowsErrorString());
-		return 0;
+	free(fm);
+	uuprintf("FIEMAP is not available (%s) - Using FIBMAP", WindowsErrorString());
+	if ((ioctl(fd, FIGETBSZ, &block_size) != 0) || (block_size < (int)SECTOR_SIZE))
+		return -1;
+	for (blk = 0; n < max_sectors; blk++) {
+		int b = blk;
+		if ((ioctl(fd, FIBMAP, &b) != 0) || (b == 0))
+			return -1;
+		for (j = 0; (j < block_size / (int)SECTOR_SIZE) && (n < max_sectors); j++)
+			sectors[n++] = (((libfat_sector_t)b * block_size) >> SECTOR_SHIFT) + j;
 	}
-
-	if (bytes_read != secsize) {
-		uprintf("Sector %llu: Read %lu bytes instead of %zu requested", sector, bytes_read, secsize);
-		return 0;
-	}
-
-	return (int)secsize;
+	return n;
 }
 
 /*
  * Extract the ldlinux.sys and ldlinux.bss from resources,
  * then patch and install them
  */
-BOOL InstallSyslinux(DWORD drive_index, char drive_letter, int file_system)
+BOOL InstallSyslinux(const char* volume, const char* mount_point, int file_system, uint32_t sector_size, uint8_t* bootsect)
 {
-	const LARGE_INTEGER liZero = { {0, 0} };
-	HANDLE f_handle = INVALID_HANDLE_VALUE;
-	HANDLE d_handle = INVALID_HANDLE_VALUE;
-	DWORD bytes_read, err;
-	S_NTFSSECT_VOLINFO vol_info = { 0 };
-	LARGE_INTEGER vcn, lba, len;
-	S_NTFSSECT_EXTENT extent;
+	int d_handle = -1, f_handle = -1;
 	BOOL r = FALSE;
 	FILE* fd;
 	size_t length;
 
 	static unsigned char* sectbuf = NULL;
-	static char* resource[2][2] = {
-		{ MAKEINTRESOURCEA(IDR_SL_LDLINUX_V4_SYS), MAKEINTRESOURCEA(IDR_SL_LDLINUX_V4_BSS) },
-		{ MAKEINTRESOURCEA(IDR_SL_LDLINUX_V6_SYS), MAKEINTRESOURCEA(IDR_SL_LDLINUX_V6_BSS) } };
+	static const int resource[2][2] = {
+		{ IDR_SL_LDLINUX_V4_SYS, IDR_SL_LDLINUX_V4_BSS },
+		{ IDR_SL_LDLINUX_V6_SYS, IDR_SL_LDLINUX_V6_BSS } };
 	const char* ldlinux = "ldlinux";
 	const char* syslinux = "syslinux";
 	const char* ldlinux_ext[3] = { "sys", "bss", "c32" };
 	const char* mboot_c32 = "mboot.c32";
-	char path[MAX_PATH], tmp[64];
+	char path[MAX_PATH], src[MAX_PATH], tmp[64];
 	const char *errmsg;
-	struct libfat_filesystem *lf_fs;
-	libfat_sector_t s, *secp;
 	libfat_sector_t *sectors = NULL;
 	int ldlinux_sectors;
-	uint32_t ldlinux_cluster;
 	int i, w, nsectors, sl_fs_stype;
 	BOOL use_v5 = (opts.boot_type == BT_SYSLINUX_V6) || ((opts.boot_type == BT_IMAGE) && (SL_MAJOR(img_report.sl_version) >= 5));
 
@@ -115,10 +123,10 @@ BOOL InstallSyslinux(DWORD drive_index, char drive_letter, int file_system)
 
 	/* 4K sector size workaround */
 	SECTOR_SHIFT = 0;
-	SECTOR_SIZE = SelectedDrive.SectorSize;
+	SECTOR_SIZE = sector_size;
 	while (SECTOR_SIZE>>=1)
 		SECTOR_SHIFT++;
-	SECTOR_SIZE = SelectedDrive.SectorSize;
+	SECTOR_SIZE = sector_size;
 	LIBFAT_SECTOR_SHIFT = SECTOR_SHIFT;
 	LIBFAT_SECTOR_SIZE = SECTOR_SIZE;
 	LIBFAT_SECTOR_MASK = SECTOR_SIZE - 1;
@@ -128,24 +136,10 @@ BOOL InstallSyslinux(DWORD drive_index, char drive_letter, int file_system)
 	if (sectbuf == NULL)
 		goto out;
 
-	/*
-	 * First, reopen the volume (we already have a lock). Also, for some
-	 * weird reason.the Syslinux install process *MUST* have FILE_SHARE_WRITE
-	 * on the volume, or else creating 'ldlinux.sys' will fail...
-	 */
-	d_handle = GetLogicalHandle(drive_index, 0, FALSE, TRUE, TRUE);
-	if ((d_handle == INVALID_HANDLE_VALUE) || (d_handle == NULL)) {
-		uprintf("Could open volume for Syslinux installation");
-		goto out;
-	}
-
-	/* Make sure we can read the boot sector (NB: Re-open already set us to offset 0) */
-	if (!ReadFile(d_handle, sectbuf, SECTOR_SIZE, &bytes_read, NULL)) {
+	/* Make sure we can read the boot sector */
+	d_handle = open(volume, O_RDONLY | O_CLOEXEC);
+	if ((d_handle < 0) || (pread(d_handle, sectbuf, SECTOR_SIZE, 0) != (ssize_t)SECTOR_SIZE)) {
 		uprintf("Could not read VBR");
-		goto out;
-	}
-	if (bytes_read != SECTOR_SIZE) {
-		uprintf("Could not read the whole VBR");
 		goto out;
 	}
 	if ((errmsg = syslinux_check_bootsect(sectbuf, &sl_fs_stype))) {
@@ -158,69 +152,58 @@ BOOL InstallSyslinux(DWORD drive_index, char drive_letter, int file_system)
 
 	/* Access a copy of the ldlinux.sys & ldlinux.bss resources (downloaded or embedded) */
 	if ((syslinux_ldlinux_len[0] != 0) && (syslinux_ldlinux_len[1] != 0)) {
-		IGNORE_RETVAL(_chdirU(app_data_dir));
 		for (i = 0; i < 2; i++) {
 			syslinux_ldlinux[i] = (unsigned char*) malloc(syslinux_ldlinux_len[i]);
 			if (syslinux_ldlinux[i] == NULL)
 				goto out;
-			static_sprintf(path, "%s\\%s-%s%s\\%s.%s", FILES_DIR, syslinux, img_report.sl_version_str,
+			static_sprintf(path, "%s/%s/%s-%s%s/%s.%s", app_data_dir, FILES_DIR, syslinux, img_report.sl_version_str,
 				img_report.sl_version_ext, ldlinux, i==0?"sys":"bss");
 			fd = fopen(path, "rb");
 			if (fd == NULL) {
-				uprintf("Could not open %s\\%s", app_data_dir, path);
+				uprintf("Could not open %s", path);
 				goto out;
 			}
 			length = fread(syslinux_ldlinux[i], 1, (size_t)syslinux_ldlinux_len[i], fd);
 			fclose(fd);
 			if (length != (size_t)syslinux_ldlinux_len[i]) {
-				uprintf("Could not read %s\\%s", app_data_dir, path);
+				uprintf("Could not read %s", path);
 				goto out;
 			}
-			uprintf("Using existing '%s\\%s' %s", app_data_dir, path,
+			uprintf("Using existing '%s' %s", path,
 				IsBufferInDB(syslinux_ldlinux[i], (size_t)syslinux_ldlinux_len[i])?"✓":"✗");
 		}
 	} else {
 		for (i = 0; i < 2; i++) {
-		static_sprintf(tmp, "%s.%s", ldlinux, ldlinux_ext[i]);
-		syslinux_ldlinux_len[i] = 0;
-		syslinux_ldlinux[i] = GetResource(hMainInstance, resource[use_v5?1:0][i],
-			_RT_RCDATA, tmp, &syslinux_ldlinux_len[i], TRUE);
-		if (syslinux_ldlinux[i] == NULL)
-			goto out;
+			DWORD len = 0;
+			static_sprintf(tmp, "%s.%s", ldlinux, ldlinux_ext[i]);
+			syslinux_ldlinux[i] = GetResource(resource[use_v5?1:0][i], tmp, &len, TRUE);
+			syslinux_ldlinux_len[i] = len;
+			if (syslinux_ldlinux[i] == NULL)
+				goto out;
 		}
 	}
 
 	/* Create ldlinux.sys file */
-	static_sprintf(path, "%c:\\%s.%s", toupper(drive_letter), ldlinux, ldlinux_ext[0]);
-	f_handle = CreateFileA(path, GENERIC_READ | GENERIC_WRITE,
-			  FILE_SHARE_READ | FILE_SHARE_WRITE,
-			  NULL, CREATE_ALWAYS,
-			  FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_SYSTEM |
-			  FILE_ATTRIBUTE_HIDDEN, NULL);
-
-	if (f_handle == INVALID_HANDLE_VALUE) {
-		uprintf("Unable to create '%s': %s", &path[3], WindowsErrorString());
+	static_sprintf(path, "%s/%s.%s", mount_point, ldlinux, ldlinux_ext[0]);
+	f_handle = open(path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0444);
+	if (f_handle < 0) {
+		uprintf("Unable to create '%s': %s", path, WindowsErrorString());
 		goto out;
 	}
 
 	/* Write ldlinux.sys file */
-	if (!WriteFileWithRetry(f_handle, (const char _force *)syslinux_ldlinux[0],
-		   syslinux_ldlinux_len[0], NULL, WRITE_RETRIES)) {
-		uprintf("Could not write '%s': %s", &path[3], WindowsErrorString());
+	if ((write(f_handle, syslinux_ldlinux[0], syslinux_ldlinux_len[0]) != (ssize_t)syslinux_ldlinux_len[0]) ||
+		(write(f_handle, syslinux_adv, 2 * ADV_SIZE) != 2 * ADV_SIZE)) {
+		uprintf("Could not write '%s': %s", path, WindowsErrorString());
 		goto out;
 	}
-	if (!WriteFileWithRetry(f_handle, syslinux_adv, 2 * ADV_SIZE, NULL, WRITE_RETRIES)) {
-		uprintf("Could not write ADV to '%s': %s", &path[3], WindowsErrorString());
-		goto out;
-	}
-
-	uprintf("Successfully wrote '%s'", &path[3]);
+	uprintf("Successfully wrote '%s'", path);
 	if (opts.boot_type != BT_IMAGE)
 		UpdateProgress(OP_FILE_COPY, -1.0f);
 
 	/* Now flush the media */
-	if (!FlushFileBuffers(f_handle)) {
-		uprintf("FlushFileBuffers failed");
+	if (fsync(f_handle) != 0) {
+		uprintf("Could not flush '%s': %s", path, WindowsErrorString());
 		goto out;
 	}
 
@@ -229,57 +212,14 @@ BOOL InstallSyslinux(DWORD drive_index, char drive_letter, int file_system)
 	sectors = (libfat_sector_t*) calloc(ldlinux_sectors, sizeof *sectors);
 	if (sectors == NULL)
 		goto out;
-
-	switch (file_system) {
-	case FS_NTFS:
-		static_sprintf(tmp, "%c:\\", toupper(drive_letter));
-		vol_info.Handle = d_handle;
-		err = NtfsSectGetVolumeInfo(tmp, &vol_info);
-		if (err != ERROR_SUCCESS) {
-			uprintf("Could not fetch NTFS volume info");
-			goto out;
-		}
-		secp = sectors;
-		nsectors = 0;
-		for (vcn.QuadPart = 0;
-			NtfsSectGetFileVcnExtent(f_handle, &vcn, &extent) == ERROR_SUCCESS;
-			vcn = extent.NextVcn) {
-				err = NtfsSectLcnToLba(&vol_info, &extent.FirstLcn, &lba);
-				if (err != ERROR_SUCCESS) {
-					uprintf("Could not translate 'ldlinux.sys' LCN to disk LBA");
-					goto out;
-				}
-				lba.QuadPart -= vol_info.PartitionLba.QuadPart;
-				len.QuadPart = ((extent.NextVcn.QuadPart -
-					extent.FirstVcn.QuadPart) *
-					vol_info.SectorsPerCluster);
-				while (len.QuadPart-- && nsectors < ldlinux_sectors) {
-					*secp++ = lba.QuadPart++;
-					nsectors++;
-				}
-		}
-		break;
-	case FS_FAT16:
-	case FS_FAT32:
-	case FS_EXFAT:
-		lf_fs = libfat_open(libfat_readfile, (intptr_t) d_handle);
-		if (lf_fs == NULL) {
-			uprintf("Syslinux FAT access error");
-			goto out;
-		}
-		ldlinux_cluster = libfat_searchdir(lf_fs, 0, "LDLINUX SYS", NULL);
-		secp = sectors;
-		nsectors = 0;
-		s = libfat_clustertosector(lf_fs, ldlinux_cluster);
-		while (s && nsectors < ldlinux_sectors) {
-			*secp++ = s;
-			nsectors++;
-			s = libfat_nextsector(lf_fs, s);
-		}
-		libfat_close(lf_fs);
-		break;
-	default:
+	// NB: Upstream uses libfat for FAT and exFAT, and the NTFS extents for NTFS
+	if ((file_system != FS_FAT16) && (file_system != FS_FAT32) && (file_system != FS_EXFAT) && (file_system != FS_NTFS)) {
 		uprintf("Unsupported Syslinux filesystem");
+		goto out;
+	}
+	nsectors = MapFileSectors(f_handle, sectors, ldlinux_sectors);
+	if (nsectors != ldlinux_sectors) {
+		uprintf("Could not map 'ldlinux.sys' to its sectors");
 		goto out;
 	}
 
@@ -297,77 +237,43 @@ BOOL InstallSyslinux(DWORD drive_index, char drive_letter, int file_system)
 	}
 
 	/* Rewrite the file */
-	if (!SetFilePointerEx(f_handle, liZero, NULL, FILE_BEGIN) ||
-		!WriteFileWithRetry(f_handle, syslinux_ldlinux[0], syslinux_ldlinux_len[0], NULL, WRITE_RETRIES)) {
-		uprintf("Could not rewrite '%s': %s\n", &path[3], WindowsErrorString());
+	if ((pwrite(f_handle, syslinux_ldlinux[0], syslinux_ldlinux_len[0], 0) != (ssize_t)syslinux_ldlinux_len[0]) ||
+		(fsync(f_handle) != 0)) {
+		uprintf("Could not rewrite '%s': %s\n", path, WindowsErrorString());
 		goto out;
 	}
+	SetFileAttributesFd(f_handle, FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_HIDDEN);
 
 	/* Close file */
-	safe_closehandle(f_handle);
+	safe_close(f_handle);
 
-	/* Read existing FAT data into boot sector */
-	if (!SetFilePointerEx(d_handle, liZero, NULL, FILE_BEGIN) ||
-		!ReadFile(d_handle, sectbuf, SECTOR_SIZE,
-			   &bytes_read, NULL)) {
-		uprintf("Could not read Syslinux boot record: %s", WindowsErrorString());
-		goto out;
-	}
-	if (bytes_read < SECTOR_SIZE) {
-		uprintf("Partial read of Syslinux boot record: read %d bytes but requested %d", bytes_read, SECTOR_SIZE);
-		goto out;
-	}
-
-	/* Make the syslinux boot sector */
+	/* Make the syslinux boot sector, for WriteSyslinuxBootsect() once the volume is unmounted */
 	syslinux_make_bootsect(sectbuf, (file_system == FS_NTFS)?NTFS:VFAT);
-
-	/* Write boot sector back */
-	if (!SetFilePointerEx(d_handle, liZero, NULL, FILE_BEGIN) ||
-		!WriteFileWithRetry(d_handle, sectbuf, SECTOR_SIZE, NULL, WRITE_RETRIES)) {
-		uprintf("Could not write Syslinux boot record: %s", WindowsErrorString());
-		goto out;
-	}
-	uprintf("Successfully wrote Syslinux boot record");
+	memcpy(bootsect, sectbuf, SECTOR_SIZE);
 
 	if (opts.boot_type == BT_SYSLINUX_V6) {
-		IGNORE_RETVAL(_chdirU(app_data_dir));
-		static_sprintf(path, "%s\\%s-%s", FILES_DIR, syslinux, embedded_sl_version_str[1]);
-		IGNORE_RETVAL(_chdir(path));
-		static_sprintf(path, "%c:\\%s.%s", toupper(drive_letter), ldlinux, ldlinux_ext[2]);
-		fd = fopen(&path[3], "rb");
-		if (fd == NULL) {
-			uprintf("Caution: No '%s' was provided. The target will be missing a required Syslinux file!", &path[3]);
+		static_sprintf(src, "%s/%s/%s-%s/%s.%s", app_data_dir, FILES_DIR, syslinux, embedded_sl_version_str[1], ldlinux, ldlinux_ext[2]);
+		static_sprintf(path, "%s/%s.%s", mount_point, ldlinux, ldlinux_ext[2]);
+		if (access(src, R_OK) != 0) {
+			uprintf("Caution: No '%s' was provided. The target will be missing a required Syslinux file!", src);
+		} else if (copy_file(src, path, TRUE)) {
+			uprintf("Created '%s' (from '%s') %s", path, src, IsFileInDB(src)?"✓":"✗");
 		} else {
-			fclose(fd);
-			if (CopyFileU(&path[3], path, TRUE)) {
-				uprintf("Created '%s' (from '%s\\%s\\%s-%s\\%s') %s", path, app_data_dir, FILES_DIR, syslinux,
-					embedded_sl_version_str[1], &path[3], IsFileInDB(&path[3])?"✓":"✗");
-			} else {
-				uprintf("Failed to create '%s': %s", path, WindowsErrorString());
-			}
+			uprintf("Failed to create '%s': %s", path, WindowsErrorString());
 		}
 	} else if (HAS_REACTOS(img_report)) {
 		uprintf("Setting up ReactOS...");
-		syslinux_mboot = GetResource(hMainInstance, MAKEINTRESOURCEA(IDR_SL_MBOOT_C32),
-			_RT_RCDATA, "mboot.c32", &syslinux_mboot_len, FALSE);
+		syslinux_mboot = GetResource(IDR_SL_MBOOT_C32, "mboot.c32", &syslinux_mboot_len, FALSE);
 		if (syslinux_mboot == NULL) {
 			goto out;
 		}
 		/* Create mboot.c32 file */
-		static_sprintf(path, "%c:\\%s", toupper(drive_letter), mboot_c32);
-		f_handle = CreateFileA(path, GENERIC_READ | GENERIC_WRITE,
-				  FILE_SHARE_READ | FILE_SHARE_WRITE,
-				  NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-		if (f_handle == INVALID_HANDLE_VALUE) {
-			uprintf("Unable to create '%s'\n", path);
-			goto out;
-		}
-		if (!WriteFileWithRetry(f_handle, syslinux_mboot, syslinux_mboot_len, NULL, WRITE_RETRIES)) {
+		static_sprintf(path, "%s/%s", mount_point, mboot_c32);
+		if (write_file(path, syslinux_mboot, syslinux_mboot_len) != syslinux_mboot_len) {
 			uprintf("Could not write '%s'", path);
 			goto out;
 		}
-		safe_closehandle(f_handle);
-		static_sprintf(path, "%c:\\syslinux.cfg", toupper(drive_letter));
+		static_sprintf(path, "%s/syslinux.cfg", mount_point);
 		fd = fopen(path, "w");
 		if (fd == NULL) {
 			uprintf("Could not create ReactOS 'syslinux.cfg'");
@@ -389,8 +295,45 @@ out:
 	safe_free(syslinux_ldlinux[0]);
 	safe_free(syslinux_ldlinux[1]);
 	safe_free(sectors);
-	safe_unlockclose(d_handle);
-	safe_closehandle(f_handle);
+	safe_close(d_handle);
+	safe_close(f_handle);
+	return r;
+}
+
+/*
+ * Write the boot sector of InstallSyslinux() to the volume at offset on fd. The
+ * boot sector gets read again, as the FAT driver flags the volume as in use in
+ * it while mounted: only the boot code of Syslinux goes in.
+ */
+BOOL WriteSyslinuxBootsect(int fd, uint64_t offset, uint32_t sector_size, int file_system, const uint8_t* bootsect)
+{
+	unsigned char* boot_code = boot_sector;
+	uint8_t* buf = _mm_malloc(sector_size, 16);
+	int sl_fs_stype;
+	BOOL r = FALSE;
+
+	if (buf == NULL)
+		return FALSE;
+	if (pread(fd, buf, sector_size, (off_t)offset) != (ssize_t)sector_size) {
+		uprintf("Could not read VBR: %s", WindowsErrorString());
+		goto out;
+	}
+	if (syslinux_check_bootsect(buf, &sl_fs_stype) != NULL) {
+		uprintf("The VBR changed since Syslinux was installed");
+		goto out;
+	}
+	boot_sector = (unsigned char*)bootsect;
+	syslinux_make_bootsect(buf, (file_system == FS_NTFS)?NTFS:VFAT);
+	boot_sector = boot_code;
+	if ((pwrite(fd, buf, sector_size, (off_t)offset) != (ssize_t)sector_size) || (fsync(fd) != 0)) {
+		uprintf("Could not write Syslinux boot record: %s", WindowsErrorString());
+		goto out;
+	}
+	uprintf("Successfully wrote Syslinux boot record");
+	r = TRUE;
+
+out:
+	_mm_free(buf);
 	return r;
 }
 

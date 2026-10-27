@@ -10,8 +10,10 @@ add_library(rufus_platform STATIC
 	mounts.c
 	processes.c
 	../../format_ext.c
-	../../format_fat32.c)
+	../../format_fat32.c
+	../../syslinux.c
+	../../badblocks.c)
 target_include_directories(rufus_platform PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(rufus_platform
-	PUBLIC rufus_core PkgConfig::UDEV PkgConfig::EXT2FS
+	PUBLIC rufus_core syslinux_installer PkgConfig::UDEV PkgConfig::EXT2FS
 	PRIVATE rufus_warnings)

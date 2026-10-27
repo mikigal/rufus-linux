@@ -17,18 +17,13 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/* Memory leaks detection - define _CRTDBG_MAP_ALLOC as preprocessor macro */
-#ifdef _CRTDBG_MAP_ALLOC
-#include <stdlib.h>
-#include <crtdbg.h>
-#endif
-
-#include <windows.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
 
 #include "rufus.h"
+#include "options.h"
 
 #if defined(_MSC_VER)
 // We have a bunch of \xCD characters in this file that MS doesn't like
@@ -436,24 +431,112 @@ static const char* cp_to_hr(ULONG cp)
 	return NULL;
 }
 
+#define PRIMARYLANGID(lgid)    ((uint16_t)(lgid) & 0x3ff)
+
+/*
+ * On Linux, the keyboard and the codepage follow the locale of the user
+ * (opts.locale), as the Windows language ID and OEM codepage of that locale.
+ * The ID of a language is also the keyboard ID (KLID) of its default layout.
+ */
+static const struct {
+	const char* lang;			// With its modifier, if any
+	const char* territory;		// NULL for any
+	uint16_t langid;
+	uint16_t oem_cp;
+} locale_list[] = {
+	{ "af", NULL, 0x0436, 850 }, { "ar", NULL, 0x0401, 720 }, { "az", NULL, 0x042c, 857 },
+	{ "be", NULL, 0x0423, 866 }, { "bg", NULL, 0x0402, 866 }, { "bs", NULL, 0x141a, 852 },
+	{ "ca", NULL, 0x0403, 850 }, { "cs", NULL, 0x0405, 852 }, { "cy", NULL, 0x0452, 850 },
+	{ "da", NULL, 0x0406, 850 }, { "de", "AT", 0x0c07, 850 }, { "de", "CH", 0x0807, 850 },
+	{ "de", "LI", 0x1407, 850 }, { "de", "LU", 0x1007, 850 }, { "de", NULL, 0x0407, 850 },
+	{ "el", NULL, 0x0408, 737 }, { "en", "AU", 0x0c09, 850 }, { "en", "CA", 0x1009, 850 },
+	{ "en", "GB", 0x0809, 850 }, { "en", "IE", 0x1809, 850 }, { "en", "NZ", 0x1409, 850 },
+	{ "en", NULL, 0x0409, 437 }, { "es", "MX", 0x080a, 850 }, { "es", NULL, 0x040a, 850 },
+	{ "et", NULL, 0x0425, 775 }, { "eu", NULL, 0x042d, 850 }, { "fa", NULL, 0x0429, 720 },
+	{ "fi", NULL, 0x040b, 850 }, { "fo", NULL, 0x0438, 850 }, { "fr", "BE", 0x080c, 850 },
+	{ "fr", "CA", 0x0c0c, 850 }, { "fr", "CH", 0x100c, 850 }, { "fr", "LU", 0x140c, 850 },
+	{ "fr", NULL, 0x040c, 850 }, { "ga", NULL, 0x083c, 850 }, { "gl", NULL, 0x0456, 850 },
+	{ "he", NULL, 0x040d, 862 }, { "hr", NULL, 0x041a, 852 }, { "hu", NULL, 0x040e, 852 },
+	{ "id", NULL, 0x0421, 850 }, { "is", NULL, 0x040f, 850 }, { "it", "CH", 0x0810, 850 },
+	{ "it", NULL, 0x0410, 850 }, { "ja", NULL, 0x0411, 932 }, { "kk", NULL, 0x043f, 866 },
+	{ "ko", NULL, 0x0412, 949 }, { "ky", NULL, 0x0440, 866 }, { "lb", NULL, 0x046e, 850 },
+	{ "lt", NULL, 0x0427, 775 }, { "lv", NULL, 0x0426, 775 }, { "mk", NULL, 0x042f, 866 },
+	{ "mn", NULL, 0x0450, 866 }, { "ms", NULL, 0x043e, 850 }, { "nb", NULL, 0x0414, 850 },
+	{ "nl", "BE", 0x0813, 850 }, { "nl", NULL, 0x0413, 850 }, { "nn", NULL, 0x0814, 850 },
+	{ "no", NULL, 0x0414, 850 }, { "pl", NULL, 0x0415, 852 }, { "pt", "PT", 0x0816, 850 },
+	{ "pt", NULL, 0x0416, 850 }, { "rm", NULL, 0x0417, 850 }, { "ro", NULL, 0x0418, 852 },
+	{ "ru", NULL, 0x0419, 866 }, { "sk", NULL, 0x041b, 852 }, { "sl", NULL, 0x0424, 852 },
+	{ "sq", NULL, 0x041c, 852 }, { "sr@latin", NULL, 0x081a, 852 }, { "sr", NULL, 0x0c1a, 855 },
+	{ "sv", "FI", 0x081d, 850 }, { "sv", NULL, 0x041d, 850 }, { "tg", NULL, 0x0428, 866 },
+	{ "th", NULL, 0x041e, 874 }, { "tr", NULL, 0x041f, 857 }, { "tt", NULL, 0x0444, 866 },
+	{ "uk", NULL, 0x0422, 866 }, { "ur", NULL, 0x0420, 720 }, { "uz@cyrillic", NULL, 0x0843, 866 },
+	{ "uz", NULL, 0x0443, 857 }, { "vi", NULL, 0x042a, 1258 }, { "zh", "HK", 0x0c04, 950 },
+	{ "zh", "MO", 0x1404, 950 }, { "zh", "SG", 0x1004, 936 }, { "zh", "TW", 0x0404, 950 },
+	{ "zh", NULL, 0x0804, 936 },
+};
+
+// The entry of locale_list for a locale such as "pl_PL.UTF-8" or "sr_RS@latin", or -1 (US)
+static int get_locale(void)
+{
+	char lang[32], territory[8] = "";
+	const char* modifier = strchr(opts.locale, '@');
+	size_t len = strcspn(opts.locale, "_.@");
+	int i;
+
+	if ((len == 0) || (len >= 16))
+		return -1;
+	memcpy(lang, opts.locale, len);
+	lang[len] = 0;
+	if (opts.locale[len] == '_') {
+		len = strcspn(&opts.locale[len + 1], ".@");
+		if (len < sizeof(territory)) {
+			memcpy(territory, strchr(opts.locale, '_') + 1, len);
+			territory[len] = 0;
+		}
+	}
+	if ((modifier != NULL) && (strlen(lang) + strlen(modifier) < sizeof(lang)))
+		strcat(lang, modifier);
+	for (i = 0; i < ARRAYSIZE(locale_list); i++) {
+		if ((strcmp(locale_list[i].lang, lang) == 0) &&
+			((locale_list[i].territory == NULL) || (strcmp(locale_list[i].territory, territory) == 0)))
+			return i;
+	}
+	// A modifier we don't know about
+	if (modifier != NULL) {
+		lang[strcspn(lang, "@")] = 0;
+		for (i = 0; i < ARRAYSIZE(locale_list); i++) {
+			if ((strcmp(locale_list[i].lang, lang) == 0) && (locale_list[i].territory == NULL))
+				return i;
+		}
+	}
+	return -1;
+}
+
+// DOS wants CRLF line endings
+static void fprintf_dos(FILE* fd, const char* format, ...)
+{
+	char buf[256];
+	va_list args;
+	int i;
+
+	va_start(args, format);
+	vsnprintf(buf, sizeof(buf), format, args);
+	va_end(args);
+	for (i = 0; buf[i] != 0; i++) {
+		if (buf[i] == '\n')
+			fputc('\r', fd);
+		fputc(buf[i], fd);
+	}
+}
+
 // http://blogs.msdn.com/b/michkap/archive/2004/12/05/275231.aspx
 static const char* get_kb(void)
 {
 	unsigned int kbid;
-	char kbid_str[KL_NAMELENGTH];
-	int pass;
+	int pass, locale = get_locale();
 
-	// Count on Microsoft to add convolution to a simple operation.
-	// We use GetKeyboardLayout() because it returns an HKL, which for instance
-	// doesn't tell us if the *LAYOUT* is Dvorak or something else. For that we
-	// need an KLID which GetKeyboardLayoutNameA() does return ...but only as a
-	// string of an hex value...
-	GetKeyboardLayoutNameA(kbid_str);
-	if (sscanf(kbid_str, "%x", &kbid) <= 0) {
-		uprintf("Could not scan keyboard layout name - defaulting to US");
-		kbid = 0x00000409;
-	}
-	uprintf("Windows KBID 0x%08x\n", kbid);
+	kbid = (locale < 0) ? 0x00000409 : locale_list[locale].langid;
+	uprintf("Locale '%s' gives KBID 0x%08x", opts.locale, kbid);
 
 	for (pass = 0; pass < 3; pass++) {
 		// Some of these return values are defined in
@@ -746,8 +829,8 @@ static const char* get_kb(void)
 				// the primary language of the keyboard
 				kbid = PRIMARYLANGID(kbid);
 			} else if (pass == 1) {
-				// If we still didn't get a match, use the system's primary language
-				kbid = PRIMARYLANGID(GetSystemDefaultLangID());
+				// If we still didn't get a match, use the primary language of the locale
+				kbid = PRIMARYLANGID((locale < 0) ? 0x0409 : locale_list[locale].langid);
 				uprintf("Unable to match KBID, trying LangID 0x%04x", kbid);
 			}
 			break;
@@ -968,8 +1051,8 @@ BOOL SetDOSLocale(const char* path, BOOL bFreeDOS)
 	FILE* fd;
 	char filename[MAX_PATH];
 	ULONG cp;
-	UINT actual_cp;
 	const char *kb;
+	int locale;
 	int kbdrv;
 	const char* egadrv;
 
@@ -986,14 +1069,8 @@ BOOL SetDOSLocale(const char* path, BOOL bFreeDOS)
 	uprintf("Will use DOS keyboard '%s' [%s]", kb, kb_to_hr(kb));
 
 	// Now get a codepage
-	cp = GetOEMCP();
-	if (cp == 65001) {
-		// GetOEMCP() may return UTF-8 for the codepage (65001),
-		// in which case we need to find the actual system OEM cp.
-		if (GetLocaleInfoA(GetUserDefaultUILanguage(), LOCALE_IDEFAULTCODEPAGE | LOCALE_RETURN_NUMBER,
-			(char*)&actual_cp, sizeof(actual_cp)))
-			cp = actual_cp;
-	}
+	locale = get_locale();
+	cp = (locale < 0) ? 437 : locale_list[locale].oem_cp;
 	egadrv = bFreeDOS ? fd_get_ega(cp) : ms_get_ega(cp);
 	if (egadrv == NULL) {
 		// We need to use the fallback CP from the keyboard we got above, as 437 is not always available
@@ -1008,15 +1085,15 @@ BOOL SetDOSLocale(const char* path, BOOL bFreeDOS)
 	if ((cp == 437) && (strcmp(kb, "us") == 0)) {
 		// Nothing much to do if US/US - just notify in autoexec.bat
 		static_strcpy(filename, path);
-		static_strcat(filename, "\\AUTOEXEC.BAT");
+		static_strcat(filename, "/AUTOEXEC.BAT");
 		fd = fopen(filename, "w+");
 		if (fd == NULL) {
 			uprintf("Unable to create 'AUTOEXEC.BAT': %s", WindowsErrorString());
 			return FALSE;
 		}
-		fprintf(fd, "@echo off\n");
-		fprintf(fd, "set PATH=.;\\;\\LOCALE\n");
-		fprintf(fd, "echo Using %s keyboard with %s codepage [%d]\n", kb_to_hr("us"), cp_to_hr(437), 437);
+		fprintf_dos(fd, "@echo off\n");
+		fprintf_dos(fd, "set PATH=.;\\;\\LOCALE\n");
+		fprintf_dos(fd, "echo Using %s keyboard with %s codepage [%d]\n", kb_to_hr("us"), cp_to_hr(437), 437);
 		fclose(fd);
 		uprintf("Successfully wrote 'AUTOEXEC.BAT'");
 		return TRUE;
@@ -1024,47 +1101,47 @@ BOOL SetDOSLocale(const char* path, BOOL bFreeDOS)
 
 	// CONFIG.SYS
 	static_strcpy(filename, path);
-	static_strcat(filename, "\\CONFIG.SYS");
+	static_strcat(filename, "/CONFIG.SYS");
 	fd = fopen(filename, "w+");
 	if (fd == NULL) {
 		uprintf("Unable to create 'CONFIG.SYS': %s.", WindowsErrorString());
 		return FALSE;
 	}
 	if (bFreeDOS) {
-		fprintf(fd, "!MENUCOLOR=7,0\nMENU\nMENU   FreeDOS Language Selection Menu\n");
-		fprintf(fd, "MENU   \xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD"
+		fprintf_dos(fd, "!MENUCOLOR=7,0\nMENU\nMENU   FreeDOS Language Selection Menu\n");
+		fprintf_dos(fd, "MENU   \xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD"
 			"\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\xCD\nMENU\n");
 	} else {
-		fprintf(fd, "[MENU]\n");
+		fprintf_dos(fd, "[MENU]\n");
 	}
-	fprintf(fd, "MENUDEFAULT=1,5\n");
+	fprintf_dos(fd, "MENUDEFAULT=1,5\n");
 	// Menu item max: 70 characters
-	fprintf(fd, "%s1%c Use %s keyboard with %s codepage [%d]\n",
+	fprintf_dos(fd, "%s1%c Use %s keyboard with %s codepage [%d]\n",
 		bFreeDOS?"MENU ":"MENUITEM=", bFreeDOS?')':',', kb_to_hr(kb), cp_to_hr(cp), (int)cp);
-	fprintf(fd, "%s2%c Use %s keyboard with %s codepage [%d]\n",
+	fprintf_dos(fd, "%s2%c Use %s keyboard with %s codepage [%d]\n",
 		bFreeDOS?"MENU ":"MENUITEM=", bFreeDOS?')':',', kb_to_hr("us"), cp_to_hr(437), 437);
-	fprintf(fd, "%s", bFreeDOS?"MENU\n12?\n":"[1]\ndevice=\\locale\\display.sys con=(ega,,1)\n[2]\n");
+	fprintf_dos(fd, "%s", bFreeDOS?"MENU\n12?\n":"[1]\ndevice=\\locale\\display.sys con=(ega,,1)\n[2]\n");
 	fclose(fd);
 	uprintf("Successfully wrote 'CONFIG.SYS'");
 
 	// AUTOEXEC.BAT
 	static_strcpy(filename, path);
-	static_strcat(filename, "\\AUTOEXEC.BAT");
+	static_strcat(filename, "/AUTOEXEC.BAT");
 	fd = fopen(filename, "w+");
 	if (fd == NULL) {
 		uprintf("Unable to create 'AUTOEXEC.BAT': %s", WindowsErrorString());
 		return FALSE;
 	}
-	fprintf(fd, "@echo off\n");
-	fprintf(fd, "set PATH=.;\\;\\LOCALE\n");
+	fprintf_dos(fd, "@echo off\n");
+	fprintf_dos(fd, "set PATH=.;\\;\\LOCALE\n");
 	if (bFreeDOS)
-		fprintf(fd, "display con=(ega,,1)\n");
-	fprintf(fd, "GOTO %%CONFIG%%\n");
-	fprintf(fd, ":1\n");
-	fprintf(fd, "mode con codepage prepare=((%d) \\locale\\%s) > NUL\n", (int)cp, egadrv);
-	fprintf(fd, "mode con codepage select=%d > NUL\n", (int)cp);
-	fprintf(fd, "keyb %s,,\\locale\\%s\n", kb, kbdrv_data[kbdrv].name);
-	fprintf(fd, ":2\n");
+		fprintf_dos(fd, "display con=(ega,,1)\n");
+	fprintf_dos(fd, "GOTO %%CONFIG%%\n");
+	fprintf_dos(fd, ":1\n");
+	fprintf_dos(fd, "mode con codepage prepare=((%d) \\locale\\%s) > NUL\n", (int)cp, egadrv);
+	fprintf_dos(fd, "mode con codepage select=%d > NUL\n", (int)cp);
+	fprintf_dos(fd, "keyb %s,,\\locale\\%s\n", kb, kbdrv_data[kbdrv].name);
+	fprintf_dos(fd, ":2\n");
 	fclose(fd);
 	uprintf("Successfully wrote 'AUTOEXEC.BAT'");
 

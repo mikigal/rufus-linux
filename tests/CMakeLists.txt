@@ -57,11 +57,17 @@ target_link_libraries(test_devices PRIVATE rufus_platform)
 rufus_add_test(test_partition test_partition.c)
 target_link_libraries(test_partition PRIVATE rufus_core)
 
+rufus_add_test(test_dos test_dos.c)
+target_link_libraries(test_dos PRIVATE rufus_core)
+
 rufus_add_test(test_write test_write.c)
 target_link_libraries(test_write PRIVATE rufus_platform)
 
 rufus_add_test(test_filesystems test_filesystems.c)
 target_link_libraries(test_filesystems PRIVATE rufus_platform)
+
+rufus_add_test(test_badblocks test_badblocks.c)
+target_link_libraries(test_badblocks PRIVATE rufus_platform)
 
 rufus_add_test(test_disk test_disk.c)
 target_link_libraries(test_disk PRIVATE rufus_platform)
@@ -92,7 +98,7 @@ if(RUFUS_E2E_TESTS)
 	add_test(NAME e2e_disk COMMAND Python3::Interpreter -m unittest -v test_disk
 		WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/e2e")
 	set_tests_properties(e2e_disk PROPERTIES LABELS e2e TIMEOUT 1800
-		ENVIRONMENT "RUFUS_TEST_DISK_VM=$<TARGET_FILE:test_disk_vm>")
+		ENVIRONMENT "RUFUS_TEST_DISK_VM=$<TARGET_FILE:test_disk_vm>;RUFUS_TEST_BADBLOCKS=$<TARGET_FILE:test_badblocks>")
 	add_test(NAME e2e_format COMMAND Python3::Interpreter -m unittest -v test_format
 		WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/e2e")
 	set_tests_properties(e2e_format PROPERTIES LABELS e2e TIMEOUT 3600

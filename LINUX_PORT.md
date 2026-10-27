@@ -296,13 +296,36 @@ Done:
   single threaded) for the ISO extraction, Grub4DOS, KolibriOS, Windows 7 EFI setup,
   `md5sum.txt`, extended label (`core/autorun.c`) and extra archive; unmount.
   `StartFormat()` runs it in a thread, which reports `UM_FORMAT_COMPLETED`.
-  - Not ported yet, and refused rather than silently skipped: Syslinux, DOS, bad
-    blocks, WinPE, the Windows User Experience and Windows To Go.
+  - Not ported yet, and refused rather than silently skipped: WinPE, the Windows User
+    Experience and Windows To Go.
   - `FormatPartition()` refuses FAT32 volumes with fewer than 65525 clusters, as
     FormatEx does: mkfs.fat creates them, and UEFI firmwares then take them for FAT16.
   - `tests/e2e/test_format.py` runs the pipeline in the VM (`tests/test_format_vm.c`),
     and boots the result in QEMU: FAT32/MBR and ext4/GPT non-bootable drives, the
-    synthetic GRUB ISO in ISO mode (GPT, UEFI) and in DD mode (BIOS and UEFI).
+    synthetic GRUB ISO in ISO mode (GPT, UEFI and MBR, BIOS) and in DD mode (BIOS and
+    UEFI).
+- **Boot loaders and the bad blocks check** (`syslinux.c`, `dos.c`, `dos_locale.c`,
+  `badblocks.c`):
+  - Syslinux writes `ldlinux.sys` through the mounted volume, and maps it to its sectors
+    with `FIEMAP` (or `FIBMAP`), whatever the file system. Its boot sector gets written
+    once the volume is unmounted, onto the boot sector read again: the FAT driver flags
+    the volume as in use in it while mounted.
+  - FreeDOS and MS-DOS (`diskcopy.dll`, from the Microsoft symbol server as upstream)
+    write their files to the mounted volume, with their FAT attributes (FAT ioctls) and,
+    for MS-DOS, timestamps. The keyboard and codepage follow the locale of the user
+    (`opts.locale`, from `LC_ALL`/`LC_CTYPE`/`LANG`, as the Windows language ID and OEM
+    codepage of that locale) rather than the keyboard layout. `CONFIG.SYS` and
+    `AUTOEXEC.BAT` keep their CRLF line endings.
+  - The bad blocks check runs on the drive with `O_DIRECT`. Its report goes to a file
+    descriptor of the caller (truncated if no bad blocks were found), or to a file in
+    `temp_dir` (deleted then), as upstream does with `%USERPROFILE%`.
+  - The FAT32 boot records of ms-sys leave "NO NAME" as the label of the boot sector, as
+    upstream (and Windows) do: `fsck.fat` reports it.
+  - `tests/test_dos.c` checks the FreeDOS files and the keyboard and codepage of several
+    locales. `tests/test_badblocks.c` checks an image file, and in the VM, device mapper
+    devices with failing sectors and a fake drive (its second half mapped onto the
+    first). The VM boots Syslinux 4 to its prompt and FreeDOS to `C:\>` with a Polish
+    keyboard, and runs the pipeline with a bad blocks check.
 
 ---
 
