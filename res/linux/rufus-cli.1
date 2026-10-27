@@ -1,0 +1,187 @@
+.\" Rufus: The Reliable USB Formatting Utility
+.\" Copyright © 2026 Rufus for Linux contributors
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH RUFUS-CLI 1 2026-10-27 "Rufus 4.16" "User Commands"
+.SH NAME
+rufus\-cli \- create bootable USB drives from the command line
+.SH SYNOPSIS
+.B rufus\-cli
+.RB [ \-v ]
+.B list
+.RB [ \-\-hdd ]
+.RB [ \-\-non\-usb ]
+.RB [ \-\-json ]
+.br
+.B rufus\-cli
+.RB [ \-v ]
+.B write
+.I DEVICE
+.RB [ \-\-image
+.IR FILE ]
+.RI [ OPTIONS ]
+.br
+.B rufus\-cli
+.RB [ \-v ]
+.B cycle
+.I DEVICE
+.br
+.B rufus\-cli
+.RB [ \-v ]
+.B save
+.I DEVICE FILE
+.br
+.B rufus\-cli
+.RB [ \-v ]
+.B save\-optical
+.I FILE
+.br
+.B rufus\-cli
+.RB [ \-v ]
+.B download
+.RI [ VERSION
+.RI [ RELEASE
+.RI [ EDITION
+.RI [ LANGUAGE
+.RI [ ARCH ]]]]]
+.RB [ \-o
+.IR FILE ]
+.SH DESCRIPTION
+.B rufus\-cli
+does what the window of
+.BR rufus (1)
+does, with the same rules for the options that are left out. Its questions are
+asked on the terminal, or answered with
+.BR \-\-yes .
+The commands that write to a drive go through
+.BR rufus\-helper ,
+which
+.BR pkexec (1)
+starts as root (unless
+.B rufus\-cli
+already runs as root).
+.SH COMMANDS
+.TP
+.B list
+List the drives that Rufus can write to, with the loop devices of files.
+.B \-\-hdd
+also lists USB hard drives,
+.B \-\-non\-usb
+non-USB removable drives, and
+.B \-\-json
+gives the list as JSON.
+.TP
+.BI write " DEVICE"
+Write to a drive (such as
+.BR /dev/sdb ),
+with the defaults of the main window for what the options leave out.
+.TP
+.BI cycle " DEVICE"
+Disconnect a USB drive and connect it again (Alt\-C in the window).
+.TP
+.BI save " DEVICE FILE"
+Save a drive to an image: a fixed VHD (\fI.vhd\fR), a dynamic VHDX
+(\fI.vhdx\fR), or an ISO of the files of its first volume (\fI.iso\fR, with
+.BR xorriso (1)).
+.TP
+.BI save\-optical " FILE"
+Save the disc of an optical drive to an ISO image.
+.TP
+.B download
+Download a Windows or UEFI Shell ISO, as Fido does. The choices of the next
+step get listed, until the URL of the ISO, which
+.B \-o
+.I FILE
+downloads. The choices are numbers (from 1) or the start of their names.
+.SH WRITE OPTIONS
+.TP
+.BI \-\-image " FILE"
+The image to write: an ISO, a disk image (raw, or compressed with gzip, xz,
+bzip2, zstd, lzma or zip), a VHD or a VHDX.
+.TP
+.BI \-\-boot " TYPE"
+non\-bootable, image (the default with
+.BR \-\-image ),
+freedos, msdos, syslinux4, syslinux6, reactos, grub2, grub4dos or uefi\-ntfs.
+.TP
+.BI \-\-partition " STYLE"
+mbr, gpt or sfd (a super floppy, without partition table).
+.TP
+.BI \-\-target " SYSTEM"
+bios or uefi.
+.TP
+.BI \-\-fs " NAME"
+FAT, FAT32, NTFS, UDF, exFAT, ext2, ext3 or ext4.
+.TP
+.BI \-\-cluster " BYTES"
+The cluster size.
+.TP
+.BI \-\-label " TEXT"
+The volume label.
+.TP
+.BI \-\-persistence " MB"
+The size of a persistent partition, for the Linux images that support one.
+.TP
+.BI \-\-archive " FILE"
+A zip archive to extract to the drive (FAT, NTFS, exFAT or UDF).
+.TP
+.B \-\-slow
+A full format (which zeroes the volume) rather than a quick one.
+.TP
+.B \-\-no\-extended\-label
+No autorun.inf label and icon.
+.TP
+.B \-\-old\-bios\-fixes
+Add fixes for old BIOSes.
+.TP
+.B \-\-dual
+Windows images boot with BIOS and UEFI (Alt\-E in the window).
+.TP
+.BI \-\-bad\-blocks " PASSES"
+Check for bad blocks first: 1, 2, slc, mlc or tlc.
+.TP
+.BR \-\-iso ", " \-\-dd
+How to write an ISOHybrid image (asked otherwise).
+.TP
+.B \-\-yes
+Answer the other questions, and the confirmation, with their first choice.
+.TP
+.BR \-\-hdd ", " \-\-non\-usb
+As for
+.BR list .
+.SH OPTIONS
+.TP
+.BR \-v ", " \-\-verbose
+Display the log on the standard error (twice for the USB debug messages).
+.TP
+.BR \-h ", " \-\-help
+Display the commands and options.
+.SH ENVIRONMENT
+.TP
+.B RUFUS_HELPER
+The path of the helper, instead of the one of the installation.
+.TP
+.B RUFUS_LOCALE
+The language of the ISOs that
+.B download
+proposes first, such as
+.B pl\-PL
+(the one of the locale otherwise).
+.SH EXIT STATUS
+0 on success, 1 on failure, 2 for a wrong command line.
+.SH EXAMPLES
+Write an ISO to a USB drive, as the window would, without questions:
+.PP
+.RS
+.B rufus\-cli write /dev/sdb \-\-image ubuntu.iso \-\-yes
+.RE
+.PP
+Write a Windows 11 ISO for a BIOS computer:
+.PP
+.RS
+.B rufus\-cli write /dev/sdb \-\-image Win11.iso \-\-partition mbr \-\-target bios
+.RE
+.SH SEE ALSO
+.BR rufus (1),
+.BR pkexec (1)
+.PP
+https://github.com/mikigal/rufus\-linux

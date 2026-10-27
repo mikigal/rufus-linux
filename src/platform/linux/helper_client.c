@@ -19,6 +19,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <poll.h>
 #include <spawn.h>
 #include <stdlib.h>
@@ -34,6 +35,7 @@
 #include "helper_client.h"
 #include "progress.h"
 #include "ipc.h"
+#include "platform.h"
 
 extern char** environ;
 
@@ -65,14 +67,14 @@ BOOL StartHelper(helper_t* h, const char* language)
 {
 	const char* helper = getenv("RUFUS_HELPER");
 	const char* argv[3];
-	char text[8 * 1024];
+	char text[8 * 1024], relative[PATH_MAX];
 	posix_spawn_file_actions_t actions;
 	int sv[2], r;
 
 	h->sock = -1;
 	h->pid = -1;
 	if ((helper == NULL) || (helper[0] == 0))
-		helper = RUFUS_HELPER_INSTALLED;
+		helper = GetInstalledFile(RUFUS_HELPER_RELATIVE, relative, sizeof(relative)) ? relative : RUFUS_HELPER_INSTALLED;
 	// The tests of the front ends replace the helper with one that runs as the user
 	if ((getenv("RUFUS_FAKE_HELPER") != NULL) && (getenv("RUFUS_FAKE_HELPER")[0] != 0)) {
 		helper = getenv("RUFUS_FAKE_HELPER");

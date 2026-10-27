@@ -12,6 +12,7 @@ add_library(rufus_platform STATIC
 	helper_client.c
 	ipc.c
 	mounts.c
+	paths.c
 	processes.c
 	../../format_ext.c
 	../../format_fat32.c
@@ -21,6 +22,9 @@ target_include_directories(rufus_platform PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(rufus_platform
 	PUBLIC rufus_core syslinux_installer PkgConfig::UDEV PkgConfig::EXT2FS
 	PRIVATE rufus_warnings)
-# Where the front ends find the helper (unless $RUFUS_HELPER is set)
+# Where the front ends (in the bin directory) find the helper, unless $RUFUS_HELPER is set: next to
+# them in a tree that got moved, or where it got installed
+file(RELATIVE_PATH helper_relative "${CMAKE_INSTALL_FULL_BINDIR}" "${CMAKE_INSTALL_FULL_LIBEXECDIR}/rufus-helper")
 target_compile_definitions(rufus_platform PRIVATE
+	RUFUS_HELPER_RELATIVE="${helper_relative}"
 	RUFUS_HELPER_INSTALLED="${CMAKE_INSTALL_FULL_LIBEXECDIR}/rufus-helper")

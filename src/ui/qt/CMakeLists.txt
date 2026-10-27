@@ -21,6 +21,7 @@ target_include_directories(rufus PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 target_link_libraries(rufus PRIVATE rufus_platform Qt6::Widgets Qt6::DBus rufus_warnings)
 # QT_NO_KEYWORDS keeps signals/slots/emit out of the C headers, which need C++23 for _Atomic
 target_compile_definitions(rufus PRIVATE QT_NO_KEYWORDS
+	RUFUS_LOC_RELATIVE="${RUFUS_LOC_FROM_BINDIR}"
 	RUFUS_LOC_INSTALLED="${CMAKE_INSTALL_FULL_DATADIR}/rufus/rufus.loc"
 	RUFUS_LOC_SOURCE="${PROJECT_SOURCE_DIR}/res/loc/rufus.loc")
 target_compile_features(rufus PRIVATE cxx_std_23)
@@ -35,6 +36,9 @@ qt_add_resources(rufus "icons" PREFIX "/icons" BASE "${PROJECT_SOURCE_DIR}/res/i
 install(TARGETS rufus RUNTIME DESTINATION bin)
 # The desktop file, whose name is the Wayland app_id (QGuiApplication::desktopFileName()), and the icons
 install(FILES "${PROJECT_SOURCE_DIR}/res/linux/rufus.desktop" DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")
+install(FILES "${PROJECT_SOURCE_DIR}/res/linux/io.github.mikigal.rufus_linux.metainfo.xml"
+	DESTINATION "${CMAKE_INSTALL_DATADIR}/metainfo")
+install(FILES "${PROJECT_SOURCE_DIR}/res/linux/rufus.1" DESTINATION "${CMAKE_INSTALL_MANDIR}/man1")
 foreach(size 16 24 32 48 64 128 256 512)
 	install(FILES "${PROJECT_SOURCE_DIR}/res/icons/rufus-${size}.png"
 		DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/${size}x${size}/apps" RENAME rufus.png)

@@ -1,0 +1,79 @@
+.\" Rufus: The Reliable USB Formatting Utility
+.\" Copyright © 2026 Rufus for Linux contributors
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH RUFUS 1 2026-10-27 "Rufus 4.16" "User Commands"
+.SH NAME
+rufus \- create bootable USB drives
+.SH SYNOPSIS
+.B rufus
+.RB [ \-x ]
+.RB [ \-v ]
+.RB [ \-f
+.IR FILESYSTEM ]
+.RB [ \-l
+.IR LOCALE ]
+.RB [ \-i ]
+.RI [ PATH ]
+.SH DESCRIPTION
+.B rufus
+formats USB drives and makes them bootable, from Windows and Linux ISO images,
+disk images (raw, compressed, VHD or VHDX), FreeDOS or a boot loader of its own.
+It can also check the drive for bad blocks, compute the hashes of an image,
+download Windows ISOs and save a drive or an optical disc to an image.
+.PP
+This is an unofficial port of Rufus to Linux, with a Qt 6 user interface. It
+runs as the user: the writes go through
+.BR rufus\-helper ,
+which
+.BR pkexec (1)
+starts as root, with a single prompt for the session (the polkit action
+.BR ie.rufus.helper ).
+.SH OPTIONS
+.TP
+.BR \-i ", " \-\-iso =\fIPATH\fR
+Select the image at
+.I PATH
+when Rufus starts. A
+.I PATH
+without
+.B \-i
+does the same.
+.TP
+.BR \-f ", " \-\-filesystem =\fIFILESYSTEM\fR
+Prefer this file system when formatting: FAT, FAT32, NTFS, UDF, exFAT, ext2,
+ext3 or ext4 (or the number of one of them).
+.TP
+.BR \-l ", " \-\-locale =\fILOCALE\fR
+Use the language of
+.I LOCALE
+(such as
+.BR pl\-PL ),
+rather than the one of the desktop.
+.TP
+.BR \-x ", " \-\-extra\-devs
+List USB hard drives too (Alt\-F in the window).
+.TP
+.BR \-v ", " \-\-verbose
+Copy the log to the standard error.
+.TP
+.BR \-h ", " \-\-help
+Display the options.
+.SH FILES
+.TP
+.I $XDG_CONFIG_HOME/rufus/rufus.ini
+The settings.
+.TP
+.I $XDG_DATA_HOME/Rufus
+The files that Rufus downloads: boot loaders, revocation lists, ISOs.
+.SH ENVIRONMENT
+.TP
+.B RUFUS_HELPER
+The path of the helper, instead of the one of the installation.
+.TP
+.B RUFUS_LOC
+A localization file to use instead of the one of the installation.
+.SH SEE ALSO
+.BR rufus\-cli (1),
+.BR pkexec (1)
+.PP
+https://github.com/mikigal/rufus\-linux

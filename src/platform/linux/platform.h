@@ -80,3 +80,11 @@ extern BOOL GetFirstVolume(const char* syspath, char* devnode, size_t devnode_si
  * and size of the disc (for Alt-O, saving it to an ISO). Returns FALSE if there is none.
  */
 extern BOOL GetOpticalMedia(char* devnode, size_t devnode_size, char* label, size_t label_size, uint64_t* size);
+
+/*
+ * The path of a file of the installation, relative to the directory of the
+ * executable (as CMake computes it from the install directories), so that a
+ * tree that got moved (the portable archive, the AppImage) still finds its
+ * helper and localization file. Returns FALSE if there is no such file.
+ */
+extern BOOL GetInstalledFile(const char* relative, char* path, size_t size);

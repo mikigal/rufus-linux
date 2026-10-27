@@ -112,7 +112,10 @@ static void usage(FILE* fd)
 // Load the English messages, so that the names Rufus uses for devices are not "MSG_xxx"
 static void load_localization(void)
 {
-	const char* loc_files[] = { getenv("RUFUS_LOC"), RUFUS_LOC_INSTALLED, RUFUS_LOC_SOURCE };
+	char relative[PATH_MAX];
+	const char* loc_files[] = { getenv("RUFUS_LOC"),
+		GetInstalledFile(RUFUS_LOC_RELATIVE, relative, sizeof(relative)) ? relative : NULL,
+		RUFUS_LOC_INSTALLED, RUFUS_LOC_SOURCE };
 	size_t i;
 
 	init_localization();

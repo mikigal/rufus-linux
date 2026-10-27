@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright © 2026 Rufus for Linux contributors -->
+<component type="desktop-application">
+  <id>io.github.mikigal.rufus_linux</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Rufus</name>
+  <summary>Create bootable USB drives from ISO and disk images</summary>
+  <developer id="io.github.mikigal">
+    <name>Rufus for Linux contributors</name>
+  </developer>
+  <description>
+    <p>
+      Rufus is a utility that helps format and create bootable USB flash drives. This is an
+      unofficial port of Rufus to Linux, with a Qt 6 user interface that runs natively under
+      Wayland. It is not affiliated with or supported by the upstream Rufus project.
+    </p>
+    <p>It can:</p>
+    <ul>
+      <li>create bootable drives from Windows and Linux ISOs, and from disk images (compressed or not, VHD and VHDX)</li>
+      <li>customize the installation of Windows 11: no TPM, Secure Boot or RAM requirement, a local account, no data collection</li>
+      <li>download Windows and UEFI Shell ISOs</li>
+      <li>add a persistent partition to Linux live drives</li>
+      <li>create FreeDOS boot drives</li>
+      <li>check drives for bad blocks and fake capacity</li>
+      <li>compute the MD5, SHA-1, SHA-256 and SHA-512 of images</li>
+      <li>save drives to VHD, VHDX or ISO images, and optical discs to ISO images</li>
+    </ul>
+    <p>
+      Writing to a drive needs the authorization of an administrator, which polkit asks for once
+      per session.
+    </p>
+  </description>
+  <launchable type="desktop-id">rufus.desktop</launchable>
+  <url type="homepage">https://github.com/mikigal/rufus-linux</url>
+  <url type="bugtracker">https://github.com/mikigal/rufus-linux/issues</url>
+  <url type="vcs-browser">https://github.com/mikigal/rufus-linux</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>The main window</caption>
+      <image>https://raw.githubusercontent.com/mikigal/rufus-linux/master/res/linux/screenshot.png</image>
+    </screenshot>
+  </screenshots>
+  <provides>
+    <binary>rufus</binary>
+    <binary>rufus-cli</binary>
+  </provides>
+  <keywords>
+    <keyword>USB</keyword>
+    <keyword>ISO</keyword>
+    <keyword>bootable</keyword>
+    <keyword>format</keyword>
+    <keyword>flash</keyword>
+    <keyword>image</keyword>
+  </keywords>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="4.16.0" date="2026-10-27">
+      <description>
+        <p>The first release of the Linux port, based on Rufus 4.16.</p>
+      </description>
+    </release>
+  </releases>
+</component>

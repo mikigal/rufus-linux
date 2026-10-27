@@ -149,7 +149,10 @@ void SetOptionsFromSettings(rufus_options_t* o)
 
 BOOL InitLocalization(void)
 {
-	const char* candidates[] = { getenv("RUFUS_LOC"), RUFUS_LOC_INSTALLED, RUFUS_LOC_SOURCE };
+	char relative[PATH_MAX];
+	const char* candidates[] = { getenv("RUFUS_LOC"),
+		GetInstalledFile(RUFUS_LOC_RELATIVE, relative, sizeof(relative)) ? relative : nullptr,
+		RUFUS_LOC_INSTALLED, RUFUS_LOC_SOURCE };
 
 	init_localization();
 	for (const char* file : candidates) {

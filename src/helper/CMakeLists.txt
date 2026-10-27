@@ -5,6 +5,7 @@ add_executable(rufus-helper rufus-helper.c)
 target_link_libraries(rufus-helper PRIVATE rufus_platform rufus_warnings)
 # It only reads the localization file of the installation, or of the source tree it was built from
 target_compile_definitions(rufus-helper PRIVATE
+	RUFUS_LOC_RELATIVE="${RUFUS_LOC_FROM_LIBEXECDIR}"
 	RUFUS_LOC_INSTALLED="${CMAKE_INSTALL_FULL_DATADIR}/rufus/rufus.loc"
 	RUFUS_LOC_SOURCE="${PROJECT_SOURCE_DIR}/res/loc/rufus.loc")
 install(TARGETS rufus-helper DESTINATION "${CMAKE_INSTALL_LIBEXECDIR}")

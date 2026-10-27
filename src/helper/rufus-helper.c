@@ -700,12 +700,14 @@ static BOOL RunWorker(job_t* job)
 
 static void LoadLanguage(const char* language)
 {
-	const char* loc_files[] = { RUFUS_LOC_INSTALLED, RUFUS_LOC_SOURCE };
+	char relative[PATH_MAX];
+	const char* loc_files[] = { GetInstalledFile(RUFUS_LOC_RELATIVE, relative, sizeof(relative)) ? relative : NULL,
+		RUFUS_LOC_INSTALLED, RUFUS_LOC_SOURCE };
 	size_t i;
 
 	init_localization();
 	for (i = 0; i < ARRAYSIZE(loc_files); i++) {
-		if (access(loc_files[i], R_OK) != 0)
+		if ((loc_files[i] == NULL) || (access(loc_files[i], R_OK) != 0))
 			continue;
 		if (get_supported_locales(loc_files[i]) &&
 			get_loc_data_file(loc_files[i], get_locale_from_name((char*)language, TRUE)))
