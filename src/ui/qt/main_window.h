@@ -19,6 +19,8 @@
 
 #pragma once
 
+#include <atomic>
+
 #include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
@@ -69,6 +71,7 @@ public:
 	bool relaunch() const { return relaunch_; }
 
 protected:
+	bool eventFilter(QObject* watched, QEvent* event) override;
 	void closeEvent(QCloseEvent* event) override;
 	void dragEnterEvent(QDragEnterEvent* event) override;
 	void dropEvent(QDropEvent* event) override;
@@ -100,6 +103,9 @@ private:
 	void onClose();
 	void showLanguageMenu();
 	void PrintStatusTimeout(const char* str, BOOL val);
+	// The "magic" keys of the message loop of the Windows version
+	bool cheatCode(int key, Qt::KeyboardModifiers modifiers, bool check_only);
+	void cyclePort(bool after_error);
 
 	/* The format operation */
 	void onFormatStart(int r);
@@ -123,6 +129,10 @@ private:
 	rufus_device_t start_device_ = {};	// The drive of the operation
 	QString last_image_dir_;
 	bool relaunch_ = false;
+	// A bare Alt press cycles what the progress text displays
+	bool alt_pressed_ = false, alt_command_ = false;
+	bool previous_enable_HDDs_ = false;
+	std::atomic<bool> cycling_ = false;
 
 	/* Status bar */
 	QLabel* status_ = nullptr;

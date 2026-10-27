@@ -60,3 +60,10 @@ extern void GetSystemDisks(disk_set_t* set);
  * here needs root: sysfs and the udev database can be read by anyone.
  */
 extern int GetDevices(rufus_device_t* devs, int max_devs, const device_filter_t* filter);
+
+/*
+ * Disconnect a USB drive and connect it again, as CyclePort() disables and enables
+ * the device on Windows: the USB device gets deauthorized, then authorized again.
+ * Needs root.
+ */
+extern BOOL CyclePort(const rufus_device_t* dev);

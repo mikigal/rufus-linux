@@ -87,6 +87,9 @@ static void usage(FILE* fd)
 		"                         their first choice\n"
 		"      --hdd, --non-usb   As for list\n"
 		"      The helper is $RUFUS_HELPER, or " RUFUS_HELPER_INSTALLED ".\n\n"
+		"  cycle <device> [--hdd] [--non-usb]\n"
+		"      Disconnect a USB drive and connect it again, through rufus-helper (Alt-C\n"
+		"      in the GUI).\n\n"
 		"Options:\n"
 		"  -v, --verbose    Display the log on stderr (twice for the USB debug messages)\n"
 		"  -h, --help       Display this help\n");
@@ -658,6 +661,53 @@ bad_value:
 	return 2;
 }
 
+static int cmd_cycle(int argc, char** argv)
+{
+	static const struct option long_options[] = {
+		{ "hdd", no_argument, NULL, 'H' },
+		{ "non-usb", no_argument, NULL, 'N' },
+		{ NULL, 0, NULL, 0 }
+	};
+	static rufus_device_t devs[MAX_DRIVES];
+	device_filter_t filter = { .enable_VHDs = TRUE };
+	rufus_device_t* dev = NULL;
+	helper_t helper;
+	int c, i, n;
+	BOOL ret;
+
+	optind = 0;
+	while ((c = getopt_long(argc, argv, "", long_options, NULL)) != -1) {
+		switch (c) {
+		case 'H': filter.enable_HDDs = TRUE; break;
+		case 'N': filter.list_non_usb_removable_drives = TRUE; break;
+		default:
+			usage(stderr);
+			return 2;
+		}
+	}
+	if (optind != argc - 1) {
+		usage(stderr);
+		return 2;
+	}
+	n = GetDevices(devs, ARRAYSIZE(devs), &filter);
+	for (i = 0; i < n; i++) {
+		if (strcmp(devs[i].devnode, argv[optind]) == 0)
+			dev = &devs[i];
+	}
+	if (dev == NULL) {
+		fprintf(stderr, "'%s' is not a drive that Rufus can write to (see 'rufus-cli list')\n", argv[optind]);
+		return 1;
+	}
+	if (!StartHelper(&helper, "en-US")) {
+		fprintf(stderr, "Could not start the helper\n");
+		return 1;
+	}
+	ret = HelperCyclePort(&helper, dev->devnode, dev->diskseq);
+	StopHelper(&helper);
+	fprintf(stderr, ret ? "Done\n" : "Failed%s\n", verbose ? "" : " (-v displays the log)");
+	return ret ? 0 : 1;
+}
+
 int main(int argc, char** argv)
 {
 	static const struct option long_options[] = {
@@ -696,6 +746,8 @@ int main(int argc, char** argv)
 		r = cmd_list(argc - optind, &argv[optind]);
 	} else if (strcmp(argv[optind], "write") == 0) {
 		r = cmd_write(argc - optind, &argv[optind]);
+	} else if (strcmp(argv[optind], "cycle") == 0) {
+		r = cmd_cycle(argc - optind, &argv[optind]);
 	} else {
 		fprintf(stderr, "Unknown command '%s'\n", argv[optind]);
 		usage(stderr);

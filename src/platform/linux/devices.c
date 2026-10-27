@@ -26,10 +26,12 @@
  * needs root, nor opens a device.
  */
 
+#include <fcntl.h>
 #include <libudev.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <sys/sysmacros.h>
 
 #include "rufus.h"
@@ -336,4 +338,38 @@ int GetDevices(rufus_device_t* devs, int max_devs, const device_filter_t* filter
 
 	SortDevices(devs, nb_devs);
 	return nb_devs;
+}
+
+static BOOL WriteAuthorized(const char* usb_syspath, const char* value)
+{
+	char path[sizeof(((rufus_device_t*)0)->usb_syspath) + 16];
+	int fd;
+	BOOL r;
+
+	static_sprintf(path, "%s/authorized", usb_syspath);
+	fd = open(path, O_WRONLY | O_CLOEXEC);
+	if (fd < 0)
+		return FALSE;
+	r = (write(fd, value, 1) == 1);
+	close(fd);
+	return r;
+}
+
+BOOL CyclePort(const rufus_device_t* dev)
+{
+	if (dev->usb_syspath[0] == 0) {
+		uprintf("Could not find a device to cycle!");
+		return FALSE;
+	}
+	uprintf("Cycling port %d of '%s'...", dev->props.port, dev->name);
+	if (!WriteAuthorized(dev->usb_syspath, "0")) {
+		uprintf("Could not cycle device (D1): %s", WindowsErrorString());
+		return FALSE;
+	}
+	usleep(250 * 1000);
+	if (!WriteAuthorized(dev->usb_syspath, "1")) {
+		uprintf("Could not cycle device (E1): %s", WindowsErrorString());
+		return FALSE;
+	}
+	return TRUE;
 }

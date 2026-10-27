@@ -36,6 +36,8 @@ public:
 	void setIndeterminate() { setProgress(-1); }
 	// FlashWindowEx()
 	void setUrgent(bool urgent);
+	// A desktop notification (org.freedesktop.Notifications), for the end of an operation in the background
+	void notify(const QString& summary, const QString& body, bool error);
 
 private:
 	void send(const char* property, const QVariant& value, const char* property2 = nullptr,

@@ -35,6 +35,9 @@
  *                str image name, str bad blocks report path, then the fds of fd_flags in order
  *   IPC_ANSWER   i32 answer (to IPC_ASK)
  *   IPC_CANCEL
+ *   IPC_PROGRESS_TYPE u32 type (UPT_*): what the progress text displays, at any time
+ *   IPC_CYCLE_PORT str devnode, u64 diskseq: disconnect a USB drive and connect it again (Alt-C),
+ *                answered by IPC_DONE
  * Helper → front end:
  *   IPC_HELLO    u32 version
  *   IPC_LOG      str text
@@ -44,10 +47,10 @@
  *   IPC_ASK      u32 question type, str title, str message, then for notifications: i32 flags,
  *                str dont_display_setting, u32 more_info id (0: none), str more_info url;
  *                for lists: u32 size, then the items
- *   IPC_DONE     u32 ret, u32 ErrorStatus (the end of IPC_FORMAT)
+ *   IPC_DONE     u32 ret, u32 ErrorStatus (the end of IPC_FORMAT or IPC_CYCLE_PORT)
  */
 
-#define IPC_VERSION                 1
+#define IPC_VERSION                 2
 #define IPC_MAX_MESSAGE             (64 * 1024)
 #define IPC_MAX_FDS                 4
 #define IPC_MAX_LIST_ITEMS          64
@@ -64,6 +67,8 @@ enum ipc_type {
 	IPC_EVENT,
 	IPC_ASK,
 	IPC_DONE,
+	IPC_PROGRESS_TYPE,
+	IPC_CYCLE_PORT,
 };
 
 /* The file descriptors that come with IPC_FORMAT */

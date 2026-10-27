@@ -40,6 +40,12 @@
 
 #include "rufus.h"
 
+/* The priorities of the Windows threads, which the helper turns into nice values */
+#define THREAD_PRIORITY_LOWEST          -2
+#define THREAD_PRIORITY_NORMAL          0
+#define THREAD_PRIORITY_ABOVE_NORMAL    1
+#define THREAD_PRIORITY_HIGHEST         2
+
 typedef struct {
 	/* The target drive */
 	DWORD DeviceNum;				// Drive index (DRIVE_INDEX_MIN and up), as stored in the device list
@@ -81,6 +87,7 @@ typedef struct {
 	BOOL lock_drive;				// Alt-, (unset to not lock the drive)
 	BOOL use_rufus_mbr;				// Alt-A (unset to not install the Rufus MBR)
 	BOOL detect_fakes;				// Alt-B: detect fake drives during the bad blocks check
+	int thread_priority;			// Alt-+/-: THREAD_PRIORITY_LOWEST to THREAD_PRIORITY_HIGHEST, of the format
 
 	/* The environment of the user */
 	char locale[64];				// As in LC_CTYPE (e.g. "pl_PL.UTF-8"): the keyboard and codepage of DOS

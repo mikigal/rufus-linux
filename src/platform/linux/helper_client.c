@@ -32,6 +32,7 @@
 #include "ui_iface.h"
 #include "boot_check.h"
 #include "helper_client.h"
+#include "progress.h"
 #include "ipc.h"
 
 extern char** environ;
@@ -169,7 +170,7 @@ BOOL HelperFormat(helper_t* h, const helper_job_t* job)
 	struct pollfd pfd = { .fd = h->sock, .events = POLLIN };
 	uint32_t fd_flags = 0, info, duration, type;
 	BOOL cancel_sent = FALSE, ret = FALSE, done = FALSE;
-	int i, n, fd, r = 0;
+	int i, n, fd, r = 0, progress_type = -1;
 
 	ErrorStatus = 0;
 	if (h->sock < 0) {
@@ -195,6 +196,13 @@ BOOL HelperFormat(helper_t* h, const helper_job_t* job)
 			goto disconnected;
 	}
 
+	// What the progress text displays, which the front end may cycle (bare Alt) during the format
+	progress_type = update_progress_type;
+	ipc_init(&out, IPC_PROGRESS_TYPE);
+	ipc_put_u32(&out, (uint32_t)progress_type);
+	if (!ipc_send(h->sock, &out))
+		goto disconnected;
+
 	ipc_init(&out, IPC_FORMAT);
 	ipc_put_u32(&out, sizeof(opts));
 	ipc_put_bytes(&out, &opts, sizeof(opts));
@@ -216,6 +224,13 @@ BOOL HelperFormat(helper_t* h, const helper_job_t* job)
 		goto disconnected;
 
 	while (!done) {
+		if (update_progress_type != progress_type) {
+			progress_type = update_progress_type;
+			ipc_init(&out, IPC_PROGRESS_TYPE);
+			ipc_put_u32(&out, (uint32_t)progress_type);
+			if (!ipc_send(h->sock, &out))
+				goto disconnected;
+		}
 		if (!cancel_sent && IS_ERROR(ErrorStatus) && (SCODE_CODE(ErrorStatus) == ERROR_CANCELLED)) {
 			uprintf("Cancelling the operation of the helper");
 			ipc_init(&out, IPC_CANCEL);
@@ -281,6 +296,45 @@ disconnected:
 	HelperExited(h);
 	if (!IS_ERROR(ErrorStatus))
 		ErrorStatus = RUFUS_ERROR(ERROR_GEN_FAILURE);
+	return FALSE;
+}
+
+BOOL HelperCyclePort(helper_t* h, const char* devnode, uint64_t diskseq)
+{
+	char text[8 * 1024];
+	BOOL ret = FALSE;
+	int r;
+
+	if (h->sock < 0)
+		return FALSE;
+	ipc_init(&out, IPC_CYCLE_PORT);
+	ipc_put_str(&out, devnode);
+	ipc_put_u64(&out, diskseq);
+	if (!ipc_send(h->sock, &out))
+		goto disconnected;
+	while ((r = ipc_recv(h->sock, &in)) != 0) {
+		if ((r < 0) && (errno == EINTR))
+			continue;
+		if (r < 0)
+			goto disconnected;
+		if (in.type == IPC_LOG) {
+			if (ipc_get_str(&in, text, sizeof(text)) != NULL)
+				ui_log(text);
+		} else if (in.type == IPC_DONE) {
+			ret = (BOOL)ipc_get_u32(&in);
+			ipc_get_u32(&in);
+			ipc_close_fds(&in);
+			return ret;
+		} else {
+			goto disconnected;
+		}
+		ipc_close_fds(&in);
+	}
+
+disconnected:
+	ipc_close_fds(&in);
+	uprintf("Lost the connection to the helper");
+	HelperExited(h);
 	return FALSE;
 }
 

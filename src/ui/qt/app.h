@@ -30,7 +30,7 @@ extern BOOL advanced_mode_device, advanced_mode_format, allow_dual_uefi_bios, fo
 extern BOOL enable_HDDs, list_non_usb_removable_drives, use_fake_units, enable_VHDs, enable_vmdk;
 extern BOOL enable_ntfs_compression, enable_file_indexing, preserve_timestamps, lock_drive, use_rufus_mbr;
 extern BOOL detect_fakes, fast_zeroing, persistent_log, user_deleted_rufus_dir;
-extern int preselected_fs;
+extern int preselected_fs, default_thread_priority;
 extern uint32_t ignore_vid_pid[MAX_IGNORE_USB];
 
 /* The locale of the user interface, and the .loc file it comes from */

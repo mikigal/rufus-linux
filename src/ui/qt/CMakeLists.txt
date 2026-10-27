@@ -31,3 +31,9 @@ list(TRANSFORM icon_files PREPEND "${PROJECT_SOURCE_DIR}/res/icons/")
 qt_add_resources(rufus "icons" PREFIX "/icons" BASE "${PROJECT_SOURCE_DIR}/res/icons" FILES ${icon_files})
 
 install(TARGETS rufus RUNTIME DESTINATION bin)
+# The desktop file, whose name is the Wayland app_id (QGuiApplication::desktopFileName()), and the icons
+install(FILES "${PROJECT_SOURCE_DIR}/res/linux/rufus.desktop" DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")
+foreach(size 16 24 32 48 64 128 256 512)
+	install(FILES "${PROJECT_SOURCE_DIR}/res/icons/rufus-${size}.png"
+		DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/${size}x${size}/apps" RENAME rufus.png)
+endforeach()

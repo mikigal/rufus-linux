@@ -31,6 +31,7 @@
 #include "ui_iface.h"
 #include "boot_check.h"
 #include "helper_client.h"
+#include "progress.h"
 #include "ipc.h"
 #include "test.h"
 #include "../res/grub/grub_version.h"
@@ -286,6 +287,9 @@ static void fake_helper(int sock, BOOL cancel)
 	EXPECT(strcmp(ipc_get_str(&b, buf, sizeof(buf)), "grub4dos-" GRUB4DOS_VERSION "/grldr") == 0 && b.nfds == 1, 11);
 	EXPECT(read(b.fds[0], buf, 5) == 5 && memcmp(buf, "grldr", 5) == 0, 12);
 	ipc_close_fds(&b);
+	// What the progress text displays (bare Alt)
+	EXPECT(ipc_recv(sock, &b) == 1 && b.type == IPC_PROGRESS_TYPE, 29);
+	EXPECT(ipc_get_u32(&b) == UPT_PERCENT && ipc_end(&b), 30);
 	EXPECT(ipc_recv(sock, &b) == 1 && b.type == IPC_FORMAT, 13);
 	EXPECT(ipc_get_u32(&b) == sizeof(o) && ipc_get_bytes(&b, &o, sizeof(o)) && o.boot_type == BT_GRUB4DOS, 14);
 	EXPECT(strcmp(ipc_get_str(&b, buf, sizeof(buf)), "/dev/sdz") == 0 && ipc_get_u64(&b) == 42, 15);

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Rufus
+GenericName=USB Formatting Utility
+Comment=Create bootable USB drives from ISO and disk images
+Exec=rufus %f
+Icon=rufus
+Terminal=false
+Categories=System;Filesystem;
+MimeType=application/x-iso9660-image;application/x-cd-image;application/x-raw-disk-image;application/vnd.efi.iso;application/vnd.efi.img;
+Keywords=USB;ISO;bootable;format;flash;image;
+StartupNotify=true
+SingleMainWindow=true

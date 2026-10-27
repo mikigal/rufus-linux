@@ -55,4 +55,10 @@ extern BOOL StartHelper(helper_t* h, const char* language);
 extern BOOL HelperFormat(helper_t* h, const helper_job_t* job);
 
 /* Stop the helper, which cancels what it is doing */
+/*
+ * Disconnect a USB drive and connect it again (Alt-C, and after a "device not
+ * ready" error), through the helper. Runs in the calling thread.
+ */
+extern BOOL HelperCyclePort(helper_t* h, const char* devnode, uint64_t diskseq);
+
 extern void StopHelper(helper_t* h);

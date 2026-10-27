@@ -33,6 +33,8 @@ char app_dir[MAX_PATH] = "", app_data_dir[MAX_PATH] = "", temp_dir[MAX_PATH] = "
 // The settings file (see settings.h), and the settings and cheat modes that the core reads
 char* ini_file = NULL;
 BOOL usb_debug = FALSE, expert_mode = FALSE, ignore_boot_marker = FALSE;
+// Alt-Y and Ctrl-Alt-Y: force the update check to find an update
+int force_update = 0;
 BOOL size_check = TRUE;			// Alt-S: check the size of the image and the cluster size for MS-DOS
 BOOL large_drive = FALSE;		// The drive of the operation is over 1 TB (and may produce short writes)
 // The estimated duration of a format, which the front end computes (for UDF)

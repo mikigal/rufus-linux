@@ -59,3 +59,17 @@ void Taskbar::setUrgent(bool urgent)
 {
 	send("urgent", urgent);
 }
+
+void Taskbar::notify(const QString& summary, const QString& body, bool error)
+{
+	QDBusMessage message = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.Notifications"),
+		QStringLiteral("/org/freedesktop/Notifications"), QStringLiteral("org.freedesktop.Notifications"),
+		QStringLiteral("Notify"));
+	QVariantMap hints;
+
+	hints.insert(QStringLiteral("desktop-entry"), QGuiApplication::desktopFileName());
+	hints.insert(QStringLiteral("urgency"), QVariant::fromValue<uchar>(error ? 2 : 1));
+	message << QGuiApplication::applicationDisplayName() << 0u << QStringLiteral("rufus") << summary << body
+		<< QStringList() << hints << -1;
+	QDBusConnection::sessionBus().call(message, QDBus::NoBlock);
+}

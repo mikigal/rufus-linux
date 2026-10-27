@@ -19,6 +19,7 @@
  */
 
 #include <limits.h>
+#include <algorithm>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -44,7 +45,7 @@ BOOL force_large_fat32 = FALSE, enable_HDDs = FALSE, list_non_usb_removable_driv
 BOOL use_fake_units = TRUE, enable_VHDs = TRUE, enable_vmdk = FALSE, enable_ntfs_compression = FALSE;
 BOOL enable_file_indexing = FALSE, preserve_timestamps = FALSE, lock_drive = TRUE, use_rufus_mbr = TRUE;
 BOOL detect_fakes = TRUE, fast_zeroing = FALSE, persistent_log = FALSE, user_deleted_rufus_dir = FALSE;
-int preselected_fs = FS_UNKNOWN;
+int preselected_fs = FS_UNKNOWN, default_thread_priority = THREAD_PRIORITY_ABOVE_NORMAL;
 uint32_t ignore_vid_pid[MAX_IGNORE_USB] = { 0 };
 loc_cmd* selected_locale = nullptr;
 char loc_file[MAX_PATH] = "";
@@ -109,6 +110,9 @@ void LoadSettings(void)
 	expert_mode = ReadSettingBool(SETTING_EXPERT_MODE);
 	ignore_boot_marker = ReadSettingBool(SETTING_IGNORE_BOOT_MARKER);
 	persistent_log = ReadSettingBool(SETTING_PERSISTENT_LOG);
+	// We want above normal priority by default, so we offset the value
+	default_thread_priority = std::clamp((int)ReadSetting32(SETTING_DEFAULT_THREAD_PRIORITY) + THREAD_PRIORITY_ABOVE_NORMAL,
+		THREAD_PRIORITY_LOWEST, THREAD_PRIORITY_HIGHEST);
 	// This restores the Windows User Experience/unattend.xml mask from the saved user
 	// settings, and is designed to work even if we add new options later.
 	wue_options = ReadSetting32(SETTING_WUE_OPTIONS);
@@ -137,6 +141,7 @@ void SetOptionsFromSettings(rufus_options_t* o)
 	o->lock_drive = lock_drive;
 	o->use_rufus_mbr = use_rufus_mbr;
 	o->detect_fakes = detect_fakes;
+	o->thread_priority = default_thread_priority;
 }
 
 BOOL InitLocalization(void)

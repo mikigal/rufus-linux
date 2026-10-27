@@ -36,6 +36,7 @@ void ResetOptions(rufus_options_t* o)
 	o->lock_drive = TRUE;
 	o->use_rufus_mbr = TRUE;
 	o->detect_fakes = TRUE;
+	o->thread_priority = THREAD_PRIORITY_ABOVE_NORMAL;
 	// The helper gets these from the options it receives, not from its own environment
 	for (i = 0; i < ARRAYSIZE(locale_vars); i++) {
 		value = getenv(locale_vars[i]);
@@ -63,7 +64,8 @@ BOOL CheckOptions(const rufus_options_t* o)
 		return FALSE;
 	if ((o->nb_passes_sel < 0) || (o->nb_passes_sel > 4) ||
 		(o->image_option < -1) || (o->image_option > IMOP_WIN_TO_GO) ||
-		(o->persistence_size > o->disk_size))
+		(o->persistence_size > o->disk_size) ||
+		(o->thread_priority < THREAD_PRIORITY_LOWEST) || (o->thread_priority > THREAD_PRIORITY_HIGHEST))
 		return FALSE;
 	for (i = 0; i < NB_OLD_C32; i++) {
 		if ((o->use_own_c32[i] != FALSE) && (o->use_own_c32[i] != TRUE))

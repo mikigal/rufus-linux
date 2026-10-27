@@ -124,6 +124,39 @@ class CommandLine(unittest.TestCase):
             self.assertEqual(b.read(len(data)), data)
         self._boot(stick, "bios")
 
+    def test_cycle_port(self):
+        # Alt-C: the stick goes away, and comes back as a new disk
+        cli = os.path.abspath(CLI)
+        _, output = self._run("cycle", f'''
+seq=$(cat /sys/block/${{dev#/dev/}}/diskseq)
+{cli} -v cycle "$dev" --hdd || exit 1
+for i in $(seq 100); do
+	udevadm settle
+	new=$(cat /sys/block/sd*/diskseq 2>/dev/null | head -1)
+	[ -n "$new" ] && [ "$new" != "$seq" ] && break
+	sleep 0.2
+done
+echo "DISKSEQ: $seq -> $new"
+[ -n "$new" ] && [ "$new" != "$seq" ] && echo "CLI TEST PASSED"
+''')
+        self.assertIn("Cycling port", output)
+        self.assertIn("CLI TEST PASSED", output, output[-6000:])
+
+    def test_virtual_disk(self):
+        # The loop device of a file is a VHD: listed, and written to like a drive
+        cli = os.path.abspath(CLI)
+        _, output = self._run("vhd", f'''
+modprobe loop 2>/dev/null
+truncate -s 64M /tmp/vhd.img
+loop=$(losetup -fP --show /tmp/vhd.img)
+udevadm settle
+{cli} list | grep -q "Loop Device (vhd.img)" || exit 1
+{cli} -v write "$loop" --yes --fs FAT32 && udevadm settle && fsck.fat -n "${{loop}}p1" && echo "CLI TEST PASSED"
+losetup -d "$loop"
+''')
+        self.assertIn("Found VHD device 'Loop Device (vhd.img)'", output)
+        self.assertIn("CLI TEST PASSED", output, output[-6000:])
+
     def test_interrupt(self):
         # SIGINT cancels the helper, which cleans up after itself
         cli = os.path.abspath(CLI)

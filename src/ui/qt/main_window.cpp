@@ -31,9 +31,12 @@
 #include <QCloseEvent>
 #include <QDir>
 #include <QFileDialog>
+#include <QFile>
 #include <QFrame>
 #include <QGridLayout>
 #include <QGuiApplication>
+#include <QKeyEvent>
+#include <QStyleHints>
 #include <QHBoxLayout>
 #include <QMenu>
 #include <QMimeData>
@@ -55,6 +58,8 @@ extern "C" {
 
 extern "C" {
 extern char embedded_sl_version_str[2][12];
+extern BOOL enable_iso, enable_joliet, enable_rockridge, enable_extra_hashes, ignore_boot_marker;
+#include <cdio/logging.h>
 }
 
 // The width of the window, in average characters (232 dialog units on Windows)
@@ -134,6 +139,9 @@ MainWindow::MainWindow(LogWindow* log, QWidget* parent) : QMainWindow(parent), l
 	filter_.enable_HDDs = enable_HDDs;
 	filter_.list_non_usb_removable_drives = list_non_usb_removable_drives;
 	filter_.use_fake_units = use_fake_units;
+	filter_.enable_VHDs = enable_VHDs;
+	filter_.enable_vmdk = enable_vmdk;
+	memcpy(filter_.ignore_vid_pid, ignore_vid_pid, sizeof(filter_.ignore_vid_pid));
 
 	setObjectName(QStringLiteral("IDD_DIALOG"));
 	setWindowTitle(QStringLiteral(APPLICATION_NAME " %1.%2.%3").arg(rufus_version[0]).arg(rufus_version[1])
@@ -165,6 +173,9 @@ MainWindow::MainWindow(LogWindow* log, QWidget* parent) : QMainWindow(parent), l
 		queued_hotplug_event_ = false;
 		refreshDevices(false);
 	});
+
+	// The cheat codes, ahead of the mnemonics of the widgets
+	qApp->installEventFilter(this);
 
 	// InitDialog() + GetDevices() + EnableControls()
 	refreshDevices(true);
@@ -646,7 +657,7 @@ void MainWindow::render()
 		nb_passes_->setToolTip(nb_passes_->currentText());
 	}
 
-	start_->setEnabled(m_.start_enabled && !format_running_);
+	start_->setEnabled(m_.start_enabled && !format_running_ && !cycling_);
 }
 
 /*
@@ -862,7 +873,7 @@ void MainWindow::onStart(bool zero_drive)
 	const rufus_device_t* dev = selectedDevice();
 	bootcheck_drive_t bcd = {};
 
-	if (format_running_ || (zero_drive ? (dev == nullptr) : !m_.start_enabled))
+	if (format_running_ || cycling_ || (zero_drive ? (dev == nullptr) : !m_.start_enabled))
 		return;
 	zero_drive_ = zero_drive;
 	rules_on_start(&m_);
@@ -1177,6 +1188,11 @@ void MainWindow::onFormatCompleted(bool written)
 		uprintf("\n");
 		refreshDevices(false);
 	}
+	// When the window is in the background, the desktop tells the user
+	if (written && !isActiveWindow() && !IS_ERROR(ErrorStatus))
+		taskbar_.notify(QStringLiteral(APPLICATION_NAME), lmstr(MSG_210), false);
+	else if (written && !isActiveWindow() && (SCODE_CODE(ErrorStatus) != ERROR_CANCELLED))
+		taskbar_.notify(lmstr(MSG_042), lmstr(MSG_043, StrError(ErrorStatus, FALSE)), true);
 	if (!IS_ERROR(ErrorStatus)) {
 		progress_->setValue(MAX_PROGRESS);
 		taskbar_.setProgress(-1);
@@ -1192,6 +1208,9 @@ void MainWindow::onFormatCompleted(bool written)
 		PrintInfo(0, MSG_212);
 		QApplication::beep();
 		QApplication::alert(this);
+		// A port cycle usually helps with a device not ready
+		if (SCODE_CODE(ErrorStatus) == ERROR_NOT_READY)
+			cyclePort(true);
 		Notification(MB_ICONERROR | MB_CLOSE, lmprintf(MSG_042), lmprintf(MSG_043, StrError(ErrorStatus, FALSE)));
 	}
 	ErrorStatus = 0;
@@ -1334,4 +1353,355 @@ void MainWindow::onEvent(enum ui_event_type type, intptr_t param)
 			onEvent(UM_MEDIA_CHANGE, 0);
 		break;
 	}
+}
+
+/*
+ * The cheat codes (the message loop of WinMain() in rufus.c)
+ */
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event)
+{
+	QKeyEvent* key;
+
+	if ((event->type() != QEvent::KeyPress) && (event->type() != QEvent::KeyRelease) &&
+		(event->type() != QEvent::ShortcutOverride))
+		return QMainWindow::eventFilter(watched, event);
+	// Only for the main window and the log, not for the dialogs (which are modal anyway)
+	if (!watched->isWidgetType() || ((static_cast<QWidget*>(watched)->window() != this) &&
+		(static_cast<QWidget*>(watched)->window() != log_)))
+		return QMainWindow::eventFilter(watched, event);
+	key = static_cast<QKeyEvent*>(event);
+
+	// A standalone 'Alt' key toggles the progress report between percent, rate and remaining time
+	if (key->key() == Qt::Key_Alt) {
+		if ((event->type() == QEvent::KeyPress) && !key->isAutoRepeat()) {
+			alt_pressed_ = true;
+			alt_command_ = false;
+		} else if ((event->type() == QEvent::KeyRelease) && alt_pressed_) {
+			if (!alt_command_)
+				update_progress_type = (update_progress_type + 1) % UPT_MAX;
+			alt_pressed_ = false;
+		}
+		return QMainWindow::eventFilter(watched, event);
+	}
+	if (key->modifiers() & Qt::AltModifier)
+		alt_command_ = true;
+	if (event->type() == QEvent::KeyRelease)
+		return QMainWindow::eventFilter(watched, event);
+	// Accepting the override keeps the cheat codes from being taken as mnemonics or shortcuts
+	if (event->type() == QEvent::ShortcutOverride) {
+		if (cheatCode(key->key(), key->modifiers(), true)) {
+			event->accept();
+			return true;
+		}
+		return QMainWindow::eventFilter(watched, event);
+	}
+	if (!key->isAutoRepeat() && cheatCode(key->key(), key->modifiers(), false))
+		return true;
+	return QMainWindow::eventFilter(watched, event);
+}
+
+// Returns true if the key is a cheat code, which gets enacted unless check_only is set
+bool MainWindow::cheatCode(int key, Qt::KeyboardModifiers modifiers, bool check_only)
+{
+	const Qt::KeyboardModifiers mods = modifiers & (Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier);
+	const bool ctrl = (mods == Qt::ControlModifier), alt = (mods == Qt::AltModifier);
+	const bool ctrl_alt = (mods == (Qt::ControlModifier | Qt::AltModifier));
+	const bool op = m_.op_in_progress || format_running_ || cycling_;
+	char path[MAX_PATH];
+
+	// Ctrl-L => Open/Close the log
+	if (ctrl && (key == Qt::Key_L)) {
+		if (!check_only)
+			log_->toggle();
+		return true;
+	}
+	// Ctrl-P => Persistent log
+	if (ctrl && (key == Qt::Key_P)) {
+		if (!check_only) {
+			persistent_log = !persistent_log;
+			WriteSettingBool(SETTING_PERSISTENT_LOG, persistent_log);
+			PrintStatusTimeout(lmprintf(MSG_336), persistent_log);
+		}
+		return true;
+	}
+	// Alt +/- => Increase or decrease the priority of the format (from the next one on)
+	if (alt && ((key == Qt::Key_Plus) || (key == Qt::Key_Minus) || (key == Qt::Key_Equal))) {
+		if (!check_only) {
+			int delta = (key == Qt::Key_Minus) ? -1 : +1;
+			if (((delta == +1) && (default_thread_priority < THREAD_PRIORITY_HIGHEST)) ||
+				((delta == -1) && (default_thread_priority > THREAD_PRIORITY_LOWEST))) {
+				default_thread_priority += delta;
+				WriteSetting32(SETTING_DEFAULT_THREAD_PRIORITY, default_thread_priority - THREAD_PRIORITY_ABOVE_NORMAL);
+			}
+			PrintStatus(STATUS_MSG_TIMEOUT, MSG_318, default_thread_priority);
+		}
+		return true;
+	}
+
+	// The following cheat modes should not be enacted when an operation is in progress
+	if (!alt && !ctrl_alt)
+		return false;
+	if (alt) {
+		switch (key) {
+		case Qt::Key_Period: case Qt::Key_Comma: case Qt::Key_A: case Qt::Key_B: case Qt::Key_C: case Qt::Key_D:
+		case Qt::Key_E: case Qt::Key_F: case Qt::Key_G: case Qt::Key_H: case Qt::Key_I: case Qt::Key_J:
+		case Qt::Key_K: case Qt::Key_L: case Qt::Key_M: case Qt::Key_N: case Qt::Key_O: case Qt::Key_P:
+		case Qt::Key_Q: case Qt::Key_R: case Qt::Key_S: case Qt::Key_T: case Qt::Key_U: case Qt::Key_V:
+		case Qt::Key_W: case Qt::Key_X: case Qt::Key_Y: case Qt::Key_Z:
+			break;
+		default:
+			return false;
+		}
+	} else if ((key != Qt::Key_Z) && (key != Qt::Key_D) && (key != Qt::Key_E) && (key != Qt::Key_F) &&
+		(key != Qt::Key_Y)) {
+		return false;
+	}
+	if (check_only)
+		return true;
+	if (op)
+		return true;
+
+	if (ctrl_alt) {
+		switch (key) {
+		// Ctrl-Alt-Z => Zero the drive while trying to skip empty blocks
+		case Qt::Key_Z:
+			fast_zeroing = TRUE;
+			onStart(true);
+			break;
+		// Ctrl-Alt-D => Toggle dark mode (Qt does not need a restart)
+		case Qt::Key_D:
+			WriteSetting32(SETTING_DARK_MODE,
+				(QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark) ? 2 : 1);
+			ApplyColorScheme();
+			break;
+		// Ctrl-Alt-E => Expert Mode
+		case Qt::Key_E:
+			expert_mode = !expert_mode;
+			WriteSettingBool(SETTING_EXPERT_MODE, expert_mode);
+			PrintStatusTimeout(lmprintf(MSG_347), expert_mode);
+			break;
+		// Ctrl-Alt-F => List non USB removable drives such as eSATA, etc - CAUTION!!!
+		case Qt::Key_F:
+			list_non_usb_removable_drives = !list_non_usb_removable_drives;
+			if (list_non_usb_removable_drives) {
+				previous_enable_HDDs_ = enable_HDDs;
+				enable_HDDs = TRUE;
+			} else {
+				enable_HDDs = previous_enable_HDDs_;
+			}
+			filter_.enable_HDDs = enable_HDDs;
+			filter_.list_non_usb_removable_drives = list_non_usb_removable_drives;
+			PrintStatusTimeout(lmprintf(MSG_287), list_non_usb_removable_drives);
+			uprintf("%sListing of non-USB removable drives %s",
+				(list_non_usb_removable_drives) ? "CAUTION: " : "", (list_non_usb_removable_drives) ? "enabled" : "disabled");
+			if (list_non_usb_removable_drives)
+				uprintf("By using this unofficial cheat mode you forfeit ANY RIGHT to complain if you lose valuable data!");
+			refreshDevices(false);
+			break;
+		// Ctrl-Alt-Y => Force update check to be successful and ignore timestamp errors
+		case Qt::Key_Y:
+			force_update = (force_update > 0) ? 0 : 2;
+			PrintStatusTimeout(lmprintf(MSG_259), force_update);
+			break;
+		}
+		return true;
+	}
+
+	switch (key) {
+	// Alt-. => Enable USB enumeration debug
+	case Qt::Key_Period:
+		usb_debug = !usb_debug;
+		cdio_loglevel_default = usb_debug ? CDIO_LOG_INFO : CDIO_LOG_WARN;
+		WriteSettingBool(SETTING_ENABLE_USB_DEBUG, usb_debug);
+		PrintStatusTimeout(lmprintf(MSG_270), usb_debug);
+		refreshDevices(false);
+		break;
+	// Alt-, => Disable physical drive locking
+	case Qt::Key_Comma:
+		lock_drive = !lock_drive;
+		PrintStatusTimeout(lmprintf(MSG_282), lock_drive);
+		break;
+	// Alt-A => Toggle use of Rufus MBR for Windows boot
+	case Qt::Key_A:
+		use_rufus_mbr = !use_rufus_mbr;
+		WriteSettingBool(SETTING_DISABLE_RUFUS_MBR, !use_rufus_mbr);
+		PrintStatusTimeout(lmprintf(MSG_349), use_rufus_mbr);
+		break;
+	// Alt-B => Toggle fake drive detection during bad blocks check
+	case Qt::Key_B:
+		detect_fakes = !detect_fakes;
+		WriteSettingBool(SETTING_DISABLE_FAKE_DRIVES_CHECK, !detect_fakes);
+		PrintStatusTimeout(lmprintf(MSG_256), detect_fakes);
+		break;
+	// Alt-C => Cycle USB port for currently selected device
+	case Qt::Key_C:
+		cyclePort(false);
+		break;
+	// Alt-D => Delete the subdirectory where Rufus keeps its files
+	case Qt::Key_D:
+		static_sprintf(path, "%s/%s", app_data_dir, FILES_DIR);
+		PrintStatusDebug(STATUS_MSG_TIMEOUT, MSG_264, path);
+		QDir(QString::fromUtf8(path)).removeRecursively();
+		user_deleted_rufus_dir = TRUE;
+		break;
+	// Alt-E => Enhanced installation mode (allow dual UEFI/BIOS mode and FAT32 for Windows)
+	case Qt::Key_E:
+		allow_dual_uefi_bios = !allow_dual_uefi_bios;
+		WriteSettingBool(SETTING_ENABLE_WIN_DUAL_EFI_BIOS, allow_dual_uefi_bios);
+		PrintStatusTimeout(lmprintf(MSG_266), allow_dual_uefi_bios);
+		rules_on_toggle_dual_uefi_bios(&m_);
+		render();
+		break;
+	// Alt-F => Toggle detection of USB HDDs
+	case Qt::Key_F:
+		filter_.enable_HDDs = enable_HDDs = !enable_HDDs;
+		PrintStatusTimeout(lmprintf(MSG_253), enable_HDDs);
+		refreshDevices(false);
+		break;
+	// Alt-G => Toggle detection of Virtual Disks (the loop devices of files)
+	case Qt::Key_G:
+		filter_.enable_VHDs = enable_VHDs = !enable_VHDs;
+		WriteSettingBool(SETTING_DISABLE_VHDS, !enable_VHDs);
+		PrintStatusTimeout(lmprintf(MSG_308), enable_VHDs);
+		refreshDevices(false);
+		break;
+	// Alt-H => Toggle computation of SHA512 digest
+	case Qt::Key_H:
+		enable_extra_hashes = !enable_extra_hashes;
+		WriteSettingBool(SETTING_ENABLE_EXTRA_HASHES, enable_extra_hashes);
+		PrintStatusTimeout(lmprintf(MSG_312), enable_extra_hashes);
+		break;
+	// Alt-I => Toggle ISO support (to force DD mode on an ISOHybrid)
+	case Qt::Key_I:
+		enable_iso = !enable_iso;
+		PrintStatusTimeout(lmprintf(MSG_262), enable_iso);
+		if (image_path != nullptr)
+			startImageScan(true);
+		break;
+	// Alt-J => Toggle Joliet support for ISO9660 images
+	case Qt::Key_J:
+		enable_joliet = !enable_joliet;
+		PrintStatusTimeout(lmprintf(MSG_257), enable_joliet);
+		break;
+	// Alt-K => Toggle Rock Ridge support for ISO9660 images
+	case Qt::Key_K:
+		enable_rockridge = !enable_rockridge;
+		PrintStatusTimeout(lmprintf(MSG_258), enable_rockridge);
+		break;
+	// Alt-L => Force Large FAT32 format to be used on < 32 GB drives
+	case Qt::Key_L:
+		m_.force_large_fat32 = force_large_fat32 = !force_large_fat32;
+		WriteSettingBool(SETTING_FORCE_LARGE_FAT32_FORMAT, force_large_fat32);
+		PrintStatusTimeout(lmprintf(MSG_254), force_large_fat32);
+		refreshDevices(false);
+		break;
+	// Alt-M => Toggle the check for the 0x55 0xAA boot marker at offset 0x1fe
+	case Qt::Key_M:
+		ignore_boot_marker = !ignore_boot_marker;
+		WriteSettingBool(SETTING_IGNORE_BOOT_MARKER, ignore_boot_marker);
+		PrintStatusTimeout(lmprintf(MSG_319), ignore_boot_marker);
+		break;
+	// Alt-N => Enable NTFS compression
+	case Qt::Key_N:
+		enable_ntfs_compression = !enable_ntfs_compression;
+		PrintStatusTimeout(lmprintf(MSG_260), enable_ntfs_compression);
+		break;
+	// Alt-O => Save from Optical drive to ISO
+	case Qt::Key_O:
+		uprintf("Saving an optical disc to an ISO image is not available yet");
+		ui_status(FALSE, STATUS_MSG_TIMEOUT, "Optical disc to ISO: not available yet");
+		break;
+	// Alt-P => Toggle GPT ESP to and from Basic Data type: Linux mounts an ESP as any partition
+	case Qt::Key_P:
+		uprintf("Alt-P (ESP to Basic Data) is not needed on Linux, which can mount an ESP");
+		ui_status(FALSE, STATUS_MSG_TIMEOUT, "ESP toggle: not needed on Linux");
+		break;
+	// Alt-Q => Enable file indexing (for file systems that support it)
+	case Qt::Key_Q:
+		enable_file_indexing = !enable_file_indexing;
+		WriteSettingBool(SETTING_ENABLE_FILE_INDEXING, enable_file_indexing);
+		PrintStatusTimeout(lmprintf(MSG_290), enable_file_indexing);
+		break;
+	// Alt-R => Remove the settings (the registry keys on Windows)
+	case Qt::Key_R:
+		if ((ini_file != nullptr) && QFile::resize(QString::fromUtf8(ini_file), 0))
+			PrintStatus(STATUS_MSG_TIMEOUT, MSG_248);
+		else
+			PrintStatus(STATUS_MSG_TIMEOUT, MSG_249);
+		break;
+	// Alt-S => Disable size limit for ISOs
+	case Qt::Key_S:
+		size_check = !size_check;
+		PrintStatusTimeout(lmprintf(MSG_252), size_check);
+		refreshDevices(false);
+		break;
+	// Alt-T => Preserve timestamps when extracting ISO files
+	case Qt::Key_T:
+		preserve_timestamps = !preserve_timestamps;
+		WriteSettingBool(SETTING_PRESERVE_TIMESTAMPS, preserve_timestamps);
+		PrintStatusTimeout(lmprintf(MSG_269), preserve_timestamps);
+		break;
+	// Alt-U => Use PROPER size units, instead of this whole Kibi/Gibi nonsense
+	case Qt::Key_U:
+		filter_.use_fake_units = use_fake_units = !use_fake_units;
+		WriteSettingBool(SETTING_USE_PROPER_SIZE_UNITS, !use_fake_units);
+		PrintStatusTimeout(lmprintf(MSG_263), !use_fake_units);
+		refreshDevices(false);
+		break;
+	// Alt-V => Use VDS facilities for formatting, which Linux does not have
+	case Qt::Key_V:
+		PrintStatusTimeout("VDS", FALSE);
+		break;
+	// Alt-W => Enable VMWare disk detection
+	case Qt::Key_W:
+		filter_.enable_vmdk = enable_vmdk = !enable_vmdk;
+		WriteSettingBool(SETTING_ENABLE_VMDK_DETECTION, enable_vmdk);
+		PrintStatusTimeout(lmprintf(MSG_265), enable_vmdk);
+		refreshDevices(false);
+		break;
+	// Alt-X => Delete the NoDriveTypeAutorun key on exit: Linux has no such key
+	case Qt::Key_X:
+		uprintf("Alt-X (NoDriveTypeAutorun) is not needed on Linux, where Rufus hides the drive from udisks");
+		ui_status(FALSE, STATUS_MSG_TIMEOUT, "NoDriveTypeAutorun: not needed on Linux");
+		break;
+	// Alt-Y => Force the update check to be successful
+	case Qt::Key_Y:
+		force_update = (force_update > 0) ? 0 : 1;
+		PrintStatusTimeout(lmprintf(MSG_259), force_update);
+		break;
+	// Alt-Z => Zero the drive
+	case Qt::Key_Z:
+		fast_zeroing = FALSE;
+		onStart(true);
+		break;
+	}
+	return true;
+}
+
+// Alt-C, or after a "device not ready" error: through the helper, in a thread (for the polkit prompt)
+void MainWindow::cyclePort(bool after_error)
+{
+	const rufus_device_t* dev = selectedDevice();
+	std::string devnode;
+	uint64_t diskseq;
+
+	if ((dev == nullptr) || cycling_)
+		return;
+	if (after_error)
+		uprintf("Device not ready → Trying to cycle port...");
+	devnode = dev->devnode;
+	diskseq = dev->diskseq;
+	cycling_ = true;
+	render();
+	std::thread([this, devnode, diskseq] {
+		if ((session_helper.sock < 0) && !StartHelper(&session_helper, selected_locale_name()))
+			uprintf("Could not start the helper");
+		else
+			HelperCyclePort(&session_helper, devnode.c_str(), diskseq);
+		QMetaObject::invokeMethod(this, [this] {
+			cycling_ = false;
+			render();
+		}, Qt::QueuedConnection);
+	}).detach();
 }

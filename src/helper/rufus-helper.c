@@ -34,11 +34,13 @@
 #include <fcntl.h>
 #include <ftw.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -52,6 +54,8 @@
 #include "image_scan.h"
 #include "boot_check.h"
 #include "format_thread.h"
+#include "progress.h"
+#include "platform.h"
 #include "localization.h"
 #include "ipc.h"
 
@@ -251,6 +255,9 @@ static BOOL Work(const job_t* job)
 
 	ui_set_iface(&iface);
 	ErrorStatus = 0;
+	// The priority of the format, as Windows sets the one of its thread (5 nice levels a step)
+	if (setpriority(PRIO_PROCESS, 0, -5 * opts.thread_priority) != 0)
+		uprintf("Could not set the priority of the format: %s", WindowsErrorString());
 	uprintf("Helper: writing to %s for the front end", job->devnode);
 	if (!CreateDataDir(data_dir, sizeof(data_dir))) {
 		uprintf("Could not create the directory of the helper: %s", WindowsErrorString());
@@ -339,8 +346,8 @@ static void ClearFiles(void)
 	nb_files = 0;
 }
 
-// The drive must be one that Rufus lists, as the front end saw it
-static BOOL FindDrive(job_t* job)
+// A drive that Rufus lists (with its most permissive filters), as the front end saw it
+static const rufus_device_t* FindDevice(const char* devnode, uint64_t diskseq)
 {
 	static rufus_device_t devs[MAX_DRIVES];
 	device_filter_t filter = { .enable_HDDs = TRUE, .list_non_usb_removable_drives = TRUE, .enable_VHDs = TRUE,
@@ -348,17 +355,44 @@ static BOOL FindDrive(job_t* job)
 	int i, n = GetDevices(devs, ARRAYSIZE(devs), &filter);
 
 	for (i = 0; i < n; i++) {
-		if (strcmp(devs[i].devnode, job->devnode) != 0)
+		if (strcmp(devs[i].devnode, devnode) != 0)
 			continue;
-		if ((devs[i].diskseq != job->diskseq) || (devs[i].size != opts.disk_size)) {
-			uprintf("%s is no longer the drive that was selected", job->devnode);
-			return FALSE;
+		if (devs[i].diskseq != diskseq) {
+			uprintf("%s is no longer the drive that was selected", devnode);
+			return NULL;
 		}
-		static_strcpy(job->syspath, devs[i].syspath);
-		return TRUE;
+		return &devs[i];
 	}
-	uprintf("%s is not a drive that Rufus can write to", job->devnode);
-	return FALSE;
+	uprintf("%s is not a drive that Rufus can write to", devnode);
+	return NULL;
+}
+
+// The drive must be one that Rufus lists, as the front end saw it
+static BOOL FindDrive(job_t* job)
+{
+	const rufus_device_t* dev = FindDevice(job->devnode, job->diskseq);
+
+	if (dev == NULL)
+		return FALSE;
+	if (dev->size != opts.disk_size) {
+		uprintf("%s is no longer the drive that was selected", job->devnode);
+		return FALSE;
+	}
+	static_strcpy(job->syspath, dev->syspath);
+	return TRUE;
+}
+
+// In the worker: what the progress text displays, as the front end cycles it
+static void* ProgressTypeThread(void* param)
+{
+	int fd = (int)(intptr_t)param;
+	int32_t type;
+
+	while (read(fd, &type, sizeof(type)) == sizeof(type)) {
+		if ((type >= 0) && (type < UPT_MAX))
+			update_progress_type = type;
+	}
+	return NULL;
 }
 
 static BOOL ParseFormat(ipc_msg_t* m, job_t* job)
@@ -402,10 +436,11 @@ static BOOL RunWorker(job_t* job)
 {
 	struct sigaction sa = { .sa_handler = on_cancel };	// No SA_RESTART: a pending question gets interrupted
 	struct pollfd pfd[2];
-	int answer_pipe[2], result_pipe[2], pidfd, status = 0, r;
+	int answer_pipe[2], result_pipe[2], type_pipe[2], pidfd, status = 0, r;
+	pthread_t type_thread;
 	uint32_t result[2] = { FALSE, RUFUS_ERROR(ERROR_GEN_FAILURE) };
 	BOOL connected = TRUE;
-	int32_t answer;
+	int32_t answer, type;
 	pid_t pid;
 
 	if (pipe2(answer_pipe, O_CLOEXEC) != 0) {
@@ -418,8 +453,7 @@ static BOOL RunWorker(job_t* job)
 		send_done(FALSE, RUFUS_ERROR(ERROR_NOT_ENOUGH_MEMORY));
 		return TRUE;
 	}
-	pid = fork();
-	if (pid < 0) {
+	if (pipe2(type_pipe, O_CLOEXEC) != 0) {
 		close(answer_pipe[0]);
 		close(answer_pipe[1]);
 		close(result_pipe[0]);
@@ -427,10 +461,25 @@ static BOOL RunWorker(job_t* job)
 		send_done(FALSE, RUFUS_ERROR(ERROR_NOT_ENOUGH_MEMORY));
 		return TRUE;
 	}
+	pid = fork();
+	if (pid < 0) {
+		close(answer_pipe[0]);
+		close(answer_pipe[1]);
+		close(result_pipe[0]);
+		close(result_pipe[1]);
+		close(type_pipe[0]);
+		close(type_pipe[1]);
+		send_done(FALSE, RUFUS_ERROR(ERROR_NOT_ENOUGH_MEMORY));
+		return TRUE;
+	}
 	if (pid == 0) {
 		close(answer_pipe[1]);
 		close(result_pipe[0]);
+		close(type_pipe[1]);
 		answer_fd = answer_pipe[0];
+		// A thread, rather than a signal, which would interrupt the system calls of the format
+		if (pthread_create(&type_thread, NULL, ProgressTypeThread, (void*)(intptr_t)type_pipe[0]) == 0)
+			pthread_detach(type_thread);
 		sigaction(SIGUSR1, &sa, NULL);
 		result[0] = Work(job);
 		result[1] = ErrorStatus;
@@ -438,6 +487,7 @@ static BOOL RunWorker(job_t* job)
 	}
 	close(answer_pipe[0]);
 	close(result_pipe[1]);
+	close(type_pipe[0]);
 	pidfd = (int)syscall(SYS_pidfd_open, pid, 0);
 	pfd[0].fd = SOCK;
 	pfd[0].events = POLLIN;
@@ -460,6 +510,10 @@ static BOOL RunWorker(job_t* job)
 				kill(pid, SIGUSR1);
 		} else if ((r > 0) && (in.type == IPC_CANCEL)) {
 			kill(pid, SIGUSR1);
+		} else if ((r > 0) && (in.type == IPC_PROGRESS_TYPE)) {
+			type = (int32_t)ipc_get_u32(&in);
+			if (!ipc_end(&in) || (write(type_pipe[1], &type, sizeof(type)) != sizeof(type)))
+				uprintf("Could not forward the progress type to the worker");
 		} else {
 			// The front end went away (or does not follow the protocol): cancel, and wait for the worker
 			kill(pid, SIGUSR1);
@@ -469,6 +523,7 @@ static BOOL RunWorker(job_t* job)
 		ipc_close_fds(&in);
 	}
 	close(answer_pipe[1]);
+	close(type_pipe[1]);
 	while ((waitpid(pid, &status, 0) < 0) && (errno == EINTR));
 	if (pidfd >= 0)
 		close(pidfd);
@@ -513,6 +568,7 @@ int main(int argc, char** argv)
 	int type = 0, domain = 0, r;
 	socklen_t len = sizeof(int);
 	BOOL hello = FALSE;
+	const rufus_device_t* dev;
 	job_t job;
 
 	if ((getsockopt(SOCK, SOL_SOCKET, SO_TYPE, &type, &len) != 0) || (type != SOCK_SEQPACKET) ||
@@ -587,6 +643,30 @@ int main(int argc, char** argv)
 			break;
 		case IPC_CANCEL:
 			// Nothing to cancel
+			break;
+		case IPC_PROGRESS_TYPE:
+			// The next worker inherits it
+			type = (int)ipc_get_u32(&in);
+			if (!ipc_end(&in) || (type < 0) || (type >= UPT_MAX))
+				goto out;
+			update_progress_type = type;
+			break;
+		case IPC_CYCLE_PORT:
+			ErrorStatus = 0;
+			if (ipc_get_str(&in, job.devnode, sizeof(job.devnode)) == NULL)
+				job.devnode[0] = 0;
+			job.diskseq = ipc_get_u64(&in);
+			if ((job.devnode[0] == 0) || !ipc_end(&in)) {
+				send_done(FALSE, RUFUS_ERROR(ERROR_INVALID_PARAMETER));
+				break;
+			}
+			dev = FindDevice(job.devnode, job.diskseq);
+			if (dev == NULL)
+				send_done(FALSE, RUFUS_ERROR(ERROR_ACCESS_DENIED));
+			else if (!CyclePort(dev))
+				send_done(FALSE, RUFUS_ERROR(ERROR_GEN_FAILURE));
+			else
+				send_done(TRUE, 0);
 			break;
 		default:
 			goto out;
