@@ -50,14 +50,14 @@ jobs:
         if: startsWith(matrix.image, 'archlinux')
         run: |
           pacman -Syu --noconfirm --needed base-devel git cmake ninja clang qt6-base \
-            e2fsprogs dosfstools libisoburn libntfs-3g openssl mtools
+            e2fsprogs dosfstools libisoburn libntfs-3g openssl mtools qemu-img
 
       - name: Install dependencies (Fedora)
         if: startsWith(matrix.image, 'fedora')
         run: |
           dnf install -y git gcc gcc-c++ clang cmake ninja-build pkgconf-pkg-config \
             qt6-qtbase-devel e2fsprogs e2fsprogs-devel libcom_err-devel util-linux \
-            dosfstools xorriso ntfs-3g-devel openssl-devel mtools
+            dosfstools xorriso ntfs-3g-devel openssl-devel mtools qemu-img
 
       - name: Install dependencies (Ubuntu)
         if: startsWith(matrix.image, 'ubuntu')
@@ -65,7 +65,7 @@ jobs:
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential cmake ninja-build \
             pkg-config e2fsprogs libext2fs-dev comerr-dev dosfstools xorriso libntfs-3g-dev \
-            libssl-dev mtools
+            libssl-dev mtools qemu-utils
 
       - uses: actions/checkout@v5
 

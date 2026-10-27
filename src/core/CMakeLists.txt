@@ -2,6 +2,7 @@
 # privileged helper and the CLI. It must never include a Win32 or UI header.
 # Upstream files keep their place in src/, to ease merges; new ones live here.
 add_library(rufus_core STATIC
+	analyze.c
 	globals.c
 	options.c
 	progress.c
@@ -12,17 +13,19 @@ add_library(rufus_core STATIC
 	../cregex_parse.c
 	../cregex_vm.c
 	../hash.c
+	../iso.c
 	../localization.c
 	../parser.c
 	../pki.c
 	../stdfn.c
 	../stdio.c
+	../vhd.c
 	../xml.c)
 target_include_directories(rufus_core PUBLIC
 	"${CMAKE_CURRENT_SOURCE_DIR}"
 	"${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(rufus_core
-	PUBLIC rufus_compat bled m Threads::Threads OpenSSL::Crypto
+	PUBLIC rufus_compat bled rufus_cdio syslinux_fat wim mssys m Threads::Threads OpenSSL::Crypto
 	PRIVATE rufus_warnings)
 
 # The payloads that rufus.rc embeds (see resource.c)

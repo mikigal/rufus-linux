@@ -125,13 +125,32 @@ Done:
     file descriptors and establishes the rest itself.
   - `InitProgress()` is in `core/progress.c`, and is checked against the upstream one
     (without VDS) for every START of the differential test.
+- **Hashes and Secure Boot** (`hash.c`, `pki.c`, `core/resource.c`): the digests, the
+  hash DB, the DBX/SBAT/SVN/certificate revocation checks (OpenSSL) and the payloads of
+  `rufus.rc` (`.incbin`, §4.5). `HashThread()` runs on pthreads. Covered by
+  `tests/test_hash.c`, with PEs that it signs with its own test CA.
+- **Image analysis** (`iso.c`, `vhd.c`, `core/analyze.c`): the ISO scan and extraction,
+  the disk image detection and the MBR/PBR analysis.
+  - Paths are relative to the extraction directory (from its length) instead of
+    skipping a drive letter, and `wininst_path[]` is relative to the root of the ISO
+    (`/sources/install.wim`).
+  - The lookups that relied on a case insensitive file system use
+    `PathFileExistsNoCase()`, and the FAT attributes go through
+    `FAT_IOCTL_SET_ATTRIBUTES`.
+  - Fixed and dynamic VHDs are read directly (upstream mounts them with VirtDisk); VHDX
+    is detected, but waits for `qemu-img`.
+  - Saving an image (optical disc to ISO, VHD/VHDX/FFU) waits for stage 4 in
+    `iso_save.c` and `vhd_save.c`, which are not built.
+  - `tests/test_iso.c` builds Linux and Windows-like ISOs (xorriso, mtools, wimlib),
+    VHDs (`qemu-img`) and disk images, and checks the image report, the extraction to
+    FAT and NTFS (persistence and label patches, symbolic links, `md5sum.txt`) and the
+    reads from the WIM and from `efi.img`.
 
 Next:
 
-1. Image analysis in the core: `iso.c` (path refactor), `hash.c`, `syslinux.c`, the image
-   detection of `vhd.c`, Secure Boot checks (OpenSSL), then `ImageScanThread` and
-   `BootCheckThread` with their questions through `ui_ask()`. The boot check (still in
-   `rufus.c`) then writes its decisions to `opts`.
+1. `ImageScanThread` and `BootCheckThread` in the core, with the scan functions of
+   `wue.c`. The questions of the boot check go through `ui_ask()`, and its decisions to
+   `opts`.
 2. pthreads, atomic `ErrorStatus` and cooperative cancellation.
 
 ---
@@ -752,6 +771,9 @@ Size: S / M / L / XL (relative effort). Each stage ends with a working, testable
   - the xz index / 7z header buffers were sized from the file and put on the stack.
 
   Both are fixed in this port.
+- **libcdio**: `_fs_stat_traverse()` and `_fs_iso_stat_traverse()` copy the symbolic
+  link buffer of the root directory from a NULL pointer (with a zero size), on every
+  scan. Fixed in this port.
 - **wimlib ISO reader** (Windows version):
   - `full_read()` always read from offset 0;
   - reads past the end of the file silently returned a short buffer.

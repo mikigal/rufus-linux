@@ -72,6 +72,7 @@ enum ui_event_type {
 	UM_MEDIA_CHANGE,			// The device list needs to be refreshed
 	UM_PROGRESS_INIT,			// Reset a progress bar before an operation (param: dialog handle, 0 for the main window)
 	UM_PROGRESS_EXIT,			// Restore the progress bar after an operation
+	UM_PROGRESS_MARQUEE,		// Display an indeterminate progress on the main bar (e.g. during a scan)
 	UM_NO_UPDATE,				// The update check found nothing
 	UM_UPDATE_CSM_TOOLTIP,		// The target system changed
 	UM_ENABLE_CONTROLS,			// param: TRUE to enable the main window controls

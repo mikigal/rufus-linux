@@ -722,6 +722,7 @@ extern uint32_t ReadISOFileToBuffer(const char* iso, const char* iso_file, uint8
 extern BOOL HasEfiImgBootLoaders(void* iso);
 extern BOOL DumpFatDir(void* iso, const char* path, int32_t cluster);
 extern uint16_t GetSyslinuxVersion(char* buf, size_t buf_size, char** ext);
+extern void SetEmbeddedSyslinuxVersions(void);
 extern BOOL SetAutorun(const char* path);
 extern BOOL FileIO(enum file_io_type io_type, char* path, char** buffer, DWORD* size);
 // Embedded payloads (IDR_* from resource.h). A resource that is not duplicated is read-only.
@@ -732,6 +733,8 @@ extern DWORD GetResourceSize(int id, const char* desc);
 extern BOOL PathFileExistsNoCase(char* path);
 extern BOOL copy_file(const char* src, const char* dst, BOOL fail_if_exists);
 extern int mkdir_p(const char* path, mode_t mode);
+// Set the FILE_ATTRIBUTE_READONLY/HIDDEN/SYSTEM/ARCHIVE attributes of a file on FAT (ignored elsewhere)
+extern void SetFileAttributesFd(int fd, DWORD attributes);
 // UTF-16 or UTF-32 wide string (as libfat produces) to allocated UTF-8
 extern char* wchar_to_utf8(const wchar_t* wstr);
 extern DWORD RunCommandWithProgress(const char* const* argv, const char* dir, BOOL log, int msg, const char* pattern);
@@ -754,6 +757,9 @@ extern void parse_update(char* buf, size_t len);
 extern void* get_data_from_asn1(const uint8_t* buf, size_t buf_len, const char* oid_str, uint8_t asn1_type, size_t* data_len);
 extern int sanitize_label(char* label);
 extern int IsHDD(DWORD DriveIndex, uint16_t vid, uint16_t pid, const char* strid);
+// Returns TRUE if the drive or image seems bootable, FALSE otherwise
+extern BOOL AnalyzeMBR(int fd, uint32_t SectorSize, const char* TargetName, BOOL bSilent);
+extern BOOL AnalyzePBR(int fd, uint64_t PartitionOffset, uint32_t SectorSize);
 extern int GetIssuerCertificateInfo(uint8_t* cert, cert_info_t* info);
 extern BOOL ValidateOpensslSignature(BYTE* pbBuffer, DWORD dwBufferLen, BYTE* pbSignature, DWORD dwSigLen);
 extern BOOL ValidateRsaSha256Signature(const uint8_t* modulus, size_t modulus_len, const BYTE* pbBuffer,

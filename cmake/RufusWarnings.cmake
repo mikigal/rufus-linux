@@ -8,6 +8,8 @@ add_library(rufus_warnings INTERFACE)
 target_compile_options(rufus_warnings INTERFACE
 	-Wall -Wextra -Wshadow -Wformat-security -Wundef -Wunused
 	-Wno-unused-parameter -Wno-sign-compare
+	# safe_sprintf()/static_sprintf() truncate to their fixed size buffers by design
+	-Wno-format-truncation
 	$<$<COMPILE_LANGUAGE:C>:-Wstrict-prototypes -Werror=implicit-function-declaration>)
 if(RUFUS_WERROR)
 	target_compile_options(rufus_warnings INTERFACE -Werror)

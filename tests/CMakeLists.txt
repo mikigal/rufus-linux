@@ -36,6 +36,9 @@ target_link_libraries(test_core PRIVATE rufus_core)
 rufus_add_test(test_hash test_hash.c)
 target_link_libraries(test_hash PRIVATE rufus_core)
 
+rufus_add_test(test_iso test_iso.c)
+target_link_libraries(test_iso PRIVATE rufus_core)
+
 # The rules are checked against the original Windows functions (rules_oracle/rules_win.c)
 rufus_add_test(test_rules test_rules.c rules_oracle/rules_win.c)
 target_link_libraries(test_rules PRIVATE rufus_core)

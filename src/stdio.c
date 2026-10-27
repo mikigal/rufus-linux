@@ -28,7 +28,9 @@
 #include <fcntl.h>
 #include <math.h>
 #include <time.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <linux/msdos_fs.h>
 
 #include "rufus.h"
 #include "missing.h"
@@ -178,6 +180,22 @@ out:
 	if (close(fd_dst) != 0)
 		ret = FALSE;
 	return ret;
+}
+
+// Windows sets the hidden and system attributes, which bootloaders such as ldlinux.sys
+// rely on, when it creates a file. On Linux, FAT has an ioctl for them.
+void SetFileAttributesFd(int fd, DWORD attributes)
+{
+	uint32_t fat_attr = 0;
+
+	if (fd < 0)
+		return;
+	if (ioctl(fd, FAT_IOCTL_GET_ATTRIBUTES, &fat_attr) != 0)
+		return;	// Not a FAT file system
+	fat_attr &= ~(ATTR_RO | ATTR_HIDDEN | ATTR_SYS | ATTR_ARCH);
+	fat_attr |= attributes & (FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_ARCHIVE);
+	if (ioctl(fd, FAT_IOCTL_SET_ATTRIBUTES, &fat_attr) != 0)
+		uprintf("Could not set FAT attributes 0x%02x: %s", fat_attr, WindowsErrorString());
 }
 
 // Create a directory and its parents (as SHCreateDirectoryEx() does)

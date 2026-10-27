@@ -231,7 +231,16 @@ typedef struct {
 #define IMAGE_FILE_MACHINE_AMD64                0x8664
 #define IMAGE_FILE_MACHINE_ARM64                0xaa64
 
+/* File attributes (values match the FAT attributes, which they map to) */
+#define FILE_ATTRIBUTE_READONLY                 0x00000001
+#define FILE_ATTRIBUTE_HIDDEN                   0x00000002
+#define FILE_ATTRIBUTE_SYSTEM                   0x00000004
+#define FILE_ATTRIBUTE_DIRECTORY                0x00000010
+#define FILE_ATTRIBUTE_ARCHIVE                  0x00000020
+#define FILE_ATTRIBUTE_NORMAL                   0x00000080
+
 /* C runtime spellings */
+#define stricmp                         strcasecmp
 #define _stricmp                        strcasecmp
 #define _strnicmp                       strncasecmp
 #define _strdup                         strdup

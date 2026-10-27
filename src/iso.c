@@ -19,24 +19,16 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/* Memory leaks detection - define _CRTDBG_MAP_ALLOC as preprocessor macro */
-#ifdef _CRTDBG_MAP_ALLOC
-#include <stdlib.h>
-#include <crtdbg.h>
-#endif
-
-#include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-#include <malloc.h>
 #include <errno.h>
-#include <direct.h>
+#include <fcntl.h>
 #include <ctype.h>
 #include <assert.h>
-#include <virtdisk.h>
+#include <time.h>
 #include <sys/stat.h>
 
-#define DO_NOT_WANT_COMPATIBILITY
 #include <cdio/cdio.h>
 #include <cdio/logging.h>
 #include <cdio/iso9660.h>
@@ -44,13 +36,11 @@
 
 #include "rufus.h"
 #include "options.h"
-#include "ui.h"
+#include "ui_iface.h"
 #include "vhd.h"
-#include "drive.h"
 #include "libfat.h"
 #include "missing.h"
 #include "resource.h"
-#include "msapi_utf8.h"
 #include "localization.h"
 #include "bled/bled.h"
 
@@ -58,10 +48,6 @@
 // progress bar too frequently will bring extraction to a crawl
 _Static_assert(256 * KB >= ISO_BLOCKSIZE, "Can't set PROGRESS_THRESHOLD");
 #define PROGRESS_THRESHOLD        ((256 * KB) / ISO_BLOCKSIZE)
-
-// Needed for UDF symbolic link testing
-#define S_IFLNK                   0xA000
-#define S_ISLNK(m)                (((m) & S_IFMT) == S_IFLNK)
 
 // Set the iso_open_ext() extension mask according to our global options
 #define ISO_EXTENSION_MASK        (ISO_EXTENSION_ALL & (enable_joliet ? ISO_EXTENSION_ALL : ~ISO_EXTENSION_JOLIET) & \
@@ -89,7 +75,6 @@ int64_t iso_blocking_status = -1;
 uint64_t total_blocks, extra_blocks, nb_blocks, last_nb_blocks;
 
 extern uint64_t md5sum_totalbytes;
-extern HANDLE format_thread;
 extern StrArray modified_files;
 BOOL enable_iso = TRUE, enable_joliet = TRUE, enable_rockridge = TRUE, has_ldlinux_c32;
 #define ISO_BLOCKING(x) do {x; iso_blocking_status++; } while(0)
@@ -107,7 +92,7 @@ const char* efi_bootname[3] = { "boot", "grub", "mm" };
 const char* efi_archname[ARCH_MAX] = { "", "ia32", "x64", "arm", "aa64", "ia64", "riscv64", "loongarch64", "ebc" };
 static const char* sources_str = "/sources";
 static const char* wininst_name[] = { "install.wim", "install.esd", "install.swm" };
-_STATIC_ASSERT(ARRAYSIZE(wininst_name) < 4);	// Must fit as 4 bit position flag
+_Static_assert(ARRAYSIZE(wininst_name) < 4, "wininst_name must fit as 4 bit position flag");
 // We only support GRUB/BIOS (x86) that uses a standard config dir (/boot/grub/i386-pc/)
 // If the disc was mastered properly, GRUB/EFI will take care of itself
 static const char* grub_dirname[] = { "/boot/grub/i386-pc", "/boot/grub2/i386-pc" };
@@ -124,7 +109,7 @@ static const char* autorun_name = "autorun.inf";
 static const char* manjaro_marker = ".miso";
 static const char* pop_os_name = "pop-os";
 static const char* stupid_antivirus = "  NOTE: This is usually caused by a poorly designed security solution. "
-	"See https://bit.ly/40qDtyF.\r\n  This file will be skipped for now, but you should really "
+	"See https://bit.ly/40qDtyF.\n  This file will be skipped for now, but you should really "
 	"look into using a *SMARTER* antivirus solution.";
 const char* old_c32_name[NB_OLD_C32] = OLD_C32_NAMES;
 static const int64_t old_c32_threshold[NB_OLD_C32] = OLD_C32_THRESHOLD;
@@ -132,6 +117,9 @@ static uint8_t joliet_level = 0;
 static uint32_t md5sum_size = 0;
 static BOOL scan_only = FALSE;
 static StrArray config_path, isolinux_path, grub_filesystems;
+uint16_t embedded_sl_version[2];
+char embedded_sl_version_str[2][12] = { "?.??", "?.??" };
+char embedded_sl_version_ext[2][32];
 static char symlinked_syslinux[MAX_PATH], *md5sum_data = NULL, *md5sum_pos = NULL;
 static iso_extension_mask_t iso_extension_mask = ISO_EXTENSION_ALL;
 
@@ -149,8 +137,9 @@ static __inline char* sanitize_filename(char* filename, BOOL* is_identical)
 		return NULL;
 	}
 
-	// Must start after the drive part (D:\...) so that we don't eliminate the first column
-	for (i = 2; i<safe_strlen(ret); i++) {
+	// Must start after the destination part, so that we only sanitize the extracted part
+	// NB: Upstream starts after the drive letter ("D:")
+	for (i = safe_strlen(psz_extract_dir); i<safe_strlen(ret); i++) {
 		for (j = 0; j<sizeof(unauthorized); j++) {
 			if (ret[i] == unauthorized[j]) {
 				ret[i] = '_';
@@ -171,7 +160,8 @@ void libcdio_log_handler(cdio_log_level_t level, const char *message)
 static BOOL is_in_md5sum(char* path)
 {
 	BOOL found = FALSE;
-	char c[3], * p, * pos = md5sum_pos, * nul_pos;
+	char c[1], * p, * pos = md5sum_pos, * nul_pos;
+	char rel_path[MAX_PATH + 2];
 
 	// If we are creating the md5sum file from scratch, every file is in it.
 	if (fd_md5sum != NULL)
@@ -181,14 +171,11 @@ static BOOL is_in_md5sum(char* path)
 	if (md5sum_size == 0 || md5sum_data == NULL)
 		return FALSE;
 
-	// We should have a "X:/xyz" path
-	assert(path[1] == ':' && path[2] == '/');
-
-	// Modify the path to have " ./xyz"
-	c[0] = path[0];
-	c[1] = path[1];
-	path[0] = ' ';
-	path[1] = '.';
+	// We should have a "<dest>/xyz" path, which we look for as " ./xyz"
+	// NB: Upstream modifies the 2 characters of "X:/xyz" in place
+	assert(path[strlen(psz_extract_dir)] == '/');
+	static_sprintf(rel_path, " .%s", &path[strlen(psz_extract_dir)]);
+	path = rel_path;
 
 	// Search for the string in the remainder of the md5sum.txt
 	// NB: md5sum_data is always NUL terminated.
@@ -202,19 +189,17 @@ static BOOL is_in_md5sum(char* path)
 	// If not found in remainder and we have a remainder, loop to search from beginning
 	if (!found && pos != md5sum_data) {
 		nul_pos = pos;
-		c[2] = *nul_pos;
+		c[0] = *nul_pos;
 		*nul_pos = 0;
 		p = strstr(md5sum_data, path);
 		while (p != NULL && p[strlen(path)] != '\n' && p[strlen(path)] != '\r' && p[strlen(path)] != '\0') {
 			pos = p + strlen(path);
 			p = strstr(pos, path);
 		}
-		*nul_pos = c[2];
+		*nul_pos = c[0];
 		found = (p != NULL);
 	}
 
-	path[0] = c[0];
-	path[1] = c[1];
 	if (found)
 		md5sum_pos = p + strlen(path);
 	return found;
@@ -226,14 +211,11 @@ static void _print_extracted_file(char* psz_fullpath, uint64_t file_length, BOOL
 
 	if (psz_fullpath == NULL)
 		return;
-	// Replace slashes with backslashes and append the size to the path for UI display
-	to_windows_path(psz_fullpath);
+	// Append the size to the path for UI display
 	static_sprintf(psz_display, "%s (%s)", psz_fullpath, SizeToHumanReadable(file_length, TRUE, FALSE));
 	uprintf(split ? "Splitting: %s" : "Extracting: %s", psz_display);
 	static_sprintf(psz_display, "%s (%s)", psz_fullpath, SizeToHumanReadable(file_length, FALSE, FALSE));
 	PrintStatus(0, MSG_000, psz_display);
-	// ISO9660 cannot handle backslashes
-	to_unix_path(psz_fullpath);
 	// Update md5sum_totalbytes as needed
 	if (is_in_md5sum(psz_fullpath))
 		md5sum_totalbytes += file_length;
@@ -311,7 +293,7 @@ static BOOL check_iso_props(const char* psz_dirname, int64_t file_length, const 
 						dst[strlen(dst) - 1] = 'm';
 						assert(safe_strlen(image_path) + safe_strlen(psz_dirname) + safe_strlen(psz_basename) + 2 < ARRAYSIZE(wim_path));
 						static_sprintf(wim_path, "%s|%s/%s", image_path, psz_dirname, psz_basename);
-						WimSplitFile(wim_path, dst);
+						WimSplitFile(wim_path, dst, strlen(psz_extract_dir) + 1);
 						free(dst);
 						return TRUE;
 					}
@@ -433,8 +415,8 @@ static BOOL check_iso_props(const char* psz_dirname, int64_t file_length, const 
 				for (i = 0; i < ARRAYSIZE(wininst_name); i++) {
 					if (safe_stricmp(psz_basename, wininst_name[i]) == 0) {
 						if (img_report.wininst_index < MAX_WININST) {
-							static_sprintf(img_report.wininst_path[img_report.wininst_index],
-								"?:%s", psz_fullpath);
+							// NB: Upstream prefixes the path with a "?:" drive placeholder
+							static_strcpy(img_report.wininst_path[img_report.wininst_index], psz_fullpath);
 							img_report.wininst_index++;
 							if (file_length >= 4 * GB)
 								img_report.has_4GB_file |= (0x10 << i);
@@ -488,7 +470,6 @@ static void fix_config(const char* psz_fullpath, const char* psz_path, const cha
 	if (src == NULL)
 		return;
 	nul_pos = strlen(src);
-	to_windows_path(src);
 
 	// Add persistence to the kernel options
 	if ((opts.boot_type == BT_IMAGE) && HAS_PERSISTENCE(img_report) && opts.persistence_size) {
@@ -591,7 +572,7 @@ static void fix_config(const char* psz_fullpath, const char* psz_path, const cha
 		 (safe_stricmp(psz_basename, syslinux_cfg[0]) == 0) &&
 		 (!img_report.has_efi_syslinux) && (dst = safe_strdup(src)) ) {
 		dst[nul_pos-12] = 's'; dst[nul_pos-11] = 'y'; dst[nul_pos-10] = 's';
-		CopyFileA(src, dst, TRUE);
+		copy_file(src, dst, TRUE);
 		uprintf("Duplicated %s to %s", src, dst);
 		free(dst);
 	}
@@ -618,42 +599,33 @@ static void fix_config(const char* psz_fullpath, const char* psz_path, const cha
 	free(src);
 }
 
-// Convert from time_t to FILETIME
-// Uses 3 static entries so that we can convert 3 concurrent values at the same time
-static LPFILETIME __inline to_filetime(time_t t)
+// Set the access and modification times of a file or directory
+// NB: Windows also sets the creation time, which Linux has no API for
+static void set_timestamps(int fd, const char* path, time_t access, time_t modify)
 {
-	static int i = 0;
-	static FILETIME ft[3], *r;
-	LONGLONG ll = (t * 10000000LL) + 116444736000000000LL;
+	const struct timespec ts[2] = { { .tv_sec = access }, { .tv_sec = modify } };
 
-	r = &ft[i];
-	r->dwLowDateTime = (DWORD)ll;
-	r->dwHighDateTime = (DWORD)(ll >> 32);
-	i = (i + 1) % ARRAYSIZE(ft);
-	return r;
+	if (((fd >= 0) ? futimens(fd, ts) : utimensat(AT_FDCWD, path, ts, 0)) != 0)
+		uprintf("  Could not set timestamp for '%s': %s", path, WindowsErrorString());
 }
 
-// Helper function to restore the timestamp on a directory
-static void __inline set_directory_timestamp(char* path, LPFILETIME creation, LPFILETIME last_access, LPFILETIME modify)
+// Create a file for extraction, as upstream does with CreatePreallocatedFile()
+static int create_extracted_file(const char* path, int64_t file_length)
 {
-	HANDLE dir_handle = CreateFileU(path, GENERIC_READ | GENERIC_WRITE,
-		FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
-	if ((dir_handle == INVALID_HANDLE_VALUE) || (!SetFileTime(dir_handle, creation, last_access, modify)))
-		uprintf("  Could not set timestamp for directory '%s': %s", path, WindowsErrorString());
-	safe_closehandle(dir_handle);
+	return CreatePreallocatedFile(path, O_RDWR | O_CREAT | O_TRUNC, 0644, file_length);
 }
 
 // Returns 0 on success, nonzero on error
 static int udf_extract_files(udf_t *p_udf, udf_dirent_t *p_udf_dirent, const char *psz_path)
 {
-	HANDLE file_handle = NULL;
-	DWORD buf_size, wr_size, err;
+	int file_handle = -1, err;
+	DWORD buf_size, wr_size;
 	EXTRACT_PROPS props;
 	HASH_CONTEXT ctx;
 	BOOL r, is_identical;
 	int length;
 	size_t i, j, nb;
-	char tmp[128], *psz_fullpath = NULL, *psz_sanpath = NULL;
+	char tmp[MAX_PATH], *psz_fullpath = NULL, *psz_sanpath = NULL;
 	const char* psz_basename;
 	udf_dirent_t *p_udf_dirent2;
 	_Static_assert(ISO_BUFFER_SIZE % UDF_BLOCKSIZE == 0,
@@ -674,12 +646,12 @@ static int udf_extract_files(udf_t *p_udf, udf_dirent_t *p_udf_dirent, const cha
 		if (strlen(psz_basename) == 0)
 			continue;
 		length = (int)(3 + strlen(psz_path) + strlen(psz_basename) + strlen(psz_extract_dir) + 24);
-		psz_fullpath = (char*)calloc(sizeof(char), length);
+		psz_fullpath = (char*)calloc(length, sizeof(char));
 		if (psz_fullpath == NULL) {
 			uprintf("Error allocating file name");
 			goto out;
 		}
-		length = _snprintf_s(psz_fullpath, length, _TRUNCATE, "%s%s/%s", psz_extract_dir, psz_path, psz_basename);
+		length = snprintf(psz_fullpath, length, "%s%s/%s", psz_extract_dir, psz_path, psz_basename);
 		if (length < 0)
 			goto out;
 		if (S_ISLNK(udf_get_posix_filemode(p_udf_dirent)))
@@ -687,10 +659,10 @@ static int udf_extract_files(udf_t *p_udf, udf_dirent_t *p_udf_dirent, const cha
 		if (udf_is_dir(p_udf_dirent)) {
 			if (!scan_only) {
 				psz_sanpath = sanitize_filename(psz_fullpath, &is_identical);
-				IGNORE_RETVAL(_mkdirU(psz_sanpath));
+				IGNORE_RETVAL(mkdir(psz_sanpath, 0755));
 				if (opts.preserve_timestamps) {
-					set_directory_timestamp(psz_sanpath, to_filetime(udf_get_attribute_time(p_udf_dirent)),
-						to_filetime(udf_get_access_time(p_udf_dirent)), to_filetime(udf_get_modification_time(p_udf_dirent)));
+					set_timestamps(-1, psz_sanpath, udf_get_access_time(p_udf_dirent),
+						udf_get_modification_time(p_udf_dirent));
 				}
 				safe_free(psz_sanpath);
 			}
@@ -708,8 +680,8 @@ static int udf_extract_files(udf_t *p_udf, udf_dirent_t *p_udf_dirent, const cha
 			print_extracted_file(psz_fullpath, file_length);
 			for (i = 0; i < NB_OLD_C32; i++) {
 				if (props.is_old_c32[i] && opts.use_own_c32[i]) {
-					static_sprintf(tmp, "%s/syslinux-%s/%s", FILES_DIR, embedded_sl_version_str[0], old_c32_name[i]);
-					if (CopyFileU(tmp, psz_fullpath, FALSE)) {
+					static_sprintf(tmp, "%s/%s/syslinux-%s/%s", app_data_dir, FILES_DIR, embedded_sl_version_str[0], old_c32_name[i]);
+					if (copy_file(tmp, psz_fullpath, FALSE)) {
 						uprintf("  Replaced with local version %s", IsFileInDB(tmp)?"✓":"✗");
 						break;
 					}
@@ -721,14 +693,13 @@ static int udf_extract_files(udf_t *p_udf, udf_dirent_t *p_udf_dirent, const cha
 			psz_sanpath = sanitize_filename(psz_fullpath, &is_identical);
 			if (!is_identical)
 				uprintf("  File name sanitized to '%s'", psz_sanpath);
-			file_handle = CreatePreallocatedFile(psz_sanpath, GENERIC_READ | GENERIC_WRITE,
-				FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, file_length);
-			if (file_handle == INVALID_HANDLE_VALUE) {
-				err = GetLastError();
+			file_handle = create_extracted_file(psz_sanpath, file_length);
+			if (file_handle < 0) {
+				err = errno;
 				uprintf("  Unable to create file: %s", WindowsErrorString());
-				if (((err == ERROR_ACCESS_DENIED) || (err == ERROR_INVALID_HANDLE)) &&
-					(safe_strcmp(&psz_sanpath[3], autorun_name) == 0))
-					uprintf(stupid_antivirus);
+				if (((err == EACCES) || (err == EPERM)) &&
+					(safe_strcmp(&psz_sanpath[strlen(psz_extract_dir) + 1], autorun_name) == 0))
+					uprintf("%s", stupid_antivirus);
 				else
 					goto out;
 			} else {
@@ -749,7 +720,7 @@ static int udf_extract_files(udf_t *p_udf, udf_dirent_t *p_udf_dirent, const cha
 					ISO_BLOCKING(r = WriteFileWithRetry(file_handle, buf, buf_size, &wr_size, WRITE_RETRIES));
 					if (!r || (wr_size != buf_size)) {
 						if (r)
-							SetLastError(ERROR_WRITE_FAULT);
+							errno = EIO;
 						uprintf("  Error writing file: %s", WindowsErrorString());
 						goto out;
 					}
@@ -764,19 +735,19 @@ static int udf_extract_files(udf_t *p_udf, udf_dirent_t *p_udf_dirent, const cha
 					hash_final[HASH_MD5](&ctx);
 					for (j = 0; j < MD5_HASHSIZE; j++)
 						fprintf(fd_md5sum, "%02x", ctx.buf[j]);
-					fprintf(fd_md5sum, "  ./%s\n", &psz_fullpath[3]);
+					fprintf(fd_md5sum, "  ./%s\n", &psz_fullpath[strlen(psz_extract_dir) + 1]);
 				}
 			}
-			if ((opts.preserve_timestamps) && (!SetFileTime(file_handle, to_filetime(udf_get_attribute_time(p_udf_dirent)),
-				to_filetime(udf_get_access_time(p_udf_dirent)), to_filetime(udf_get_modification_time(p_udf_dirent)))))
-				uprintf("  Could not set timestamp: %s", WindowsErrorString());
+			if ((opts.preserve_timestamps) && (file_handle >= 0))
+				set_timestamps(file_handle, psz_sanpath, udf_get_access_time(p_udf_dirent),
+					udf_get_modification_time(p_udf_dirent));
 
 			// If you have a fast USB 3.0 device, the default Windows buffering does an
 			// excellent job at compensating for our small blocks read/writes to max out the
 			// device's bandwidth.
 			// The drawback however is with cancellation. With a large file, CloseHandle()
 			// may take forever to complete and is not interruptible. We try to detect this.
-			ISO_BLOCKING(safe_closehandle(file_handle));
+			ISO_BLOCKING(safe_close(file_handle));
 			if (props.is_cfg || props.is_conf)
 				fix_config(psz_sanpath, psz_path, psz_basename, &props);
 			safe_free(psz_sanpath);
@@ -787,10 +758,11 @@ static int udf_extract_files(udf_t *p_udf, udf_dirent_t *p_udf_dirent, const cha
 	return 0;
 
 out:
-	if (GetLastError() != ERROR_SUCCESS)
-		ErrorStatus = RUFUS_ERROR(GetLastError());
+	// NB: Upstream sets the last error, even over an existing status
+	if (!IS_ERROR(ErrorStatus) && (errno != 0))
+		ErrorStatus = RUFUS_ERROR(WindowsErrorFromErrno(errno));
 	udf_dirent_free(p_udf_dirent);
-	ISO_BLOCKING(safe_closehandle(file_handle));
+	ISO_BLOCKING(safe_close(file_handle));
 	safe_free(psz_sanpath);
 	safe_free(psz_fullpath);
 	safe_free(buf);
@@ -800,14 +772,14 @@ out:
 // Returns 0 on success, >0 on error, <0 to ignore current dir
 static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 {
-	HANDLE file_handle = NULL;
-	DWORD buf_size, wr_size, err;
+	int file_handle = -1, err;
+	DWORD buf_size, wr_size;
 	EXTRACT_PROPS props;
 	HASH_CONTEXT ctx;
 	BOOL is_symlink, is_identical, create_file, free_p_statbuf = FALSE;
 	int length, r = 1;
 	char psz_fullpath[MAX_PATH], *psz_basename = NULL, *psz_sanpath = NULL;
-	char tmp[128], target_path[256], *last_slash;
+	char tmp[MAX_PATH], target_path[256], *last_slash;
 	const char *psz_iso_name = &psz_fullpath[strlen(psz_extract_dir)];
 	_Static_assert(ISO_BUFFER_SIZE % ISO_BLOCKSIZE == 0,
 		"ISO_BUFFER_SIZE is not a multiple of ISO_BLOCKSIZE");
@@ -824,8 +796,8 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 		return 1;
 	}
 
-	length = _snprintf_s(psz_fullpath, sizeof(psz_fullpath), _TRUNCATE, "%s%s/", psz_extract_dir, psz_path);
-	if (length < 0)
+	length = snprintf(psz_fullpath, sizeof(psz_fullpath), "%s%s/", psz_extract_dir, psz_path);
+	if ((length < 0) || (length >= (int)sizeof(psz_fullpath)))
 		goto out;
 	psz_basename = &psz_fullpath[length];
 
@@ -844,7 +816,7 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 		if (scan_only && (p_statbuf->rr.b3_rock == yep) && enable_rockridge) {
 			if (p_statbuf->rr.u_su_fields & ISO_ROCK_SUF_PL) {
 				if (!img_report.has_deep_directories)
-					uprintf("  Note: The selected ISO uses Rock Ridge 'deep directories'.\r\n"
+					uprintf("  Note: The selected ISO uses Rock Ridge 'deep directories'.\n"
 						"  Because of this, it may take a very long time to scan or extract...");
 				img_report.has_deep_directories = TRUE;
 				// Due to the nature of the parsing of Rock Ridge deep directories
@@ -880,10 +852,10 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 		if (p_statbuf->type == _STAT_DIR) {
 			if (!scan_only) {
 				psz_sanpath = sanitize_filename(psz_fullpath, &is_identical);
-				IGNORE_RETVAL(_mkdirU(psz_sanpath));
+				IGNORE_RETVAL(mkdir(psz_sanpath, 0755));
 				if (opts.preserve_timestamps) {
-					LPFILETIME ft = to_filetime(mktime(&p_statbuf->tm));
-					set_directory_timestamp(psz_sanpath, ft, ft, ft);
+					time_t t = mktime(&p_statbuf->tm);
+					set_timestamps(-1, psz_sanpath, t, t);
 				}
 				safe_free(psz_sanpath);
 			}
@@ -916,8 +888,8 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 				print_extracted_file(psz_fullpath, file_length);
 			for (i = 0; i < NB_OLD_C32; i++) {
 				if (props.is_old_c32[i] && opts.use_own_c32[i]) {
-					static_sprintf(tmp, "%s/syslinux-%s/%s", FILES_DIR, embedded_sl_version_str[0], old_c32_name[i]);
-					if (CopyFileU(tmp, psz_fullpath, FALSE)) {
+					static_sprintf(tmp, "%s/%s/syslinux-%s/%s", app_data_dir, FILES_DIR, embedded_sl_version_str[0], old_c32_name[i]);
+					if (copy_file(tmp, psz_fullpath, FALSE)) {
 						uprintf("  Replaced with local version %s", IsFileInDB(tmp)?"✓":"✗");
 						break;
 					}
@@ -936,15 +908,10 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 					static_sprintf(target_path, "%s/%s", psz_path, p_statbuf->rr.psz_symlink);
 					iso9660_stat_t* p_statbuf2 = iso9660_ifs_stat_translate(p_iso, target_path);
 					if (p_statbuf2 != NULL) {
-						to_windows_path(psz_fullpath);
-						to_windows_path(p_statbuf->rr.psz_symlink);
 						uprintf("Symlinking: %s%s ➔ %s", psz_fullpath,
-							(p_statbuf2->type == _STAT_DIR) ? "\\" : "", p_statbuf->rr.psz_symlink);
-						if (!CreateSymbolicLinkU(psz_fullpath, p_statbuf->rr.psz_symlink,
-							(p_statbuf2->type == _STAT_DIR) ? SYMBOLIC_LINK_FLAG_DIRECTORY : 0))
+							(p_statbuf2->type == _STAT_DIR) ? "/" : "", p_statbuf->rr.psz_symlink);
+						if (symlink(p_statbuf->rr.psz_symlink, psz_fullpath) != 0)
 							uprintf("  Could not create symlink: %s", WindowsErrorString());
-						to_unix_path(p_statbuf->rr.psz_symlink);
-						to_unix_path(psz_fullpath);
 						iso9660_stat_free(p_statbuf2);
 						create_file = FALSE;
 					}
@@ -976,14 +943,13 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 						uprintf("  Ignoring Rock Ridge symbolic link to '%s'", p_statbuf->rr.psz_symlink);
 					}
 				} else {
-					uuprintf("Unexpected symlink length: %d", file_length);
+					uuprintf("Unexpected symlink length: %" PRId64, file_length);
 					create_file = FALSE;
 				}
 			}
 			if (create_file) {
-				file_handle = CreatePreallocatedFile(psz_sanpath, GENERIC_READ | GENERIC_WRITE,
-					FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, file_length);
-				if (file_handle == INVALID_HANDLE_VALUE && GetLastError() == ERROR_PATH_NOT_FOUND) {
+				file_handle = create_extracted_file(psz_sanpath, file_length);
+				if ((file_handle < 0) && (errno == ENOENT)) {
 					// Some folks (umbrelos) managed to master their ISOs in a manner where some
 					// directories don't exist (or don't have _STAT_DIR) but still have files,
 					// in which case our approach, that expects a sane layout with directories
@@ -991,19 +957,19 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 					last_slash = strrchr(psz_sanpath, '/');
 					if (last_slash != NULL) {
 						*last_slash = '\0';
-						uprintf("WARNING: Directory '%s/' was improperly mastered on the source image!", &psz_sanpath[2]);
-						_mkdirExU(psz_sanpath);
+						uprintf("WARNING: Directory '%s/' was improperly mastered on the source image!",
+							&psz_sanpath[strlen(psz_extract_dir)]);
+						mkdir_p(psz_sanpath, 0755);
 						*last_slash = '/';
-						file_handle = CreatePreallocatedFile(psz_sanpath, GENERIC_READ | GENERIC_WRITE,
-							FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, file_length);
+						file_handle = create_extracted_file(psz_sanpath, file_length);
 					}
 				}
-				if (file_handle == INVALID_HANDLE_VALUE) {
-					err = GetLastError();
+				if (file_handle < 0) {
+					err = errno;
 					uprintf("  Unable to create file: %s", WindowsErrorString());
-					if (((err == ERROR_ACCESS_DENIED) || (err == ERROR_INVALID_HANDLE)) &&
-						(safe_strcmp(&psz_sanpath[3], autorun_name) == 0))
-						uprintf(stupid_antivirus);
+					if (((err == EACCES) || (err == EPERM)) &&
+						(safe_strcmp(&psz_sanpath[strlen(psz_extract_dir) + 1], autorun_name) == 0))
+						uprintf("%s", stupid_antivirus);
 					else
 						goto out;
 				} else if (is_symlink) {
@@ -1033,7 +999,7 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 						ISO_BLOCKING(r = WriteFileWithRetry(file_handle, buf, buf_size, &wr_size, WRITE_RETRIES));
 						if (!r || wr_size != buf_size) {
 							if (r)
-								SetLastError(ERROR_WRITE_FAULT);
+								errno = EIO;
 							uprintf("  Error writing file: %s", WindowsErrorString());
 							goto out;
 						}
@@ -1049,18 +1015,17 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 						hash_final[HASH_MD5](&ctx);
 						for (j = 0; j < MD5_HASHSIZE; j++)
 							fprintf(fd_md5sum, "%02x", ctx.buf[j]);
-						fprintf(fd_md5sum, "  ./%s\n", &psz_fullpath[3]);
+						fprintf(fd_md5sum, "  ./%s\n", &psz_fullpath[strlen(psz_extract_dir) + 1]);
 					}
 				}
-				if (opts.preserve_timestamps) {
-					LPFILETIME ft = to_filetime(mktime(&p_statbuf->tm));
-					if (!SetFileTime(file_handle, ft, ft, ft))
-						uprintf("  Could not set timestamp: %s", WindowsErrorString());
+				if (opts.preserve_timestamps && (file_handle >= 0)) {
+					time_t t = mktime(&p_statbuf->tm);
+					set_timestamps(file_handle, psz_sanpath, t, t);
 				}
 			}
 			if (free_p_statbuf)
 				iso9660_stat_free(p_statbuf);
-			ISO_BLOCKING(safe_closehandle(file_handle));
+			ISO_BLOCKING(safe_close(file_handle));
 			if (props.is_cfg || props.is_conf)
 				fix_config(psz_sanpath, psz_path, psz_basename, &props);
 			safe_free(psz_sanpath);
@@ -1069,14 +1034,106 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 	r = 0;
 
 out:
-	if (r != 0 && GetLastError() != ERROR_SUCCESS)
-		ErrorStatus = RUFUS_ERROR(GetLastError());
-	ISO_BLOCKING(safe_closehandle(file_handle));
+	// NB: Upstream sets the last error, even over an existing status
+	if ((r > 0) && !IS_ERROR(ErrorStatus) && (errno != 0))
+		ErrorStatus = RUFUS_ERROR(WindowsErrorFromErrno(errno));
+	ISO_BLOCKING(safe_close(file_handle));
 	if (p_entlist != NULL)
 		iso9660_filelist_free(p_entlist);
 	safe_free(psz_sanpath);
 	safe_free(buf);
 	return r;
+}
+
+// From syslinux.c
+uint16_t GetSyslinuxVersion(char* buf, size_t buf_size, char** ext)
+{
+	size_t i, j, k;
+	char *p = NULL;
+	unsigned long version_ul[2];
+	uint16_t version = 0;
+	const char LINUX[] = { 'L', 'I', 'N', 'U', 'X', ' ' };
+	static char* nullstr = "";
+	char unauthorized[] = {'<', '>', ':', '|', '*', '?', '\\', '/'};
+
+	*ext = nullstr;
+	if (buf_size < 256)
+		return 0;
+
+	// Start at 64 to avoid the short incomplete version at the beginning of ldlinux.sys
+	for (i = 64; i < buf_size - 64; i++) {
+		if (memcmp(&buf[i], LINUX, sizeof(LINUX)) == 0) {
+			// Check for ISO or SYS prefix
+			if (!( ((buf[i - 3] == 'I') && (buf[i - 2] == 'S') && (buf[i - 1] == 'O'))
+			    || ((buf[i - 3] == 'S') && (buf[i - 2] == 'Y') && (buf[i - 1] == 'S')) ))
+			  continue;
+			i += sizeof(LINUX);
+			version_ul[0] = strtoul(&buf[i], &p, 10);
+			// Our buffer is either from our internal legit syslinux (i.e. with a NUL terminated
+			// version string) or from a buffer that has been NUL-terminated through read_file(),
+			// so the string we work with in p is always NUL terminated at this stage.
+			assert(version_ul[0] < 256);
+			if (version_ul[0] < 256) {
+				version_ul[1] = strtoul(&p[1], &p, 10);
+				assert(version_ul[1] < 256);
+				if (version_ul[1] < 256)
+					version = (uint16_t)((version_ul[0] << 8) + version_ul[1]);
+			}
+			if (version == 0)
+				continue;
+			// Ensure that our extra version string starts with a slash
+			*p = '/';
+			// Remove the x.yz- duplicate if present
+			for (j = 0; (buf[i + j] == p[1 + j]) && (buf[i + j] != ' '); j++);
+			if (p[j + 1] == '-')
+				j++;
+			if (j >= 4) {
+				p[j] = '/';
+				p = &p[j];
+			}
+			for (j = safe_strlen(p) - 1; j > 0; j--) {
+				// Arch Linux affixes a star for their version - who knows what else is out there...
+				if ((p[j] == ' ') || (p[j] == '*'))
+					p[j] = 0;
+				else
+					break;
+			}
+			// Sanitize the string
+			for (j = 1; j < safe_strlen(p); j++) {
+				// Some people are bound to have invalid chars in their date strings
+				for (k = 0; k < sizeof(unauthorized); k++) {
+					if (p[j] == unauthorized[k])
+						p[j] = '_';
+				}
+			}
+			// If all we have is a slash, return the empty string for the extra version
+			*ext = (p[1] == 0) ? nullstr : p;
+			return version;
+		}
+	}
+	return 0;
+}
+
+// Identify the versions of the Syslinux we embed (rufus.c upstream)
+void SetEmbeddedSyslinuxVersions(void)
+{
+	static const int resource[2] = { IDR_SL_LDLINUX_V4_SYS, IDR_SL_LDLINUX_V6_SYS };
+	DWORD len;
+	char* buf, *ext;
+	int i;
+
+	for (i = 0; i < ARRAYSIZE(embedded_sl_version); i++) {
+		len = 0;
+		buf = (char*)GetResource(resource[i], "ldlinux_sys", &len, TRUE);
+		if (buf == NULL) {
+			uprintf("WARNING: could not read embedded Syslinux v%d version", i + 4);
+		} else {
+			embedded_sl_version[i] = GetSyslinuxVersion(buf, len, &ext);
+			static_sprintf(embedded_sl_version_str[i], "%d.%02d", SL_MAJOR(embedded_sl_version[i]), SL_MINOR(embedded_sl_version[i]));
+			static_strcpy(embedded_sl_version_ext[i], ext);
+			free(buf);
+		}
+	}
 }
 
 void GetGrubVersion(char* buf, size_t buf_size, const char* source)
@@ -1250,7 +1307,7 @@ BOOL ExtractISO(const char* src_iso, const char* dest_dir, BOOL scan)
 	const char* basedir[] = { "i386", "amd64", "minint" };
 	int k, r = 1;
 	char *tmp, *ext, *spacing = "  ";
-	char path[MAX_PATH], path2[16];
+	char path[MAX_PATH], path2[MAX_PATH];
 	uint8_t* buf = NULL;
 	uint16_t sl_version;
 	size_t i, j, size, sl_index = 0;
@@ -1270,7 +1327,7 @@ BOOL ExtractISO(const char* src_iso, const char* dest_dir, BOOL scan)
 	// Change progress style to marquee for scanning
 	if (scan_only) {
 		uprintf("ISO analysis:");
-		SendMessage(hMainDialog, UM_PROGRESS_INIT, PBS_MARQUEE, 0);
+		ui_event(UM_PROGRESS_MARQUEE, 0);
 		total_blocks = 0;
 		extra_blocks = 0;
 		has_ldlinux_c32 = FALSE;
@@ -1281,7 +1338,7 @@ BOOL ExtractISO(const char* src_iso, const char* dest_dir, BOOL scan)
 		PrintInfo(0, MSG_202);
 	} else {
 		uprintf("Extracting files...");
-		IGNORE_RETVAL(_chdirU(app_data_dir));
+		// NB: Upstream changes the current directory to app_data_dir, for the relative paths it uses
 		if (total_blocks == 0) {
 			uprintf("Error: ISO has not been properly scanned.");
 			ErrorStatus = RUFUS_ERROR(APPERR(ERROR_ISO_SCAN));
@@ -1296,8 +1353,8 @@ BOOL ExtractISO(const char* src_iso, const char* dest_dir, BOOL scan)
 			md5sum_totalbytes = 0;
 			// If there isn't an already existing md5sum.txt create one
 			if (img_report.has_md5sum != 1) {
-				static_sprintf(path, "%s\\%s", dest_dir, md5sum_name[0]);
-				fd_md5sum = fopenU(path, "wb");
+				static_sprintf(path, "%s/%s", dest_dir, md5sum_name[0]);
+				fd_md5sum = fopen(path, "wbe");
 				if (fd_md5sum == NULL)
 					uprintf("WARNING: Could not create '%s'", md5sum_name[0]);
 			} else {
@@ -1356,13 +1413,13 @@ out:
 	iso_blocking_status = -1;
 	if (scan_only) {
 		const char* fs_name[] = { "fat", "exfat", "ntfs" };
-		struct __stat64 stat;
+		struct stat st;
 		char fses[256] = { 0 };
 		// Find if there is a mismatch between the ISO size, as reported by the PVD, and the actual file size
-		if ((iso9660_ifs_read_pvd(p_iso, &pvd)) && (_stat64U(src_iso, &stat) == 0))
-			img_report.mismatch_size = (int64_t)(iso9660_get_pvd_space_size(&pvd)) * ISO_BLOCKSIZE - stat.st_size;
+		if ((iso9660_ifs_read_pvd(p_iso, &pvd)) && (stat(src_iso, &st) == 0))
+			img_report.mismatch_size = (int64_t)(iso9660_get_pvd_space_size(&pvd)) * ISO_BLOCKSIZE - st.st_size;
 		// Remove trailing spaces from the label
-		for (k = (int)safe_strlen(img_report.label) - 1; ((k > 0) && (isspaceU(img_report.label[k]))); k--)
+		for (k = (int)safe_strlen(img_report.label) - 1; ((k > 0) && (isspace((unsigned char)img_report.label[k]))); k--)
 			img_report.label[k] = 0;
 		// We use the fact that UDF_BLOCKSIZE and ISO_BLOCKSIZE are the same here
 		// Also, we add 1% extra requirement, on account that we most likely use a 4k or higher cluster size
@@ -1403,13 +1460,13 @@ out:
 				if (size == 0) {
 					uprintf("  Could not access %s", isolinux_path.String[i]);
 				} else {
-					sl_version = GetSyslinuxVersion(buf, size, &ext);
+					sl_version = GetSyslinuxVersion((char*)buf, size, &ext);
 					if (img_report.sl_version == 0) {
 						static_strcpy(img_report.sl_version_ext, ext);
 						img_report.sl_version = sl_version;
 						sl_index = i;
 					} else if ((img_report.sl_version != sl_version) || (safe_strcmp(img_report.sl_version_ext, ext) != 0)) {
-						uprintf("  Found conflicting Isolinux versions:\r\n  '%s' (%d.%02d%s) vs '%s' (%d.%02d%s)",
+						uprintf("  Found conflicting Isolinux versions:\n  '%s' (%d.%02d%s) vs '%s' (%d.%02d%s)",
 							isolinux_path.String[sl_index], SL_MAJOR(img_report.sl_version), SL_MINOR(img_report.sl_version),
 							img_report.sl_version_ext, isolinux_path.String[i], SL_MAJOR(sl_version), SL_MINOR(sl_version), ext);
 						// Workaround for Antergos and other ISOs, that have multiple Syslinux versions.
@@ -1451,11 +1508,11 @@ out:
 			static_sprintf(path, "/%s/txtsetup.sif",
 				basedir[((img_report.winpe & WINPE_I386) == WINPE_I386) ? 0 : ((img_report.winpe & WINPE_AMD64) == WINPE_AMD64 ? 1 : 2)]);
 			size = (size_t)ReadISOFileToBuffer(src_iso, path, &buf);
-			tmp = get_token_data_buffer("OsLoadOptions", 1, buf, size);
+			tmp = get_token_data_buffer("OsLoadOptions", 1, (char*)buf, size);
 			if (tmp != NULL) {
 				for (i = 0; i < strlen(tmp); i++)
 					tmp[i] = (char)tolower(tmp[i]);
-				uprintf("  Checking txtsetup.sif:\r\n  OsLoadOptions = %s", tmp);
+				uprintf("  Checking txtsetup.sif:\n  OsLoadOptions = %s", tmp);
 				img_report.uses_minint = (strstr(tmp, "/minint") != NULL);
 				safe_free(tmp);
 			}
@@ -1463,8 +1520,8 @@ out:
 		}
 		if (HAS_WININST(img_report)) {
 			char wim_path[4 * MAX_PATH];
-			assert(safe_strlen(image_path) + safe_strlen(&img_report.wininst_path[0][2]) + 2 < ARRAYSIZE(wim_path));
-			static_sprintf(wim_path, "%s|%s", image_path, &img_report.wininst_path[0][2]);
+			assert(safe_strlen(image_path) + safe_strlen(img_report.wininst_path[0]) + 2 < ARRAYSIZE(wim_path));
+			static_sprintf(wim_path, "%s|%s", image_path, img_report.wininst_path[0]);
 			img_report.wininst_version = GetWimVersion(wim_path);
 		}
 		if (img_report.has_grub2) {
@@ -1476,7 +1533,7 @@ out:
 			if (size == 0)
 				uprintf("  Could not read Grub version from '%s'", grub_path);
 			else
-				GetGrubVersion(buf, size, grub_path);
+				GetGrubVersion((char*)buf, size, grub_path);
 			safe_free(buf);
 			if (img_report.grub2_version[0] == 0) {
 				uprintf("  Could not detect Grub version");
@@ -1492,8 +1549,8 @@ out:
 					uprintf("  Could not read Grub version from '%s'", img_report.efi_boot_entry[j].path);
 				} else {
 					img_report.has_grub2 |= 0x80;
-					GetGrubVersion(buf, size, img_report.efi_boot_entry[j].path);
-					GetGrubFs(buf, size);
+					GetGrubVersion((char*)buf, size, img_report.efi_boot_entry[j].path);
+					GetGrubFs((char*)buf, size);
 				}
 				safe_free(buf);
 			} else if (img_report.efi_boot_entry[j].type == EBT_MAIN) {
@@ -1501,7 +1558,7 @@ out:
 				if (size == 0) {
 					uprintf("  Could not parse '%s'", img_report.efi_boot_entry[j].path);
 				} else {
-					GetEfiBootInfo(buf, size, img_report.efi_boot_entry[j].path);
+					GetEfiBootInfo((char*)buf, size, img_report.efi_boot_entry[j].path);
 				}
 				safe_free(buf);
 			}
@@ -1520,7 +1577,7 @@ out:
 		StrArrayDestroy(&config_path);
 		StrArrayDestroy(&isolinux_path);
 		StrArrayDestroy(&grub_filesystems);
-		SendMessage(hMainDialog, UM_PROGRESS_EXIT, 0, 0);
+		ui_event(UM_PROGRESS_EXIT, 0);
 	} else {
 		// Solus and other ISOs only provide EFI boot files in a FAT efi.img
 		// Also work around ISOs that have a borked symbolic link for bootx64.efi.
@@ -1528,19 +1585,21 @@ out:
 		if (img_report.has_efi & 0xc000) {
 			if (img_report.has_efi & 0x4000) {
 				uprintf("Broken UEFI bootloader detected - Applying workaround:");
-				static_sprintf(path, "%s\\EFI\\boot\\bootx64.efi", dest_dir);
-				DeleteFileU(path);
+				static_sprintf(path, "%s/EFI/boot/bootx64.efi", dest_dir);
+				if (PathFileExistsNoCase(path))
+					unlink(path);
 			}
 			DumpFatDir(p_iso, dest_dir, 0);
 		}
 		if (HAS_SYSLINUX(img_report)) {
-			static_sprintf(path, "%s\\syslinux.cfg", dest_dir);
+			static_sprintf(path, "%s/syslinux.cfg", dest_dir);
 			// Create a /syslinux.cfg (if none exists) that points to the existing isolinux cfg
+			PathFileExistsNoCase(path);
 			fd = fopen(path, "r");
 			if (fd != NULL && img_report.needs_syslinux_overwrite) {
 				fclose(fd);
 				fd = NULL;
-				static_sprintf(path2, "%s\\syslinux.org", dest_dir);
+				static_sprintf(path2, "%s/syslinux.org", dest_dir);
 				uprintf("Renaming: %s ➔ %s", path, path2);
 				IGNORE_RETVAL(rename(path, path2));
 			}
@@ -1575,12 +1634,12 @@ out:
 				isolinux_dir[len - 7] = 's';
 				isolinux_dir[len - 6] = 'o';
 				// Delete the empty syslinux symbolic link remnant and replace it with a syslinux/ dir
-				DeleteFileA(symlinked_syslinux);
-				CreateDirectoryA(symlinked_syslinux, NULL);
+				unlink(symlinked_syslinux);
+				mkdir(symlinked_syslinux, 0755);
 				// Now add the relevant config files that link back to the ones in isolinux/
 				for (i = 0; i < ARRAYSIZE(efi_cfg_name); i++) {
 					static_sprintf(path, "%s/%s", isolinux_dir, efi_cfg_name[i]);
-					if (!PathFileExistsA(path))
+					if (!PathFileExistsNoCase(path))
 						continue;
 					static_sprintf(path, "%s/%s", symlinked_syslinux, efi_cfg_name[i]);
 					fd = fopen(path, "w");
@@ -1590,33 +1649,35 @@ out:
 						continue;
 					}
 					static_sprintf(path, "%s/%s", isolinux_dir, efi_cfg_name[i]);
-					fprintf(fd, "DEFAULT loadconfig\n\nLABEL loadconfig\n  CONFIG %s\n  APPEND %s\n", &path[2], &isolinux_dir[2]);
+					// NB: Upstream skips 2 characters for the drive letter
+					fprintf(fd, "DEFAULT loadconfig\n\nLABEL loadconfig\n  CONFIG %s\n  APPEND %s\n",
+						&path[strlen(dest_dir)], &isolinux_dir[strlen(dest_dir)]);
 					fclose(fd);
-					to_windows_path(symlinked_syslinux);
-					uprintf("Created: %s\\%s → %s", symlinked_syslinux, efi_cfg_name[i], &path[2]);
-					to_unix_path(symlinked_syslinux);
+					uprintf("Created: %s/%s → %s", symlinked_syslinux, efi_cfg_name[i], &path[strlen(dest_dir)]);
 				}
 			}
 		} else if (HAS_BOOTMGR(img_report) && opts.enable_ntfs_compression) {
 			// bootmgr might need to be uncompressed: https://github.com/pbatard/rufus/issues/1381
-			RunCommand("compact /u bootmgr* efi/boot/*.efi", dest_dir, TRUE);
+			// TODO: NTFS compression (Alt-N) is not supported yet, so there is nothing to uncompress
+			uprintf("NTFS compression is not supported: 'bootmgr' was left as is");
 		}
 		// Exception for Slax Syslinux UEFI bootloaders...
 		// ...that don't appear to work anyway as of slax-64bit-slackware-15.0.3.iso
-		static_sprintf(path, "%s\\slax\\boot\\EFI", dest_dir);
-		if (PathFileExistsA(path)) {
-			char dst_path[16];
-			static_sprintf(dst_path, "%s\\EFI", dest_dir);
-			if (!PathFileExistsA(dst_path)) {
-				if (MoveFileA(path, dst_path))
+		static_sprintf(path, "%s/slax/boot/EFI", dest_dir);
+		if (PathFileExistsNoCase(path)) {
+			char dst_path[MAX_PATH];
+			static_sprintf(dst_path, "%s/EFI", dest_dir);
+			if (!PathFileExistsNoCase(dst_path)) {
+				if (rename(path, dst_path) == 0)
 					uprintf("Moved: %s → %s", path, dst_path);
 				else
 					uprintf("Could not move %s → %s: %s", path, dst_path, WindowsErrorString());
 			}
 		}
 		if (fd_md5sum != NULL) {
-			uprintf("Created: %s\\%s (%s)", dest_dir, md5sum_name[0], SizeToHumanReadable(ftell(fd_md5sum), FALSE, FALSE));
+			uprintf("Created: %s/%s (%s)", dest_dir, md5sum_name[0], SizeToHumanReadable(ftell(fd_md5sum), FALSE, FALSE));
 			fclose(fd_md5sum);
+			fd_md5sum = NULL;
 		} else if (md5sum_data != NULL) {
 			safe_free(md5sum_data);
 			md5sum_size = 0;
@@ -1642,11 +1703,10 @@ int64_t ExtractISOFile(const char* iso, const char* iso_file, const char* dest_f
 	udf_dirent_t *p_udf_root = NULL, *p_udf_file = NULL;
 	iso9660_stat_t *p_statbuf = NULL;
 	lsn_t lsn;
-	HANDLE file_handle = INVALID_HANDLE_VALUE;
+	int file_handle = -1;
 
-	file_handle = CreateFileU(dest_file, GENERIC_READ | GENERIC_WRITE,
-		FILE_SHARE_READ, NULL, CREATE_ALWAYS, attributes, NULL);
-	if (file_handle == INVALID_HANDLE_VALUE) {
+	file_handle = open(dest_file, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+	if (file_handle < 0) {
 		uprintf("Could not create file %s: %s", dest_file, WindowsErrorString());
 		goto out;
 	}
@@ -1717,9 +1777,11 @@ try_iso:
 	}
 
 out:
-	safe_closehandle(file_handle);
+	if ((r != 0) && (attributes != 0))
+		SetFileAttributesFd(file_handle, attributes);
+	safe_close(file_handle);
 	if (r == 0)
-		DeleteFileU(dest_file);
+		unlink(dest_file);
 	iso9660_stat_free(p_statbuf);
 	udf_dirent_free(p_udf_root);
 	udf_dirent_free(p_udf_file);
@@ -1951,7 +2013,7 @@ BOOL DumpFatDir(void* iso, const char* path, int32_t cluster)
 	void* buf;
 	char *target = NULL, *name = NULL;
 	BOOL ret = FALSE;
-	HANDLE handle = NULL;
+	int handle = -1;
 	DWORD size, written;
 	libfat_diritem_t diritem = { 0 };
 	libfat_dirpos_t dirpos = { cluster, -1, 0 };
@@ -2009,27 +2071,32 @@ BOOL DumpFatDir(void* iso, const char* path, int32_t cluster)
 				goto out;
 			}
 			strcpy(target, path);
-			strcat(target, "\\");
+			strcat(target, "/");
 			strcat(target, name);
+			// Use the case of the existing directories and files, if any
+			PathFileExistsNoCase(target);
 			if (diritem.attributes & 0x10) {
 				// Directory => Create directory
-				if (!CreateDirectoryU(target, 0) && (GetLastError() != ERROR_ALREADY_EXISTS)) {
+				if ((mkdir(target, 0755) != 0) && (errno != EEXIST)) {
 					uprintf("Could not create directory '%s': %s", target, WindowsErrorString());
+					safe_free(target);
+					safe_free(name);
 					continue;
 				}
 				if (!DumpFatDir(p_iso, target, dirpos.cluster))
 					goto out;
-			} else if (!PathFileExistsU(target)) {
+			} else if (access(target, F_OK) != 0) {
 				// Need to figure out if it's a .conf file (Damn you Solus!!)
 				EXTRACT_PROPS props = { 0 };
 				size_t len = strlen(name);
 				props.is_conf = ((len > 4) && (stricmp(&name[len - 5], ".conf") == 0));
 				uprintf("Extracting: %s (from '%s', %s)", target, img_report.efi_img_path,
 					SizeToHumanReadable(diritem.size, FALSE, FALSE));
-				handle = CreatePreallocatedFile(target, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
-					NULL, CREATE_ALWAYS, diritem.attributes, diritem.size);
-				if (handle == INVALID_HANDLE_VALUE) {
+				handle = CreatePreallocatedFile(target, O_RDWR | O_CREAT | O_TRUNC, 0644, diritem.size);
+				if (handle < 0) {
 					uprintf("Could not create '%s': %s", target, WindowsErrorString());
+					safe_free(target);
+					safe_free(name);
 					continue;
 				}
 
@@ -2052,7 +2119,8 @@ BOOL DumpFatDir(void* iso, const char* path, int32_t cluster)
 					// Trust me, you *REALLY* want to invoke libfat_flush() here
 					libfat_flush(lf_fs);
 				}
-				safe_closehandle(handle);
+				SetFileAttributesFd(handle, diritem.attributes);
+				safe_close(handle);
 				if (props.is_conf)
 					fix_config(target, NULL, NULL, &props);
 			}
@@ -2072,212 +2140,8 @@ out:
 		iso9660_stat_free(p_statbuf);
 		safe_free(p_private);
 	}
-	safe_closehandle(handle);
+	safe_close(handle);
 	safe_free(name);
 	safe_free(target);
 	return ret;
-}
-
-static DWORD WINAPI OpticalDiscSaveImageThread(void* param)
-{
-	BOOL s;
-	DWORD rSize, wSize;
-	IMG_SAVE* img_save = (IMG_SAVE*)param;
-	HANDLE hPhysicalDrive = INVALID_HANDLE_VALUE;
-	HANDLE hDestImage = INVALID_HANDLE_VALUE;
-	LARGE_INTEGER li;
-	uint8_t* buffer = NULL;
-	uint64_t wb;
-	int i;
-
-	assert(img_save->Type == VIRTUAL_STORAGE_TYPE_DEVICE_ISO);
-
-	PrintInfoDebug(0, MSG_225);
-	hPhysicalDrive = CreateFileA(img_save->DevicePath, GENERIC_READ, FILE_SHARE_READ,
-		NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
-	if (hPhysicalDrive == INVALID_HANDLE_VALUE) {
-		ErrorStatus = RUFUS_ERROR(ERROR_OPEN_FAILED);
-		goto out;
-	}
-
-	// In case someone poked the disc before us
-	li.QuadPart = 0;
-	if (!SetFilePointerEx(hPhysicalDrive, li, NULL, FILE_BEGIN))
-		uprintf("WARNING: Unable to rewind device position - wrong data might be copied!");
-	hDestImage = CreateFileU(img_save->ImagePath, GENERIC_WRITE, FILE_SHARE_WRITE, NULL,
-		CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-	if (hDestImage == INVALID_HANDLE_VALUE) {
-		uprintf("Could not open image '%s': %s", img_save->ImagePath, WindowsErrorString());
-		ErrorStatus = RUFUS_ERROR(ERROR_OPEN_FAILED);
-		goto out;
-	}
-
-	buffer = (uint8_t*)_mm_malloc(img_save->BufSize, 16);
-	if (buffer == NULL) {
-		ErrorStatus = RUFUS_ERROR(ERROR_NOT_ENOUGH_MEMORY);
-		uprintf("Could not allocate buffer");
-		goto out;
-	}
-
-	uprintf("Will use a buffer size of %s", SizeToHumanReadable(img_save->BufSize, FALSE, FALSE));
-	uprintf("Saving to image '%s'...", img_save->ImagePath);
-
-	// Don't bother trying for something clever, using double buffering overlapped and whatnot:
-	// With Windows' default optimizations, sync read + sync write for sequential operations
-	// will be as fast, if not faster, than whatever async scheme you can come up with.
-	UpdateProgressWithInfoInit(NULL, FALSE);
-	for (wb = 0; ; wb += wSize) {
-		// Optical drives do not appear to increment the sectors to read automatically
-		li.QuadPart = wb;
-		if (!SetFilePointerEx(hPhysicalDrive, li, NULL, FILE_BEGIN))
-			uprintf("WARNING: Unable to set device position - wrong data might be copied!");
-		s = ReadFile(hPhysicalDrive, buffer,
-			(DWORD)MIN(img_save->BufSize, img_save->DeviceSize - wb), &rSize, NULL);
-		if (!s) {
-			ErrorStatus = RUFUS_ERROR(ERROR_READ_FAULT);
-			uprintf("Read error: %s", WindowsErrorString());
-			goto out;
-		}
-		if (rSize == 0)
-			break;
-		UpdateProgressWithInfo(OP_FORMAT, MSG_261, wb, img_save->DeviceSize);
-		for (i = 1; i <= WRITE_RETRIES; i++) {
-			CHECK_FOR_USER_CANCEL;
-			s = WriteFile(hDestImage, buffer, rSize, &wSize, NULL);
-			if ((s) && (wSize == rSize))
-				break;
-			if (s)
-				uprintf("Write error: Wrote %d bytes, expected %d bytes", wSize, rSize);
-			else
-				uprintf("Write error: %s", WindowsErrorString());
-			if (i < WRITE_RETRIES) {
-				li.QuadPart = wb;
-				uprintf("Retrying in %d seconds...", WRITE_TIMEOUT / 1000);
-				Sleep(WRITE_TIMEOUT);
-				if (!SetFilePointerEx(hDestImage, li, NULL, FILE_BEGIN)) {
-					uprintf("Write error: Could not reset position - %s", WindowsErrorString());
-					goto out;
-				}
-			} else {
-				ErrorStatus = RUFUS_ERROR(ERROR_WRITE_FAULT);
-				goto out;
-			}
-			Sleep(200);
-		}
-		if (i > WRITE_RETRIES)
-			goto out;
-	}
-	if (wb != img_save->DeviceSize) {
-		uprintf("Error: wrote %s, expected %s", SizeToHumanReadable(wb, FALSE, FALSE),
-			SizeToHumanReadable(img_save->DeviceSize, FALSE, FALSE));
-		ErrorStatus = RUFUS_ERROR(ERROR_WRITE_FAULT);
-		goto out;
-	}
-	uprintf("Operation complete (Wrote %s).", SizeToHumanReadable(wb, FALSE, FALSE));
-
-out:
-	safe_free(img_save->ImagePath);
-	safe_mm_free(buffer);
-	safe_closehandle(hDestImage);
-	safe_unlockclose(hPhysicalDrive);
-	PostMessage(hMainDialog, UM_FORMAT_COMPLETED, (WPARAM)TRUE, 0);
-	ExitThread(0);
-}
-
-void OpticalDiscSaveImage(void)
-{
-	static IMG_SAVE img_save = { 0 };
-	char filename[33] = "disc_image.iso";
-	EXT_DECL(img_ext, filename, __VA_GROUP__("*.iso"), __VA_GROUP__(lmprintf(MSG_036)));
-
-	if (op_in_progress || (format_thread != NULL))
-		return;
-
-	img_save.Type = VIRTUAL_STORAGE_TYPE_DEVICE_ISO;
-	if (!GetOpticalMedia(&img_save)) {
-		uprintf("No dumpable optical media found.");
-		return;
-	}
-	// Adjust the buffer size according to the disc size so that we get a decent speed.
-	for (img_save.BufSize = 32 * MB;
-		(img_save.BufSize > 8 * MB) && (img_save.DeviceSize <= img_save.BufSize * 64);
-		img_save.BufSize /= 2);
-	if ((img_save.Label != NULL) && (img_save.Label[0] != 0))
-		static_sprintf(filename, "%s.iso", img_save.Label);
-
-	img_save.ImagePath = FileDialog(TRUE, NULL, &img_ext, 0);
-	if (img_save.ImagePath == NULL)
-		return;
-
-	uprintf("ISO media size %s", SizeToHumanReadable(img_save.DeviceSize, FALSE, FALSE));
-	SendMessage(hMainDialog, UM_PROGRESS_INIT, 0, 0);
-	ErrorStatus = 0;
-	// Disable all controls except cancel
-	EnableControls(FALSE, FALSE);
-	InitProgress(TRUE);
-	format_thread = CreateThread(NULL, 0, OpticalDiscSaveImageThread, &img_save, 0, NULL);
-	if (format_thread != NULL) {
-		uprintf("\r\nSave to ISO operation started");
-		PrintInfo(0, -1);
-		SendMessage(hMainDialog, UM_TIMER_START, 0, 0);
-	} else {
-		uprintf("Unable to start ISO save thread");
-		ErrorStatus = RUFUS_ERROR(APPERR(ERROR_CANT_START_THREAD));
-		safe_free(img_save.ImagePath);
-		PostMessage(hMainDialog, UM_FORMAT_COMPLETED, (WPARAM)FALSE, 0);
-	}
-}
-
-// Create an ISO image from the currently selected drive, using oscdimg.exe
-DWORD WINAPI IsoSaveImageThread(void* param)
-{
-	DWORD r = ERROR_NOT_FOUND;
-	HANDLE exe = INVALID_HANDLE_VALUE;
-	IMG_SAVE* img_save = (IMG_SAVE*)param;
-	char cmd[2 * KB], letters[27], *label;
-
-	if (!GetDriveLabel(SelectedDrive.DeviceNumber, letters, &label, TRUE) || letters[0] == '\0')
-		goto out;
-
-	// Get a lock and validate that the oscdimg.exe has not been tampered with
-	static_sprintf(cmd, "%s\\%s\\oscdimg_%s.exe", app_data_dir, FILES_DIR, APPLICATION_ARCH);
-	exe = CreateFileU(cmd, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-	if (exe == INVALID_HANDLE_VALUE) {
-		uprintf("ERROR: Could not lock 'oscdimg.exe'");
-		r = GetLastError();
-		goto out;
-	}
-	if (!FileMatchesHash(cmd, OSCDIMG_HASH)) {
-		uprintf("ERROR: Existing 'oscdimg.exe' hash does not match expected value!");
-		r = ERROR_INVALID_IMAGE_HASH;
-		goto out;
-	}
-
-	// UDF labels cannot be more than 32 characters (and if we have more than 32 chars we are
-	// using the static modifiable char buffer from GetDriveLabel(), so we can alter it).
-	if (strlen(label) > 32)
-		label[32] = '\0';
-
-	// Save to UDF only, as Microsoft's implementation of ISO-9660 doesn't support multiextent
-	// and produces BROKEN images if you try to add files larger than 4 GB.
-	// Plus ISO-9660/Joliet limits labels to 16 characters and has issues with long paths.
-	static_sprintf(cmd, "\"%s\\%s\\oscdimg_%s.exe\" -g -h -k -l\"%s\" -m -u2 -udfver102 %c:\\ \"%s\"",
-		app_data_dir, FILES_DIR, APPLICATION_ARCH, label, letters[0], img_save->ImagePath);
-	uprintf("Running command: '%s'", cmd);
-	// For detecting typical oscdimg commandline progress report of type: "\r15.5% complete"
-	r = RunCommandWithProgress(cmd, sysnative_dir, FALSE, MSG_261, ".*\r([0-9\\.]+)% complete.*");
-
-out:
-	safe_closehandle(exe);
-	if (r != 0 && !IS_ERROR(ErrorStatus)) {
-		SetLastError(r);
-		uprintf("Failed to write ISO image: %s", WindowsErrorString());
-		ErrorStatus = RUFUS_ERROR(SCODE_CODE(r));
-	}
-	PostMessage(hMainDialog, UM_FORMAT_COMPLETED, (WPARAM)TRUE, 0);
-	if (!IS_ERROR(ErrorStatus))
-		uprintf("Saved '%s'", img_save->ImagePath);
-	safe_free(img_save->DevicePath);
-	safe_free(img_save->ImagePath);
-	ExitThread(r);
 }

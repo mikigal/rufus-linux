@@ -56,4 +56,13 @@ static int test_failures;
 	} \
 } while (0)
 
+#define CHECK_CONTAINS(haystack, needle) do { \
+	const char *_h = (haystack), *_n = (needle); \
+	if (_h == NULL || strstr(_h, _n) == NULL) { \
+		fprintf(stderr, "%s:%d: CHECK_CONTAINS failed: \"%s\" not in \"%s\"\n", \
+			__FILE__, __LINE__, _n, _h ? _h : "(null)"); \
+		test_failures++; \
+	} \
+} while (0)
+
 #define TEST_RESULT() (test_failures == 0 ? 0 : 1)
