@@ -105,6 +105,9 @@ private:
 	void onSelect(const QString& provided = QString());
 	void startImageScan(bool keep_image_name);
 	void onHash();
+	void enableDownload();
+	void onDownload();
+	void onFidoLoaded();
 	void onSave();
 	void onSaveOpticalDisc();
 	void startSaveThread(const QString& path, int fd, std::function<BOOL(int fd)> save);

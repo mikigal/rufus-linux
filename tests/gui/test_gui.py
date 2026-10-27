@@ -14,12 +14,15 @@ Captures of the windows go to $RUFUS_GUI_ARTIFACTS, if set.
 """
 
 import hashlib
+import http.server
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 
 import gui
@@ -37,6 +40,69 @@ CASPER_ISO = os.path.join(SOURCE, "res", "loc", "test", "casper_test.iso")
 # FS_* and BT_* of rufus.h
 FS_FAT32, FS_NTFS = 1, 2
 BT_NON_BOOTABLE = 0
+DOWNLOADS = os.path.join(SOURCE, "tests", "data", "download")
+
+
+class DownloadServer(http.server.ThreadingHTTPServer):
+    """What $RUFUS_TEST_URL_PREFIX sends the downloads to: the files of tests/data/download (the signed
+    Fido.ps1 of GitHub), the replies of the Microsoft download site, and an ISO for its links."""
+
+    def __init__(self):
+        super().__init__(("127.0.0.1", 0), DownloadHandler)
+        self.requests = []
+        threading.Thread(target=self.serve_forever, daemon=True).start()
+
+    @property
+    def prefix(self) -> str:
+        return f"http://127.0.0.1:{self.server_address[1]}"
+
+
+class DownloadHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def reply(self, body: bytes, content_type: str = "application/json", status: int = 200):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def do_HEAD(self):
+        self.do_GET()
+
+    def do_GET(self):
+        self.server.requests.append(self.path)
+        path, _, query = self.path.partition("?")
+        params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
+        if path.endswith("/software-download/windows11") or path.startswith("/vlscppe.") or \
+                path == "/ov-df.microsoft.com/":
+            self.reply(b"", "text/html")
+        elif path == "/ov-df.microsoft.com/mdt.js":
+            self.reply(b'var u="?w=0A1B2C3D&s=1";var t={rticks="+1761580000123"};', "application/javascript")
+        elif path.endswith("/getskuinformationbyproductedition"):
+            edition = params.get("productEditionId", "")
+            self.reply(json.dumps({"Skus": [{"Id": edition + "1", "Language": "English",
+                                             "LocalizedLanguage": "English (United States)"},
+                                            {"Id": edition + "2", "Language": "Polish", "LocalizedLanguage": "Polski"}]
+                                   }).encode())
+        elif path.endswith("/GetProductDownloadLinksBySku"):
+            sku = params.get("SKU", "")
+            arch = 2 if sku.startswith("3816") else 1
+            self.reply(json.dumps({"ProductDownloadOptions": [
+                {"Uri": f"https://software.download.prss.microsoft.com/Win11_{sku}.iso?t=1", "DownloadType": arch}]}
+            ).encode())
+        elif path.startswith("/software.download.prss.microsoft.com/") and path.endswith(".iso"):
+            with open(CASPER_ISO, "rb") as f:
+                self.reply(f.read(), "application/octet-stream")
+        else:
+            file = os.path.join(DOWNLOADS, path.lstrip("/"))
+            if ".." in path or not os.path.isfile(file):
+                self.reply(b"Not Found", "text/plain", 404)
+            else:
+                with open(file, "rb") as f:
+                    self.reply(f.read(), "application/octet-stream")
 
 
 def unescape(text: str) -> str:
@@ -384,6 +450,38 @@ class Base:
         r.click("IDCLOSE", dlg)
         r.dialog_closed("IDD_NOTIFICATION")
         self.assertFalse(any(e["event"] == "save" for e in r.helper_events()))
+
+    def test_download(self):
+        # Fido: SELECT gets a DOWNLOAD entry once Fido.ps1 is found, which opens the dialog of its steps
+        server = DownloadServer()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        r = self.run_rufus(devices=[gui.USB_STICK], env={"RUFUS_TEST_URL_PREFIX": server.prefix})
+        r.wait(lambda: r.command("menu IDC_SELECT").startswith("OK "), timeout=30, what="the DOWNLOAD entry")
+        self.assertEqual(r.command("menu IDC_SELECT"), "OK SELECT [x]|DOWNLOAD")
+        r.command("menu IDC_SELECT DOWNLOAD")
+        r.wait(lambda: r.name("IDC_SELECT") == "DOWNLOAD", what="the DOWNLOAD button")
+        r.click("IDC_SELECT")
+        dlg = r.dialog("IDD_FIDO", timeout=30)
+        self.assertEqual(r.name("IDC_FIDO_VERSION", dlg), "Windows 11")
+        # The release, the edition, the language (of the user) and the architecture (of this machine)
+        for combo, value in (("IDC_FIDO_RELEASE", None), ("IDC_FIDO_EDITION", "Windows 11 Home/Pro/Edu"),
+                             ("IDC_FIDO_LANGUAGE", "English (United States)"), ("IDC_FIDO_ARCH", None)):
+            r.click("IDC_FIDO_CONTINUE", dlg)
+            r.wait(lambda: r.find(combo, dlg) is not None, timeout=30, what=combo)
+            if value is not None:
+                self.assertEqual(r.name(combo, dlg), value)
+        self.assertEqual(r.name("IDC_FIDO_CONTINUE", dlg), msg(40))
+        image = os.path.join(r.dir, "Win11.iso")
+        r.command(f"savefile {image}")
+        r.click("IDC_FIDO_CONTINUE", dlg)
+        r.dialog_closed("IDD_FIDO")
+        # The ISO gets downloaded, then selected
+        r.wait(lambda: r.name("IDC_BOOT_SELECTION") == "Win11.iso", timeout=30, what="the downloaded ISO")
+        with open(image, "rb") as a, open(CASPER_ISO, "rb") as b:
+            self.assertTrue(a.read() == b.read(), "the downloaded ISO differs")
+        self.assertTrue(any(p.startswith("/vlscppe.microsoft.com/tags?org_id=y6jn8c31&") for p in server.requests))
+        self.assertIn("/software.download.prss.microsoft.com/Win11_38131.iso?t=1", server.requests)
 
     def test_selection(self):
         # An ISOHybrid: the boot check asks how to write it (IDD_SELECTION)

@@ -28,8 +28,11 @@
 
 #include <thread>
 
+#include <QAccessible>
+#include <QAccessibleWidget>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QDesktopServices>
 #include <QDir>
 #include <QFileDialog>
 #include <QFile>
@@ -45,6 +48,7 @@
 #include <QSignalBlocker>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QUrl>
 #include <QVBoxLayout>
 
 #include "main_window.h"
@@ -54,6 +58,7 @@ extern "C" {
 }
 #include "device_monitor.h"
 #include "dialogs.h"
+#include "fido_dialog.h"
 #include "log_window.h"
 #include "ui_bridge.h"
 #include "test_hooks.h"
@@ -126,12 +131,79 @@ static QComboBox* newCombo(const char* name)
 	return combo;
 }
 
+/*
+ * SELECT▾DOWNLOAD for accessibility clients: Qt only gives a split button (a tool
+ * button with a menu) "Show Menu" actions, so that it can't be pressed. This one
+ * can, as the button of upstream (BS_SPLITBUTTON) can.
+ */
+class SplitButtonAccessible : public QAccessibleWidget
+{
+public:
+	explicit SplitButtonAccessible(QToolButton* button) : QAccessibleWidget(button, QAccessible::ButtonMenu) {}
+
+	QString text(QAccessible::Text t) const override
+	{
+		QString str = QAccessibleWidget::text(t);
+
+		if ((t == QAccessible::Name) && str.isEmpty())
+			str = button()->text().remove(QLatin1Char('&'));
+		return str;
+	}
+	QAccessible::State state() const override
+	{
+		QAccessible::State st = QAccessibleWidget::state();
+
+		st.pressed = button()->isDown();
+		st.hasPopup = (button()->menu() != nullptr);
+		return st;
+	}
+	QStringList actionNames() const override
+	{
+		QStringList names;
+
+		if (widget()->isEnabled()) {
+			names << pressAction();
+			if (button()->menu() != nullptr)
+				names << showMenuAction();
+		}
+		return names + QAccessibleWidget::actionNames();
+	}
+	void doAction(const QString& action) override
+	{
+		if (!widget()->isEnabled())
+			return;
+		if (action == pressAction())
+			button()->click();
+		else if ((action == showMenuAction()) && (button()->menu() != nullptr))
+			button()->showMenu();
+		else
+			QAccessibleWidget::doAction(action);
+	}
+
+private:
+	QToolButton* button() const { return static_cast<QToolButton*>(widget()); }
+};
+
+static QAccessibleInterface* SplitButtonFactory(const QString& class_name, QObject* object)
+{
+	if ((class_name == QLatin1StringView("QToolButton")) && (object->objectName() == QLatin1StringView("IDC_SELECT")))
+		return new SplitButtonAccessible(static_cast<QToolButton*>(object));
+	return nullptr;
+}
+
 // The DBX update check runs once per session, some time after the start
 static bool dbx_check_started = false;
 static const int dbx_check_delay = 15000;
 
 MainWindow::MainWindow(LogWindow* log, QWidget* parent) : QMainWindow(parent), log_(log)
 {
+	static bool factory_installed = false;
+
+	// Before the accessible interface of IDC_SELECT gets created (and cached)
+	if (!factory_installed) {
+		QAccessible::installFactory(SplitButtonFactory);
+		factory_installed = true;
+	}
 	rules_init(&m_);
 	m_.advanced_mode_device = advanced_mode_device;
 	m_.advanced_mode_format = advanced_mode_format;
@@ -196,6 +268,10 @@ MainWindow::MainWindow(LogWindow* log, QWidget* parent) : QMainWindow(parent), l
 		});
 		idle->start(dbx_check_delay);
 	}
+
+	// SELECT▾DOWNLOAD, once the network check found Fido (or before, when the window gets created again)
+	if (fido_available)
+		enableDownload();
 
 	// The cheat codes, ahead of the mnemonics of the widgets
 	qApp->installEventFilter(this);
@@ -466,7 +542,12 @@ void MainWindow::createWidgets()
 	connect(advanced_format_, &QToolButton::clicked, this, &MainWindow::toggleAdvancedFormat);
 	// The buttons that open a modal dialog do it once their click has returned, so that an
 	// accessibility client that pressed them (a screen reader, or the tests) gets its answer
-	connect(select_, &QToolButton::clicked, this, [this] { onSelect(); }, Qt::QueuedConnection);
+	connect(select_, &QToolButton::clicked, this, [this] {
+		if (select_index_ == 1)
+			onDownload();
+		else
+			onSelect();
+	}, Qt::QueuedConnection);
 	connect(hash_, &QToolButton::clicked, this, &MainWindow::onHash);
 	connect(save_, &QToolButton::clicked, this, &MainWindow::onSave, Qt::QueuedConnection);
 	connect(start_, &QPushButton::clicked, this, [this] { onStart(); });
@@ -893,6 +974,133 @@ void MainWindow::onHash()
 	format_running_ = true;
 	PrintInfo(0, -1);
 	onEvent(UM_TIMER_START, 0);
+}
+
+// The script of Fido, once downloaded (fido_script upstream)
+static std::shared_ptr<fido_t> fido_script;
+
+// SELECT becomes a split button, with DOWNLOAD (BS_SPLITBUTTON upstream)
+void MainWindow::enableDownload()
+{
+	QMenu* menu;
+	QAction* action;
+	int i;
+
+	if (select_->menu() != nullptr)
+		return;
+	menu = new QMenu(select_);
+	menu->setObjectName(QStringLiteral("IDC_SELECT_MENU"));
+	for (i = 0; i < 2; i++) {
+		action = menu->addAction(uppercase_select_[i]);
+		action->setCheckable(true);
+		action->setChecked(i == select_index_);
+		connect(action, &QAction::triggered, this, [this, i, menu] {
+			// IDM_SELECT and IDM_DOWNLOAD
+			select_index_ = i;
+			select_->setText(uppercase_select_[i]);
+			for (int j = 0; j < 2; j++)
+				menu->actions()[j]->setChecked(j == i);
+		});
+	}
+	select_->setMenu(menu);
+	select_->setPopupMode(QToolButton::MenuButtonPopup);
+}
+
+// DOWNLOAD: the script of Fido (downloaded once), then its dialog (DownloadISOThread() upstream)
+void MainWindow::onDownload()
+{
+	std::string locale = selected_locale_name();
+
+	if (format_running_ || m_.op_in_progress)
+		return;
+	ErrorStatus = 0;
+	EnableControls(&m_, FALSE, FALSE);
+	format_running_ = true;
+	no_confirmation_on_cancel_ = true;
+	render();
+	if (fido_script != nullptr) {
+		onFidoLoaded();
+		return;
+	}
+	std::thread([this, locale] {
+		fido_t* f = FidoOpen(locale.c_str());
+		QMetaObject::invokeMethod(this, [this, f] {
+			if (f != nullptr)
+				fido_script.reset(f, FidoClose);
+			onFidoLoaded();
+		}, Qt::QueuedConnection);
+	}).detach();
+}
+
+void MainWindow::onFidoLoaded()
+{
+	QString url, path;
+	std::string iso_url, iso_path;
+
+	if (fido_script == nullptr) {
+		format_running_ = false;
+		onEvent(UM_ENABLE_CONTROLS, 0);
+		return;
+	}
+	PrintInfo(0, MSG_148);
+	{
+		FidoDialog dialog(fido_script, this);
+		if (dialog.exec() != QDialog::Accepted) {
+			ErrorStatus = 0;
+			format_running_ = false;
+			onEvent(UM_ENABLE_CONTROLS, 0);
+			return;
+		}
+		url = dialog.url();
+		if (dialog.useBrowser()) {
+			uprintf("Download Link: %s", url.toUtf8().constData());
+			QDesktopServices::openUrl(QUrl(url));
+			format_running_ = false;
+			onEvent(UM_ENABLE_CONTROLS, 0);
+			return;
+		}
+	}
+	path = TakeTestSaveFile();
+	if (path.isEmpty())
+		path = QFileDialog::getSaveFileName(this, QString(),
+			QDir::home().filePath(QString::fromUtf8(GetDownloadShortName(url.toUtf8().constData()))),
+			QStringLiteral("%1 (*.iso)").arg(lmstr(MSG_036)));
+	if (path.isEmpty()) {
+		format_running_ = false;
+		onEvent(UM_ENABLE_CONTROLS, 0);
+		return;
+	}
+	// Download the ISO and report errors if any
+	iso_url = url.toStdString();
+	iso_path = path.toStdString();
+	ErrorStatus = 0;
+	onEvent(UM_PROGRESS_INIT, 0);
+	onEvent(UM_TIMER_START, 0);
+	InitProgress(TRUE);
+	std::thread([this, iso_url, iso_path] {
+		BOOL r = (DownloadToFileOrBuffer(iso_url.c_str(), iso_path.c_str(), NULL, MAIN_WINDOW_PROGRESS, TRUE) != 0);
+		std::string error = WindowsErrorString();
+		QMetaObject::invokeMethod(this, [this, r, error, iso_url, iso_path] {
+			format_running_ = false;
+			if (!r) {
+				onEvent(UM_PROGRESS_EXIT, 0);
+				if (SCODE_CODE(ErrorStatus) == ERROR_CANCELLED) {
+					uprintf("Download cancelled by user");
+					Notification(MB_ICONINFORMATION | MB_CLOSE, lmprintf(MSG_211), lmprintf(MSG_041));
+				} else {
+					Notification(MB_ICONERROR | MB_CLOSE, lmprintf(MSG_194, GetDownloadShortName(iso_url.c_str())),
+						lmprintf(MSG_043, error.c_str()));
+				}
+				onEvent(UM_ENABLE_CONTROLS, 0);
+				return;
+			}
+			onEvent(UM_ENABLE_CONTROLS, 0);
+			// Download was successful => Select and scan the ISO
+			safe_free(image_path);
+			image_path = strdup(iso_path.c_str());
+			onEvent(UM_SELECT_ISO, 0);
+		}, Qt::QueuedConnection);
+	}).detach();
 }
 
 /*
@@ -1542,6 +1750,9 @@ void MainWindow::onEvent(enum ui_event_type type, intptr_t param)
 		render();
 		if (queued_hotplug_event_)
 			onEvent(UM_MEDIA_CHANGE, 0);
+		break;
+	case UM_ENABLE_DOWNLOAD:
+		enableDownload();
 		break;
 	}
 }

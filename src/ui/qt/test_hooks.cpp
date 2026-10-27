@@ -25,6 +25,7 @@
 #include <QFile>
 #include <QKeyEvent>
 #include <QMenu>
+#include <QToolButton>
 #include <QMimeData>
 #include <QPointer>
 #include <QSocketNotifier>
@@ -162,6 +163,27 @@ static void runCommand(const QString& line)
 		QDropEvent drop(pos, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
 		QApplication::sendEvent(test_window, &drop);
 		answer(QStringLiteral("OK"));
+	} else if (command == QLatin1StringView("menu")) {
+		// The menu of a tool button, which a headless compositor does not pop up without an input event
+		QString name = arg.section(QLatin1Char(' '), 0, 0), text = arg.section(QLatin1Char(' '), 1).trimmed();
+		QToolButton* button = (test_window == nullptr) ? nullptr : test_window->findChild<QToolButton*>(name);
+		QStringList entries;
+		if ((button == nullptr) || (button->menu() == nullptr)) {
+			answer(QStringLiteral("ERROR no such menu"));
+			return;
+		}
+		for (QAction* a : button->menu()->actions()) {
+			if (!text.isEmpty() && a->text().startsWith(text)) {
+				answer(QStringLiteral("OK"));
+				a->trigger();
+				return;
+			}
+			entries.append(a->text() + (a->isChecked() ? QStringLiteral(" [x]") : QString()));
+		}
+		if (!text.isEmpty())
+			answer(QStringLiteral("ERROR no such entry"));
+		else
+			answer(QStringLiteral("OK %1").arg(entries.join(QLatin1Char('|'))));
 	} else if (command == QLatin1StringView("savefile")) {
 		test_save_file = arg;
 		answer(QStringLiteral("OK"));

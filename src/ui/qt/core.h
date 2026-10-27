@@ -36,6 +36,7 @@ extern "C" {
 #include "image_scan.h"
 #include "boot_check.h"
 #include "download.h"
+#include "fido.h"
 #include "progress.h"
 #include "platform.h"
 #include "helper_client.h"

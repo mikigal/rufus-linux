@@ -54,15 +54,44 @@ extern char *sbat_level_txt, *sb_active_txt, *sb_revoked_txt;
 
 /* How long a transfer may stay below 1 byte/s before it is aborted, in seconds */
 #define DOWNLOAD_STALL_TIMEOUT      30
+/*
+ * How long a connection may take, in ms. Unlike the one of WinInet (NET_SESSION_TIMEOUT),
+ * it includes the name resolution, which takes seconds on some systems.
+ */
+#define DOWNLOAD_CONNECT_TIMEOUT    20000
+/* The limits of HttpGet() (the replies of web APIs), in bytes and seconds */
+#define HTTP_GET_MAX_SIZE           (4 * MB)
+#define HTTP_GET_TIMEOUT            30
 /* How often the remote Secure Boot data and the DBX updates get checked (1 day) */
 #define DBX_CHECK_INTERVAL          (24 * 3600)
 
 static pthread_once_t curl_once = PTHREAD_ONCE_INIT;
 static CURLcode curl_init_status = CURLE_FAILED_INIT;
+// The names that the transfers resolved, which they share (as the resolver of Windows caches them)
+static CURLSH* curl_share = NULL;
+static pthread_mutex_t share_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void LockShare(CURL* handle, curl_lock_data data, curl_lock_access access, void* param)
+{
+	pthread_mutex_lock(&share_lock);
+}
+
+static void UnlockShare(CURL* handle, curl_lock_data data, void* param)
+{
+	pthread_mutex_unlock(&share_lock);
+}
 
 static void InitCurl(void)
 {
 	curl_init_status = curl_global_init(CURL_GLOBAL_DEFAULT);
+	if (curl_init_status != CURLE_OK)
+		return;
+	curl_share = curl_share_init();
+	if (curl_share != NULL) {
+		curl_share_setopt(curl_share, CURLSHOPT_LOCKFUNC, LockShare);
+		curl_share_setopt(curl_share, CURLSHOPT_UNLOCKFUNC, UnlockShare);
+		curl_share_setopt(curl_share, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);
+	}
 }
 
 // The errno that best describes a failed transfer (for WindowsErrorString())
@@ -161,7 +190,9 @@ static CURL* NewTransfer(const char* url, const char* user_agent, struct curl_sl
 	curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 10L);
 	curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
 	curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, (strncmp(url, "https://", 8) == 0) ? "https" : "http,https");
-	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)NET_SESSION_TIMEOUT);
+	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)DOWNLOAD_CONNECT_TIMEOUT);
+	if (curl_share != NULL)
+		curl_easy_setopt(curl, CURLOPT_SHARE, curl_share);
 	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
 	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, (long)DOWNLOAD_STALL_TIMEOUT);
 	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
@@ -512,6 +543,74 @@ out:
 		curl_easy_cleanup(curl);
 	curl_slist_free_all(headers);
 	return (length > 0);
+}
+
+typedef struct {
+	BYTE* data;
+	size_t size, allocated;
+} http_buffer_t;
+
+static size_t WriteHttpBuffer(char* data, size_t size, size_t nmemb, void* param)
+{
+	http_buffer_t* b = (http_buffer_t*)param;
+	size_t len = size * nmemb;
+	BYTE* p;
+
+	if (IS_ERROR(ErrorStatus) || (b->size + len > HTTP_GET_MAX_SIZE))
+		return CURL_WRITEFUNC_ERROR;
+	if (b->size + len + 2 > b->allocated) {
+		b->allocated = max(b->allocated * 2, b->size + len + 2);
+		p = realloc(b->data, b->allocated);
+		if (p == NULL)
+			return CURL_WRITEFUNC_ERROR;
+		b->data = p;
+	}
+	memcpy(&b->data[b->size], data, len);
+	b->size += len;
+	b->data[b->size] = 0;
+	return len;
+}
+
+uint64_t HttpGet(const char* url, const char* referer, BOOL follow_redirects, BYTE** buffer, long* status)
+{
+	struct curl_slist* headers = NULL;
+	http_buffer_t b = { 0 };
+	char curl_error[CURL_ERROR_SIZE] = "", header[512];
+	CURLcode code;
+	CURL* curl;
+
+	*buffer = NULL;
+	*status = 0;
+	curl = NewTransfer(url, NULL, &headers);
+	if (curl == NULL) {
+		errno = ENOMEM;
+		return 0;
+	}
+	if (referer != NULL) {
+		static_sprintf(header, "Referer: %s", referer);
+		headers = curl_slist_append(headers, header);
+		curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+	}
+	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, follow_redirects ? 1L : 0L);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT, (long)HTTP_GET_TIMEOUT);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteHttpBuffer);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &b);
+	curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, curl_error);
+	code = curl_easy_perform(curl);
+	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, status);
+	curl_easy_cleanup(curl);
+	curl_slist_free_all(headers);
+	if (code != CURLE_OK) {
+		uprintf("Could not query '%s': %s", url, (curl_error[0] != 0) ? curl_error : curl_easy_strerror(code));
+		free(b.data);
+		errno = CurlErrno(code);
+		return 0;
+	}
+	// The buffer is NUL terminated, even when it is empty
+	if (b.data == NULL)
+		b.data = calloc(1, 2);
+	*buffer = b.data;
+	return b.size;
 }
 
 // The name of the file of a path or URL, without the query or fragment of the URL

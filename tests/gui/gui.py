@@ -402,11 +402,12 @@ class Rufus:
         acc = self.get(name, root)
         self.wait(lambda: self.state(acc, "enabled"), what=f"{name} to be enabled")
         action = acc.get_action_iface()
-        for i in range(action.get_n_actions()):
-            if action.get_action_name(i).lower() in ("press", "click", "toggle"):
+        names = [action.get_action_name(i).lower() for i in range(action.get_n_actions())]
+        for i, n in enumerate(names):
+            if n in ("press", "click", "toggle"):
                 action.do_action(i)
                 return
-        raise RuntimeError(f"{name} can't be clicked")
+        raise RuntimeError(f"{name} can't be clicked (actions: {names})")
 
     def items(self, name: str, root=None) -> list[str]:
         combo = self.get(name, root)

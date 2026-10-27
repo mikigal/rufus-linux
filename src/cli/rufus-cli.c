@@ -46,6 +46,8 @@
 #include "platform.h"
 #include "helper_client.h"
 #include "progress.h"
+#include "fido.h"
+#include "regional.h"
 #include "resource.h"
 #include "localization.h"
 
@@ -97,6 +99,10 @@ static void usage(FILE* fd)
 		"      first volume (.iso, with xorriso).\n\n"
 		"  save-optical <file>\n"
 		"      Save the disc of an optical drive to an ISO image (Alt-O in the GUI).\n\n"
+		"  download [VERSION [RELEASE [EDITION [LANGUAGE [ARCH]]]]] [-o FILE]\n"
+		"      Download a Windows or UEFI Shell ISO, as Fido does (DOWNLOAD in the GUI):\n"
+		"      the choices of the next step get listed, until the URL of the ISO, which -o\n"
+		"      downloads. The choices are numbers (from 1) or the start of their names.\n\n"
 		"Options:\n"
 		"  -v, --verbose    Display the log on stderr (twice for the USB debug messages)\n"
 		"  -h, --help       Display this help\n");
@@ -863,6 +869,149 @@ static int cmd_save_optical(int argc, char** argv)
 	return ret ? 0 : 1;
 }
 
+// A choice of the download command: a number from 1, or the start of a name, or -1
+static int find_choice(const char* arg, int n, const char* (*name)(int, void*), void* ctx)
+{
+	char* end;
+	long v = strtol(arg, &end, 10);
+	int i;
+
+	if ((*end == 0) && (v >= 1) && (v <= n))
+		return (int)v - 1;
+	for (i = 0; i < n; i++) {
+		if (strncasecmp(name(i, ctx), arg, strlen(arg)) == 0)
+			return i;
+	}
+	fprintf(stderr, "No choice matches '%s'\n", arg);
+	return -1;
+}
+
+typedef struct {
+	fido_t* f;
+	int v, r, e;
+} fido_ctx_t;
+
+static const char* version_name(int i, void* c) { return FidoVersionName(((fido_ctx_t*)c)->f, i); }
+static const char* release_name(int i, void* c) { return FidoReleaseName(((fido_ctx_t*)c)->f, ((fido_ctx_t*)c)->v, i); }
+static const char* edition_name(int i, void* c)
+{
+	return FidoEditionName(((fido_ctx_t*)c)->f, ((fido_ctx_t*)c)->v, ((fido_ctx_t*)c)->r, i);
+}
+static const char* language_name(int i, void* c) { return FidoLanguageName(((fido_ctx_t*)c)->f, i); }
+static const char* link_arch(int i, void* c) { return FidoLinkArch(((fido_ctx_t*)c)->f, i); }
+
+static void list_choices(const char* title, int n, const char* (*name)(int, void*), void* ctx, int preferred)
+{
+	int i;
+
+	printf("%s:\n", title);
+	for (i = 0; i < n; i++)
+		printf("  %d. %s%s\n", i + 1, name(i, ctx), (i == preferred) ? " *" : "");
+}
+
+static int cmd_download(int argc, char** argv)
+{
+	static const struct option long_options[] = {
+		{ "output", required_argument, NULL, 'o' },
+		{ NULL, 0, NULL, 0 }
+	};
+	const ui_iface_t iface = { .log = cli_log, .status = cli_status, .progress = cli_progress, .event = cli_event };
+	fido_ctx_t ctx = { 0 };
+	const char *output = NULL, *locale = getenv("RUFUS_LOCALE");
+	char bcp47[16];
+	int c, n, l, a, preferred, r = 1;
+
+	optind = 0;
+	while ((c = getopt_long(argc, argv, "o:", long_options, NULL)) != -1) {
+		switch (c) {
+		case 'o': output = optarg; break;
+		default:
+			usage(stderr);
+			return 2;
+		}
+	}
+	argc -= optind;
+	argv += optind;
+	if (argc > 5) {
+		usage(stderr);
+		return 2;
+	}
+	if ((locale == NULL) && LocaleToBcp47(GetLocaleCategory("LC_MESSAGES"), bcp47, sizeof(bcp47)))
+		locale = bcp47;
+	if (!FidoCheck()) {
+		fprintf(stderr, "The download feature is not available (see -v)\n");
+		return 1;
+	}
+	ctx.f = FidoOpen(locale);
+	if (ctx.f == NULL) {
+		fprintf(stderr, "Could not load the download script (see -v)\n");
+		return 1;
+	}
+	if (argc < 1) {
+		list_choices("Versions", FidoNbVersions(ctx.f), version_name, &ctx, -1);
+		r = 0;
+		goto out;
+	}
+	if ((ctx.v = find_choice(argv[0], FidoNbVersions(ctx.f), version_name, &ctx)) < 0)
+		goto out;
+	if (argc < 2) {
+		list_choices("Releases", FidoNbReleases(ctx.f, ctx.v), release_name, &ctx, -1);
+		r = 0;
+		goto out;
+	}
+	if ((ctx.r = find_choice(argv[1], FidoNbReleases(ctx.f, ctx.v), release_name, &ctx)) < 0)
+		goto out;
+	if (argc < 3) {
+		list_choices("Editions", FidoNbEditions(ctx.f, ctx.v, ctx.r), edition_name, &ctx, -1);
+		r = 0;
+		goto out;
+	}
+	if ((ctx.e = find_choice(argv[2], FidoNbEditions(ctx.f, ctx.v, ctx.r), edition_name, &ctx)) < 0)
+		goto out;
+	n = FidoGetLanguages(ctx.f, ctx.v, ctx.r, ctx.e, &preferred);
+	if (n < 0) {
+		fprintf(stderr, "Error: %s\n", FidoError(ctx.f));
+		goto out;
+	}
+	if (argc < 4) {
+		list_choices("Languages", n, language_name, &ctx, preferred);
+		r = 0;
+		goto out;
+	}
+	if ((l = find_choice(argv[3], n, language_name, &ctx)) < 0)
+		goto out;
+	n = FidoGetLinks(ctx.f, ctx.v, ctx.r, ctx.e, l, &preferred);
+	if (n < 0) {
+		fprintf(stderr, "Error: %s\n", FidoError(ctx.f));
+		goto out;
+	}
+	if (argc < 5) {
+		list_choices("Architectures", n, link_arch, &ctx, preferred);
+		r = 0;
+		goto out;
+	}
+	if ((a = find_choice(argv[4], n, link_arch, &ctx)) < 0)
+		goto out;
+	printf("%s\n", FidoLinkUrl(ctx.f, a));
+	r = 0;
+	if (output != NULL) {
+		cli.tty = isatty(STDIN_FILENO) && isatty(STDERR_FILENO);
+		cli.last_percent = -1;
+		ui_set_iface(&iface);
+		signal(SIGINT, on_interrupt);
+		InitProgress(TRUE);
+		r = (DownloadToFileOrBuffer(FidoLinkUrl(ctx.f, a), output, NULL, MAIN_WINDOW_PROGRESS, TRUE) == 0) ? 1 : 0;
+		signal(SIGINT, SIG_DFL);
+		if (cli.tty)
+			fprintf(stderr, "\r\033[K");
+		fprintf(stderr, (r == 0) ? "Done\n" : "Failed: %s\n", StrError(ErrorStatus, TRUE));
+	}
+
+out:
+	FidoClose(ctx.f);
+	return r;
+}
+
 int main(int argc, char** argv)
 {
 	static const struct option long_options[] = {
@@ -907,6 +1056,8 @@ int main(int argc, char** argv)
 		r = cmd_save(argc - optind, &argv[optind]);
 	} else if (strcmp(argv[optind], "save-optical") == 0) {
 		r = cmd_save_optical(argc - optind, &argv[optind]);
+	} else if (strcmp(argv[optind], "download") == 0) {
+		r = cmd_download(argc - optind, &argv[optind]);
 	} else {
 		fprintf(stderr, "Unknown command '%s'\n", argv[optind]);
 		usage(stderr);

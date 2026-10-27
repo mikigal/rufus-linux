@@ -161,8 +161,12 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 	ApplyColorScheme();
-	// The Secure Boot revocation data of the server, as CheckForFidoThread() of upstream
-	std::thread([] { FetchRemoteSecureBootData(); }).detach();
+	// The Secure Boot revocation data of the server, and Fido, as CheckForFidoThread() of upstream
+	std::thread([] {
+		FetchRemoteSecureBootData();
+		if (FidoCheck())
+			ui_event(UM_ENABLE_DOWNLOAD, TRUE);
+	}).detach();
 	// The main window closes itself (also to be created again in another language)
 	app.setQuitOnLastWindowClosed(false);
 

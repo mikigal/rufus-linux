@@ -26,6 +26,14 @@
  * declared in rufus.h, as upstream does.
  */
 
+/*
+ * A GET request (to a web API) into an allocated buffer, NUL terminated, with an
+ * optional Referer, following the redirections or not. Returns the size of the
+ * reply (0 on a transfer error, with errno), and the HTTP status in *status,
+ * whatever it is. Unlike DownloadToFileOrBufferEx(), ErrorStatus is not reset.
+ */
+extern uint64_t HttpGet(const char* url, const char* referer, BOOL follow_redirects, BYTE** buffer, long* status);
+
 // The name of the file of a path or URL, without the query of the URL
 extern const char* GetDownloadShortName(const char* url);
 

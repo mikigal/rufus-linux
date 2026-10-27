@@ -56,6 +56,9 @@ target_link_libraries(test_bootcheck PRIVATE rufus_core)
 rufus_add_test(test_download test_download.c)
 target_link_libraries(test_download PRIVATE rufus_core)
 
+rufus_add_test(test_fido test_fido.c)
+target_link_libraries(test_fido PRIVATE rufus_core)
+
 rufus_add_test(test_vdisk test_vdisk.c)
 target_link_libraries(test_vdisk PRIVATE rufus_core)
 

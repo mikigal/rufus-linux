@@ -45,14 +45,13 @@
 #include "test.h"
 #include "test_files.h"
 #include "test_ui.h"
+#include "test_http.h"
 
 #define FILE_SIZE       100000
 #define NOLENGTH_SIZE   (70 * 1024)
 #define SLOW_SIZE       (10 * 1024 * 1024)
 
-static int server_fd = -1, port = 0;
 static char data_dir[MAX_PATH];
-static volatile int requests = 0;
 static char last_agent[256], last_accept[256];
 static int events[64], nb_events = 0, progress_calls = 0;
 static uint32_t last_progress = 0;
@@ -74,33 +73,6 @@ static uint8_t pattern(size_t i)
 	return (uint8_t)((i * 7) ^ (i >> 8));
 }
 
-static void send_all(int fd, const void* buf, size_t len)
-{
-	const char* p = buf;
-	ssize_t r;
-
-	while (len > 0) {
-		r = send(fd, p, len, MSG_NOSIGNAL);
-		if (r <= 0)
-			return;
-		p += r;
-		len -= (size_t)r;
-	}
-}
-
-static void send_headers(int fd, int status, const char* reason, long long length, const char* extra)
-{
-	char buf[512];
-	int n = snprintf(buf, sizeof(buf), "HTTP/1.1 %d %s\r\nConnection: close\r\n", status, reason);
-
-	if (length >= 0)
-		n += snprintf(&buf[n], sizeof(buf) - n, "Content-Length: %lld\r\n", length);
-	if (extra != NULL)
-		n += snprintf(&buf[n], sizeof(buf) - n, "%s\r\n", extra);
-	n += snprintf(&buf[n], sizeof(buf) - n, "\r\n");
-	send_all(fd, buf, n);
-}
-
 static void send_pattern(int fd, size_t len, BOOL slow)
 {
 	uint8_t buf[1024];
@@ -117,118 +89,50 @@ static void send_pattern(int fd, size_t len, BOOL slow)
 	}
 }
 
-// A header of the request, if present
-static void get_header(const char* req, const char* name, char* value, size_t len)
+static void serve(int fd, const char* method, const char* path, const char* req)
 {
-	const char* p = strcasestr(req, name);
-	size_t n;
-
-	value[0] = 0;
-	if (p == NULL)
-		return;
-	p += strlen(name);
-	while (*p == ' ')
-		p++;
-	n = strcspn(p, "\r\n");
-	snprintf(value, len, "%.*s", (int)n, p);
-}
-
-static void serve(int fd)
-{
-	char req[4096], method[8], path[1024], file[MAX_PATH * 2];
+	char file[MAX_PATH * 2];
 	uint8_t* buf = NULL;
-	ssize_t r, len = 0;
 	uint32_t size;
-	BOOL head;
+	BOOL head = (strcmp(method, "HEAD") == 0);
 
-	// The request ends with an empty line
-	while (len < (ssize_t)sizeof(req) - 1) {
-		r = recv(fd, &req[len], sizeof(req) - 1 - len, 0);
-		if (r <= 0)
-			return;
-		len += r;
-		req[len] = 0;
-		if (strstr(req, "\r\n\r\n") != NULL)
-			break;
-	}
-	if (sscanf(req, "%7s %1023s", method, path) != 2)
-		return;
-	requests++;
-	get_header(req, "User-Agent:", last_agent, sizeof(last_agent));
-	get_header(req, "Accept:", last_accept, sizeof(last_accept));
-	head = (strcmp(method, "HEAD") == 0);
-
+	http_get_header(req, "User-Agent:", last_agent, sizeof(last_agent));
+	http_get_header(req, "Accept:", last_accept, sizeof(last_accept));
 	if (strcmp(path, "/ok/file.bin") == 0 || strncmp(path, "/ok/file.bin?", 13) == 0) {
-		send_headers(fd, 200, "OK", FILE_SIZE, NULL);
+		http_send_headers(fd, 200, "OK", FILE_SIZE, NULL);
 		if (!head)
 			send_pattern(fd, FILE_SIZE, FALSE);
 	} else if (strcmp(path, "/redirect") == 0) {
-		send_headers(fd, 302, "Found", 0, "Location: /ok/file.bin");
+		http_send_headers(fd, 302, "Found", 0, "Location: /ok/file.bin");
 	} else if (strcmp(path, "/short") == 0) {
-		send_headers(fd, 200, "OK", 1000, NULL);
+		http_send_headers(fd, 200, "OK", 1000, NULL);
 		send_pattern(fd, 500, FALSE);
 	} else if (strcmp(path, "/nolength") == 0) {
-		send_headers(fd, 200, "OK", -1, NULL);
+		http_send_headers(fd, 200, "OK", -1, NULL);
 		if (!head)
 			send_pattern(fd, NOLENGTH_SIZE, FALSE);
 	} else if (strcmp(path, "/empty") == 0) {
-		send_headers(fd, 200, "OK", 0, NULL);
+		http_send_headers(fd, 200, "OK", 0, NULL);
 	} else if (strcmp(path, "/slow") == 0) {
-		send_headers(fd, 200, "OK", SLOW_SIZE, NULL);
+		http_send_headers(fd, 200, "OK", SLOW_SIZE, NULL);
 		send_pattern(fd, SLOW_SIZE, TRUE);
 	} else if (strcmp(path, "/forbidden") == 0) {
-		send_headers(fd, 403, "Forbidden", 9, NULL);
-		send_all(fd, "Forbidden", 9);
+		http_send_headers(fd, 403, "Forbidden", 9, NULL);
+		http_send_all(fd, "Forbidden", 9);
 	} else {
 		// The files of data/download, which $RUFUS_TEST_URL_PREFIX maps the URLs to
 		snprintf(file, sizeof(file), "%s%s", data_dir, path);
 		size = (strstr(path, "..") == NULL) ? read_file(file, &buf) : 0;
 		if (size == 0) {
-			send_headers(fd, 404, "Not Found", 9, NULL);
-			send_all(fd, "Not Found", 9);
+			http_send_headers(fd, 404, "Not Found", 9, NULL);
+			http_send_all(fd, "Not Found", 9);
 		} else {
-			send_headers(fd, 200, "OK", size, NULL);
+			http_send_headers(fd, 200, "OK", size, NULL);
 			if (!head)
-				send_all(fd, buf, size);
+				http_send_all(fd, buf, size);
 		}
 		free(buf);
 	}
-}
-
-static void* server_thread(void* param)
-{
-	int fd;
-
-	while ((fd = accept(server_fd, NULL, NULL)) >= 0) {
-		serve(fd);
-		shutdown(fd, SHUT_WR);
-		close(fd);
-	}
-	return NULL;
-}
-
-static BOOL start_server(void)
-{
-	struct sockaddr_in addr = { .sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
-	socklen_t len = sizeof(addr);
-	pthread_t thread;
-
-	server_fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
-	if (server_fd < 0 || bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) != 0 ||
-		listen(server_fd, 16) != 0 || getsockname(server_fd, (struct sockaddr*)&addr, &len) != 0)
-		return FALSE;
-	port = ntohs(addr.sin_port);
-	return pthread_create(&thread, NULL, server_thread, NULL) == 0;
-}
-
-static char* url(const char* path)
-{
-	static char buf[4][256];
-	static int i = 0;
-
-	i = (i + 1) % 4;
-	snprintf(buf[i], sizeof(buf[i]), "http://127.0.0.1:%d%s", port, path);
-	return buf[i];
 }
 
 static BOOL check_pattern(const uint8_t* buf, size_t len)
@@ -246,7 +150,7 @@ static void test_buffers(void)
 	BYTE* buf = NULL;
 	uint64_t size;
 
-	size = DownloadToFileOrBuffer(url("/ok/file.bin"), NULL, &buf, NULL, FALSE);
+	size = DownloadToFileOrBuffer(http_url("/ok/file.bin"), NULL, &buf, NULL, FALSE);
 	CHECK_EQ_INT(size, FILE_SIZE);
 	CHECK_EQ_INT(DownloadStatus, 200);
 	CHECK(buf != NULL && check_pattern(buf, FILE_SIZE));
@@ -257,13 +161,13 @@ static void test_buffers(void)
 	free(buf);
 
 	// A redirection is followed
-	size = DownloadToFileOrBuffer(url("/redirect"), NULL, &buf, NULL, FALSE);
+	size = DownloadToFileOrBuffer(http_url("/redirect"), NULL, &buf, NULL, FALSE);
 	CHECK_EQ_INT(size, FILE_SIZE);
 	CHECK(buf != NULL && check_pattern(buf, FILE_SIZE));
 	free(buf);
 
 	// A file without a length (upstream refuses those), larger than the initial buffer
-	size = DownloadToFileOrBuffer(url("/nolength"), NULL, &buf, NULL, FALSE);
+	size = DownloadToFileOrBuffer(http_url("/nolength"), NULL, &buf, NULL, FALSE);
 	CHECK_EQ_INT(size, NOLENGTH_SIZE);
 	CHECK(buf != NULL && check_pattern(buf, NOLENGTH_SIZE));
 	CHECK(buf != NULL && buf[NOLENGTH_SIZE] == 0 && buf[NOLENGTH_SIZE + 1] == 0);
@@ -271,23 +175,23 @@ static void test_buffers(void)
 
 	// Errors: the buffer is NULL, and DownloadStatus is the HTTP status
 	buf = (BYTE*)"not NULL";
-	size = DownloadToFileOrBuffer(url("/missing"), NULL, &buf, NULL, FALSE);
+	size = DownloadToFileOrBuffer(http_url("/missing"), NULL, &buf, NULL, FALSE);
 	CHECK_EQ_INT(size, 0);
 	CHECK(buf == NULL);
 	CHECK_EQ_INT(DownloadStatus, 404);
 	CHECK_EQ_INT(errno, ENOENT);
 	CHECK_CONTAINS(log_buf, "File not found '");
-	size = DownloadToFileOrBuffer(url("/forbidden"), NULL, &buf, NULL, FALSE);
+	size = DownloadToFileOrBuffer(http_url("/forbidden"), NULL, &buf, NULL, FALSE);
 	CHECK_EQ_INT(size, 0);
 	CHECK_EQ_INT(DownloadStatus, 403);
 	CHECK_EQ_INT(errno, EACCES);
 	CHECK_CONTAINS(log_buf, "Unable to access file '");
 	// A truncated transfer
-	size = DownloadToFileOrBuffer(url("/short"), NULL, &buf, NULL, FALSE);
+	size = DownloadToFileOrBuffer(http_url("/short"), NULL, &buf, NULL, FALSE);
 	CHECK_EQ_INT(size, 0);
 	CHECK(buf == NULL);
 	// An empty file is a failure, as upstream
-	size = DownloadToFileOrBuffer(url("/empty"), NULL, &buf, NULL, FALSE);
+	size = DownloadToFileOrBuffer(http_url("/empty"), NULL, &buf, NULL, FALSE);
 	CHECK_EQ_INT(size, 0);
 	// Nothing listens there
 	size = DownloadToFileOrBuffer("http://127.0.0.1:9/file", NULL, &buf, NULL, FALSE);
@@ -296,7 +200,7 @@ static void test_buffers(void)
 	CHECK(buf == NULL);
 
 	// The GitHub API gets raw content, and the user agent can be set
-	setenv("RUFUS_TEST_URL_PREFIX", url(""), 1);
+	setenv("RUFUS_TEST_URL_PREFIX", http_url(""), 1);
 	DownloadToFileOrBufferEx("https://api.github.com/ok/file.bin", NULL, SYMBOL_SERVER_USER_AGENT, &buf, NULL, FALSE);
 	CHECK_EQ_STR(last_accept, "application/vnd.github.v3.raw");
 	CHECK_EQ_STR(last_agent, SYMBOL_SERVER_USER_AGENT);
@@ -312,7 +216,7 @@ static void test_files(void)
 
 	snprintf(path, sizeof(path), "%s/file.bin", tmp_dir);
 	snprintf(bak, sizeof(bak), "%s.bak", path);
-	CHECK_EQ_INT(DownloadToFileOrBuffer(url("/ok/file.bin"), path, NULL, NULL, FALSE), FILE_SIZE);
+	CHECK_EQ_INT(DownloadToFileOrBuffer(http_url("/ok/file.bin"), path, NULL, NULL, FALSE), FILE_SIZE);
 	size = read_file(path, &buf);
 	CHECK_EQ_INT(size, FILE_SIZE);
 	CHECK(buf != NULL && check_pattern(buf, FILE_SIZE));
@@ -321,27 +225,27 @@ static void test_files(void)
 
 	// A failed download restores the previous file
 	write_file(path, (const uint8_t*)"previous", 8);
-	CHECK_EQ_INT(DownloadToFileOrBuffer(url("/short"), path, NULL, NULL, FALSE), 0);
+	CHECK_EQ_INT(DownloadToFileOrBuffer(http_url("/short"), path, NULL, NULL, FALSE), 0);
 	CHECK_EQ_INT(ErrorStatus, RUFUS_ERROR(ERROR_WRITE_FAULT));
 	size = read_file(path, &buf);
 	CHECK(size == 8 && memcmp(buf, "previous", 8) == 0);
 	safe_free(buf);
 	CHECK(access(bak, F_OK) != 0);
-	CHECK_EQ_INT(DownloadToFileOrBuffer(url("/missing"), path, NULL, NULL, FALSE), 0);
+	CHECK_EQ_INT(DownloadToFileOrBuffer(http_url("/missing"), path, NULL, NULL, FALSE), 0);
 	size = read_file(path, &buf);
 	CHECK(size == 8 && memcmp(buf, "previous", 8) == 0);
 	safe_free(buf);
 	// And a successful one replaces it
-	CHECK_EQ_INT(DownloadToFileOrBuffer(url("/ok/file.bin"), path, NULL, NULL, FALSE), FILE_SIZE);
+	CHECK_EQ_INT(DownloadToFileOrBuffer(http_url("/ok/file.bin"), path, NULL, NULL, FALSE), FILE_SIZE);
 	CHECK(access(bak, F_OK) != 0);
 	unlink(path);
 
 	// No file is left by a failure without a previous file
-	CHECK_EQ_INT(DownloadToFileOrBuffer(url("/missing"), path, NULL, NULL, FALSE), 0);
+	CHECK_EQ_INT(DownloadToFileOrBuffer(http_url("/missing"), path, NULL, NULL, FALSE), 0);
 	CHECK(access(path, F_OK) != 0);
 	// A directory that does not exist
 	snprintf(path, sizeof(path), "%s/none/file.bin", tmp_dir);
-	CHECK_EQ_INT(DownloadToFileOrBuffer(url("/ok/file.bin"), path, NULL, NULL, FALSE), 0);
+	CHECK_EQ_INT(DownloadToFileOrBuffer(http_url("/ok/file.bin"), path, NULL, NULL, FALSE), 0);
 	CHECK_EQ_INT(errno, ENOENT);
 }
 
@@ -352,7 +256,7 @@ static void test_progress(void)
 	// The progress of a download on the main window
 	nb_events = 0;
 	progress_calls = 0;
-	CHECK_EQ_INT(DownloadToFileOrBuffer(url("/ok/file.bin"), NULL, &buf, MAIN_WINDOW_PROGRESS, FALSE), FILE_SIZE);
+	CHECK_EQ_INT(DownloadToFileOrBuffer(http_url("/ok/file.bin"), NULL, &buf, MAIN_WINDOW_PROGRESS, FALSE), FILE_SIZE);
 	CHECK(nb_events > 0 && events[0] == UM_PROGRESS_INIT);
 	CHECK(progress_calls > 0);
 	CHECK_EQ_INT(last_progress, MAX_PROGRESS);
@@ -376,7 +280,7 @@ static void test_cancel(void)
 
 	snprintf(path, sizeof(path), "%s/slow.bin", tmp_dir);
 	pthread_create(&thread, NULL, cancel_thread, NULL);
-	CHECK_EQ_INT(DownloadToFileOrBuffer(url("/slow"), path, NULL, NULL, FALSE), 0);
+	CHECK_EQ_INT(DownloadToFileOrBuffer(http_url("/slow"), path, NULL, NULL, FALSE), 0);
 	pthread_join(thread, NULL);
 	CHECK_EQ_INT(ErrorStatus, RUFUS_ERROR(ERROR_CANCELLED));
 	CHECK_EQ_INT(errno, ECANCELED);
@@ -386,12 +290,12 @@ static void test_cancel(void)
 
 static void test_downloadable(void)
 {
-	CHECK(IsDownloadable(url("/ok/file.bin")));
-	CHECK(IsDownloadable(url("/redirect")));
-	CHECK(!IsDownloadable(url("/missing")));
+	CHECK(IsDownloadable(http_url("/ok/file.bin")));
+	CHECK(IsDownloadable(http_url("/redirect")));
+	CHECK(!IsDownloadable(http_url("/missing")));
 	CHECK_EQ_INT(DownloadStatus, 404);
 	// No length
-	CHECK(!IsDownloadable(url("/nolength")));
+	CHECK(!IsDownloadable(http_url("/nolength")));
 	CHECK(!IsDownloadable("http://127.0.0.1:9/file"));
 	CHECK(!IsDownloadable(NULL));
 }
@@ -403,7 +307,7 @@ static void test_signed(void)
 	uint8_t *buf = NULL, *ref_buf = NULL;
 	uint32_t size;
 
-	setenv("RUFUS_TEST_URL_PREFIX", url(""), 1);
+	setenv("RUFUS_TEST_URL_PREFIX", http_url(""), 1);
 	snprintf(path, sizeof(path), "%s/ldlinux.bss", tmp_dir);
 	snprintf(ref, sizeof(ref), "%s/rufus.ie/files/syslinux-6.03/ldlinux.bss", data_dir);
 	CHECK_EQ_INT(DownloadSignedFile(bss_url, path, NULL, TRUE), 512);
@@ -477,7 +381,7 @@ int main(void)
 
 	snprintf(data_dir, sizeof(data_dir), "%s/download", data);
 	test_files_init();
-	if (!start_server()) {
+	if (!http_start(serve)) {
 		fprintf(stderr, "Could not start the server: %s\n", strerror(errno));
 		return 1;
 	}

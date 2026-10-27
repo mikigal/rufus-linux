@@ -33,6 +33,8 @@
  *     drop <file>       Drop a file on the main window
  *     savefile <file>   The file that the next file save dialog chooses, without
  *                       being displayed (TakeTestSaveFile())
+ *     menu <name> [text] The entries of the menu of a button (as IDC_SELECT has),
+ *                       or trigger the one that starts with text
  *     language [text]   The entries of the language menu (IDC_LANG), or choose
  *                       the one that starts with text: a headless compositor
  *                       does not show a popup menu without an input event

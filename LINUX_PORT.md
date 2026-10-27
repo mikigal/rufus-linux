@@ -418,8 +418,8 @@ Done:
   stick to the main window), saved to `$XDG_STATE_HOME/rufus/rufus.log` on exit.
   - The buttons that open a modal dialog do it once their click has returned, so that
     an accessibility client (a screen reader, or the tests) gets its answer.
-  - Fido (DOWNLOAD) waits for stage 4, and says so; saving a drive to an image
-    (IDC_SAVE) and Alt-O came with stage 4. There is no update check (§5.7), hence no `IDD_UPDATE_POLICY` (and no
+  - Fido (DOWNLOAD), saving a drive to an image (IDC_SAVE) and Alt-O came with
+    stage 4. There is no update check (§5.7), hence no `IDD_UPDATE_POLICY` (and no
     IDC_SETTINGS button, which only opens it), `IDD_NEW_VERSION`, Alt-Y or Ctrl-Alt-Y.
 - **Localization**: the `.loc` of `$RUFUS_LOC`, the installed one or the one of the
   source tree; the locale of `-l`, the settings or `LC_ALL`/`LC_MESSAGES`/`LANG`. The
@@ -530,6 +530,36 @@ Done:
     writes dynamic VHDs and VHDX to drives. In the VM, `test_media.py` saves a written
     stick to a VHD, a VHDX and an ISO, and a CD-ROM to an ISO. The GUI test saves
     through the fake helper (`savefile`, a test hook for the file dialog).
+- **Fido** (`core/fido.c`, `core/json.c`, `src/ui/qt/fido_dialog.cpp`):
+  - As upstream, the GUI gets the URL of Fido.ps1 from `rufus.ie/Fido.ver` when it
+    starts (with the Secure Boot data), and SELECT becomes SELECT▾DOWNLOAD when GitHub
+    has the script. As the AppStore version, this does not depend on an update setting.
+  - DOWNLOAD downloads Fido.ps1 once (`.lzma` and `.sig`, checked with the key of
+    `pki.c`), and parses the data of the script: `$WindowsVersions` (a small parser of its
+    PowerShell arrays), `$OrgId`, `$ProfileId` and `$InstanceId`. The steps of the script
+    are in C: Check-Locale, the session ID that vlscppe and ov-df whitelist, the SKUs of
+    the product editions (getskuinformationbyproductedition), their download links
+    (GetProductDownloadLinksBySku, with the Referer it needs, and the message of a ban,
+    715-123130), and the ISOs of the UEFI Shell releases on GitHub (with the
+    architectures of their `Version.xml`). The replies are JSON, which `core/json.c`
+    parses (RFC 8259, with the escapes and surrogates of the localized names).
+  - The dialog is the one of the script: each step below the previous one (version,
+    release, edition, language, architecture), with Back, and "Download using a
+    browser" at the end. The queries run in a thread; closing the dialog cancels them.
+    The ISO then gets downloaded with the progress of the main window, and selected.
+  - Qt gives a tool button with a menu no press action for accessibility clients, so
+    IDC_SELECT has an accessible interface of its own (press and show menu).
+  - `rufus-cli download [VERSION [RELEASE [EDITION [LANGUAGE [ARCH]]]]] [-o FILE]` lists
+    the choices of each step, then gives the URL (or downloads it).
+  - The connections of libcurl share their name resolutions, and may take 20 s
+    (including the resolution, which the timeout of WinInet does not include): the
+    redirections of GitHub resolved in more than 3.5 s on the development machine.
+  - `tests/test_fido.c` checks the JSON parser, the data of scripts, and the whole flow
+    against a server of the test: the real signed Fido.ps1 v1.71, and replies of the
+    download site that check the requests (session, w and rticks, Referer). The GUI test
+    does the same with a server in Python (`menu`, a test hook for the menu of SELECT),
+    down to the download and the scan of the ISO. The flow was also checked against
+    the Microsoft site (`rufus-cli download 1 1 1 Polish` gives the x64 and ARM64 links).
 
 ---
 
@@ -798,8 +828,10 @@ Notes:
 - **Self-update and update check**: dropped (decision of 2026-10-27). The packages of
   the distribution update Rufus, and nothing contacts `rufus.ie` to check for a new
   version.
-- **Fido**: reimplemented in C with a Qt dialog (~600–900 lines). It does not work under
-  `pwsh`: it has a WPF GUI and uses Windows named pipes.
+- **Fido**: reimplemented in C with a Qt dialog (it does not work under `pwsh`: it has a
+  WPF GUI and uses Windows named pipes). The script is still downloaded and checked, for
+  its data (versions, releases, editions and the IDs of the download site), so that a
+  new Fido release updates them.
 
 ### 5.8 Miscellaneous
 
@@ -920,7 +952,7 @@ All of them are carried over (`rufus.c:3904-4280`, `cheatCode()` in
 | Processes blocking the drive | ✅ | helper, `/proc` |
 | 38 languages, RTL, dark mode, cheat codes, drag & drop | ✅ | done (stage 3) |
 | Update check | ❌ | dropped: the packages of the distribution update Rufus |
-| Windows / UEFI Shell ISO download (Fido) | ⚠️ | reimplementation in C |
+| Windows / UEFI Shell ISO download (Fido) | ✅ | the steps of Fido.ps1 in C (`core/fido.c`), with its signed data, and a Qt dialog |
 | Windows To Go | ⚠️ | NTFS-3G apply + BCD via hivex; high cost |
 | NTFS Chkdsk after writing | ❌ | no equivalent |
 | ReFS | ❌ | no `mkfs.refs` |

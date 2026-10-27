@@ -8,9 +8,11 @@ add_library(rufus_core STATIC
 	boot_records.c
 	devices.c
 	download.c
+	fido.c
 	globals.c
 	hdd.c
 	image_scan.c
+	json.c
 	partition.c
 	options.c
 	progress.c

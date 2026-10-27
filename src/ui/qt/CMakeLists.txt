@@ -9,6 +9,7 @@ qt_add_executable(rufus
 	app.cpp
 	device_monitor.cpp
 	dialogs.cpp
+	fido_dialog.cpp
 	log_window.cpp
 	main.cpp
 	main_window.cpp
