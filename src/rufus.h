@@ -743,6 +743,8 @@ extern char* SizeToHumanReadable(uint64_t size, BOOL copy_to_log, BOOL fake_unit
 extern char* TimestampToHumanReadable(uint64_t ts);
 extern BOOL ExtractDOS(const char* path);
 extern BOOL ExtractISO(const char* src_iso, const char* dest_dir, BOOL scan);
+// Save an optical disc (its device node, as GetOpticalMedia() found it) to an ISO image (Alt-O)
+extern BOOL SaveOpticalDisc(const char* devnode, uint64_t disc_size, int dst_fd);
 extern BOOL ExtractZip(const char* src_zip, const char* dest_dir);
 extern int64_t ExtractISOFile(const char* iso, const char* iso_file, const char* dest_file, DWORD attributes);
 extern uint32_t ReadISOFileToBuffer(const char* iso, const char* iso_file, uint8_t** buf);

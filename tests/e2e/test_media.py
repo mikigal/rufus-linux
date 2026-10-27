@@ -65,10 +65,11 @@ class StageTwoMedia(unittest.TestCase):
             BUILT[name] = getattr(media, "build_" + name)(WORK)
         return BUILT[name]
 
-    def _run_script(self, name: str, commands: str, size: int = 256 * 1024 * 1024) -> tuple[str, str]:
+    def _run_script(self, name: str, commands: str, size: int = 256 * 1024 * 1024,
+                    extra_qemu_opts: str = "") -> tuple[str, str]:
         stick = media.blank_stick(os.path.join(WORK, name + ".img"), size)
         script = SCRIPT.format(cli=os.path.abspath(CLI), helper=os.path.abspath(HELPER), commands=commands)
-        result = runner.run_in_vm(script, stick=stick, rw_dirs=(WORK,), timeout=900)
+        result = runner.run_in_vm(script, stick=stick, rw_dirs=(WORK,), timeout=900, extra_qemu_opts=extra_qemu_opts)
         output = result.stdout.decode(errors="replace") + result.stderr.decode(errors="replace")
         self.assertEqual(result.returncode, 0, output[-6000:])
         return stick, output
@@ -203,6 +204,57 @@ class StageTwoMedia(unittest.TestCase):
         # The media still boots
         text = self._boot(stick, "uefi")
         self.assertRegex(text, r"RUFUS-E2E-CMDLINE: .*boot=windows-like")
+
+    # A drive saved to an image (the save button): a fixed VHD, a dynamic VHDX, and an ISO of its files
+    def test_save_drive(self):
+        self._need("mcopy", "qemu-img", "xorriso")
+        cli = os.path.abspath(CLI)
+        images = {ext: os.path.join(WORK, "saved." + ext) for ext in ("vhd", "vhdx", "iso")}
+        commands = (f'{cli} -v write "$dev" --hdd --yes --fs FAT32 --label SAVED || exit 1\n'
+                    'udevadm settle\n'
+                    'echo "Saved by Rufus" > /tmp/hello.txt\n'
+                    'mcopy -i "${dev}1" /tmp/hello.txt ::/hello.txt || exit 1\n'
+                    'udevadm settle\n')
+        for path in images.values():
+            commands += f'{cli} -v save "$dev" "{path}" --hdd || exit 1\n'
+        stick, output = self._run_script("save", commands + 'echo "SAVE TEST PASSED"\n')
+        self.assertIn("SAVE TEST PASSED", output, output[-6000:])
+        with open(stick, "rb") as f:
+            data = f.read()
+        # The VHD is the drive, then its footer
+        with open(images["vhd"], "rb") as f:
+            vhd = f.read()
+        self.assertEqual(len(vhd), len(data) + 512)
+        self.assertTrue(vhd[:len(data)] == data, "the VHD does not have the data of the drive")
+        self.assertEqual(vhd[len(data):len(data) + 8], b"conectix")
+        # The VHDX gives the drive back
+        raw = os.path.join(WORK, "saved-vhdx.raw")
+        subprocess.run(["qemu-img", "check", "-q", "-f", "vhdx", images["vhdx"]], check=True)
+        subprocess.run(["qemu-img", "convert", "-q", "-f", "vhdx", "-O", "raw", images["vhdx"], raw], check=True)
+        with open(raw, "rb") as f:
+            self.assertTrue(f.read() == data, "the VHDX does not have the data of the drive")
+        self.assertLess(os.path.getsize(images["vhdx"]), len(data))
+        # The ISO has the files of the drive, and its label
+        ls = subprocess.run(["xorriso", "-indev", images["iso"], "-pvd_info", "-ls", "/"], stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True)
+        self.assertIn("hello.txt", ls.stdout)
+        self.assertRegex(ls.stdout, r"Volume Id\s*:\s*SAVED")
+
+    # An optical disc saved to an ISO (Alt-O), from the CD-ROM drive of the VM
+    def test_save_optical(self):
+        iso = self._medium("grub_iso", "grub-mkrescue", "xorriso", "mformat")
+        out = os.path.join(WORK, "disc.iso")
+        cli = os.path.abspath(CLI)
+        _, output = self._run_script("optical", f'udevadm settle\n{cli} -v save-optical "{out}" || exit 1\n'
+                                     'echo "OPTICAL TEST PASSED"\n',
+                                     extra_qemu_opts=f"-drive if=none,id=cd0,file={iso},media=cdrom,readonly=on "
+                                                     "-device ide-cd,drive=cd0")
+        self.assertIn("OPTICAL TEST PASSED", output, output[-6000:])
+        with open(iso, "rb") as a, open(out, "rb") as b:
+            source, saved = a.read(), b.read()
+        # The disc is the ISO, in 2 KB sectors
+        self.assertEqual(len(saved), (len(source) + 2047) // 2048 * 2048)
+        self.assertTrue(saved[:len(source)] == source, "the saved ISO differs from the disc")
 
     def test_windows_like_mbr_uefi_ntfs(self):
         iso = self._medium("windows_like_iso", "grub-mkstandalone", "xorriso", "mkntfs")

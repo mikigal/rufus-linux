@@ -45,6 +45,7 @@
 #include "boot_check.h"
 #include "platform.h"
 #include "helper_client.h"
+#include "progress.h"
 #include "resource.h"
 #include "localization.h"
 
@@ -90,6 +91,12 @@ static void usage(FILE* fd)
 		"  cycle <device> [--hdd] [--non-usb]\n"
 		"      Disconnect a USB drive and connect it again, through rufus-helper (Alt-C\n"
 		"      in the GUI).\n\n"
+		"  save <device> <file> [--hdd] [--non-usb]\n"
+		"      Save a drive to an image, through rufus-helper (the save button of the GUI):\n"
+		"      a fixed VHD (.vhd), a dynamic VHDX (.vhdx), or an ISO of the files of its\n"
+		"      first volume (.iso, with xorriso).\n\n"
+		"  save-optical <file>\n"
+		"      Save the disc of an optical drive to an ISO image (Alt-O in the GUI).\n\n"
 		"Options:\n"
 		"  -v, --verbose    Display the log on stderr (twice for the USB debug messages)\n"
 		"  -h, --help       Display this help\n");
@@ -721,6 +728,141 @@ static int cmd_cycle(int argc, char** argv)
 	return ret ? 0 : 1;
 }
 
+// The type of image of a file name (SAVE_*), or 0
+static int save_type(const char* path)
+{
+	const char* ext = strrchr(path, '.');
+
+	if (ext == NULL)
+		return 0;
+	if (strcasecmp(ext, ".vhd") == 0)
+		return SAVE_VHD;
+	if (strcasecmp(ext, ".vhdx") == 0)
+		return SAVE_VHDX;
+	if (strcasecmp(ext, ".iso") == 0)
+		return SAVE_ISO;
+	return 0;
+}
+
+static int cmd_save(int argc, char** argv)
+{
+	static const struct option long_options[] = {
+		{ "hdd", no_argument, NULL, 'H' },
+		{ "non-usb", no_argument, NULL, 'N' },
+		{ NULL, 0, NULL, 0 }
+	};
+	static rufus_device_t devs[MAX_DRIVES];
+	const ui_iface_t iface = { .log = cli_log, .status = cli_status, .progress = cli_progress, .ask = cli_ask,
+		.event = cli_event };
+	device_filter_t filter = { .enable_VHDs = TRUE };
+	rufus_device_t* dev = NULL;
+	helper_t helper;
+	int c, i, n, type, fd;
+	BOOL ret;
+
+	optind = 0;
+	while ((c = getopt_long(argc, argv, "", long_options, NULL)) != -1) {
+		switch (c) {
+		case 'H': filter.enable_HDDs = TRUE; break;
+		case 'N': filter.list_non_usb_removable_drives = TRUE; break;
+		default:
+			usage(stderr);
+			return 2;
+		}
+	}
+	if (optind != argc - 2) {
+		usage(stderr);
+		return 2;
+	}
+	type = save_type(argv[optind + 1]);
+	if (type == 0) {
+		fprintf(stderr, "The image must be a .vhd, .vhdx or .iso file\n");
+		return 2;
+	}
+	n = GetDevices(devs, ARRAYSIZE(devs), &filter);
+	for (i = 0; i < n; i++) {
+		if (strcmp(devs[i].devnode, argv[optind]) == 0)
+			dev = &devs[i];
+	}
+	if (dev == NULL) {
+		fprintf(stderr, "'%s' is not a drive that Rufus can write to (see 'rufus-cli list')\n", argv[optind]);
+		return 1;
+	}
+	fd = open(argv[optind + 1], O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+	if (fd < 0) {
+		fprintf(stderr, "Could not create '%s': %s\n", argv[optind + 1], strerror(errno));
+		return 1;
+	}
+	cli.tty = isatty(STDIN_FILENO) && isatty(STDERR_FILENO);
+	cli.last_percent = -1;
+	ui_set_iface(&iface);
+	if (!StartHelper(&helper, "en-US")) {
+		fprintf(stderr, "Could not start the helper\n");
+		close(fd);
+		unlink(argv[optind + 1]);
+		return 1;
+	}
+	signal(SIGINT, on_interrupt);
+	signal(SIGTERM, on_interrupt);
+	ret = HelperSave(&helper, dev->devnode, dev->diskseq, type, fd, argv[optind + 1]);
+	StopHelper(&helper);
+	signal(SIGINT, SIG_DFL);
+	signal(SIGTERM, SIG_DFL);
+	close(fd);
+	if (cli.tty)
+		fprintf(stderr, "\r\033[K");
+	if (ret) {
+		fprintf(stderr, "Done\n");
+	} else {
+		unlink(argv[optind + 1]);
+		fprintf(stderr, "Failed: %s%s\n", StrError(ErrorStatus, TRUE), verbose ? "" : " (-v displays the log)");
+	}
+	return ret ? 0 : 1;
+}
+
+static int cmd_save_optical(int argc, char** argv)
+{
+	const ui_iface_t iface = { .log = cli_log, .status = cli_status, .progress = cli_progress, .event = cli_event };
+	char devnode[64], label[64];
+	uint64_t size;
+	int fd;
+	BOOL ret;
+
+	if (argc != 2) {
+		usage(stderr);
+		return 2;
+	}
+	if (!GetOpticalMedia(devnode, sizeof(devnode), label, sizeof(label), &size)) {
+		fprintf(stderr, "No dumpable optical media found\n");
+		return 1;
+	}
+	fprintf(stderr, "Saving %s ('%s', %s) to '%s'\n", devnode, label, SizeToHumanReadable(size, FALSE, FALSE), argv[1]);
+	fd = open(argv[1], O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+	if (fd < 0) {
+		fprintf(stderr, "Could not create '%s': %s\n", argv[1], strerror(errno));
+		return 1;
+	}
+	cli.tty = isatty(STDIN_FILENO) && isatty(STDERR_FILENO);
+	cli.last_percent = -1;
+	ui_set_iface(&iface);
+	signal(SIGINT, on_interrupt);
+	signal(SIGTERM, on_interrupt);
+	InitProgress(TRUE);
+	ret = SaveOpticalDisc(devnode, size, fd);
+	signal(SIGINT, SIG_DFL);
+	signal(SIGTERM, SIG_DFL);
+	close(fd);
+	if (cli.tty)
+		fprintf(stderr, "\r\033[K");
+	if (ret) {
+		fprintf(stderr, "Done\n");
+	} else {
+		unlink(argv[1]);
+		fprintf(stderr, "Failed: %s%s\n", StrError(ErrorStatus, TRUE), verbose ? "" : " (-v displays the log)");
+	}
+	return ret ? 0 : 1;
+}
+
 int main(int argc, char** argv)
 {
 	static const struct option long_options[] = {
@@ -761,6 +903,10 @@ int main(int argc, char** argv)
 		r = cmd_write(argc - optind, &argv[optind]);
 	} else if (strcmp(argv[optind], "cycle") == 0) {
 		r = cmd_cycle(argc - optind, &argv[optind]);
+	} else if (strcmp(argv[optind], "save") == 0) {
+		r = cmd_save(argc - optind, &argv[optind]);
+	} else if (strcmp(argv[optind], "save-optical") == 0) {
+		r = cmd_save_optical(argc - optind, &argv[optind]);
 	} else {
 		fprintf(stderr, "Unknown command '%s'\n", argv[optind]);
 		usage(stderr);

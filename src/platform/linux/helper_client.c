@@ -170,67 +170,40 @@ static BOOL Ask(helper_t* h)
 	return ret;
 }
 
-BOOL HelperFormat(helper_t* h, const helper_job_t* job)
+// The progress text that the front end displays (the bare Alt key cycles it)
+static BOOL SendProgressType(helper_t* h)
 {
-	char names[MAX_BOOT_FILES][MAX_PATH], path[2 * MAX_PATH], text[8 * 1024];
-	struct pollfd pfd = { .fd = h->sock, .events = POLLIN };
-	uint32_t fd_flags = 0, info, duration, type;
-	BOOL cancel_sent = FALSE, ret = FALSE, done = FALSE;
-	int i, n, fd, r = 0, progress_type = -1;
-
-	ErrorStatus = 0;
-	if (h->sock < 0) {
-		ErrorStatus = RUFUS_ERROR(ERROR_NOT_READY);
-		return FALSE;
-	}
-
-	// The boot files that the boot check found (or downloaded)
-	n = GetBootFiles(names, TRUE);
-	for (i = 0; i < n; i++) {
-		static_sprintf(path, "%s/%s/%s", app_data_dir, FILES_DIR, names[i]);
-		fd = open(path, O_RDONLY | O_CLOEXEC);
-		if (fd < 0) {
-			uprintf("Could not open '%s': %s", path, WindowsErrorString());
-			continue;
-		}
-		ipc_init(&out, IPC_FILE);
-		ipc_put_str(&out, names[i]);
-		ipc_put_fd(&out, fd);
-		r = ipc_send(h->sock, &out);
-		close(fd);
-		if (!r)
-			goto disconnected;
-	}
-
-	// What the progress text displays, which the front end may cycle (bare Alt) during the format
-	progress_type = update_progress_type;
 	ipc_init(&out, IPC_PROGRESS_TYPE);
-	ipc_put_u32(&out, (uint32_t)progress_type);
-	if (!ipc_send(h->sock, &out))
-		goto disconnected;
+	ipc_put_u32(&out, (uint32_t)update_progress_type);
+	return ipc_send(h->sock, &out);
+}
 
-	ipc_init(&out, IPC_FORMAT);
-	ipc_put_u32(&out, sizeof(opts));
-	ipc_put_bytes(&out, &opts, sizeof(opts));
-	ipc_put_str(&out, job->devnode);
-	ipc_put_u64(&out, job->diskseq);
-	fd_flags |= (job->image_fd >= 0) ? IPC_FD_IMAGE : 0;
-	fd_flags |= (job->archive_fd >= 0) ? IPC_FD_ARCHIVE : 0;
-	fd_flags |= (job->bb_log_fd >= 0) ? IPC_FD_BB_LOG : 0;
-	fd_flags |= (job->unattend_fd >= 0) ? IPC_FD_UNATTEND : 0;
-	ipc_put_u32(&out, fd_flags);
-	ipc_put_str(&out, job->image_name);
-	ipc_put_str(&out, job->bb_log_path);
-	if (job->image_fd >= 0)
-		ipc_put_fd(&out, job->image_fd);
-	if (job->archive_fd >= 0)
-		ipc_put_fd(&out, job->archive_fd);
-	if (job->bb_log_fd >= 0)
-		ipc_put_fd(&out, job->bb_log_fd);
-	if (job->unattend_fd >= 0)
-		ipc_put_fd(&out, job->unattend_fd);
-	if (!ipc_send(h->sock, &out))
-		goto disconnected;
+// The helper went away (r <= 0), or sent an unexpected message
+static BOOL Disconnected(helper_t* h, int r, uint32_t type)
+{
+	if (r < 0)
+		uprintf("Lost the connection to the helper: %s", WindowsErrorString());
+	else if (r == 0)
+		uprintf("Lost the connection to the helper");
+	else
+		uprintf("Unexpected message %u from the helper", type);
+	HelperExited(h);
+	if (!IS_ERROR(ErrorStatus))
+		ErrorStatus = RUFUS_ERROR(ERROR_GEN_FAILURE);
+	return FALSE;
+}
+
+/*
+ * Forward the messages of the helper to the user interface, and the cancellation
+ * (ErrorStatus) to the helper, until it is done with the request that was sent.
+ */
+static BOOL RunJob(helper_t* h)
+{
+	char text[8 * 1024];
+	struct pollfd pfd = { .fd = h->sock, .events = POLLIN };
+	uint32_t info, duration, type;
+	BOOL cancel_sent = FALSE, ret = FALSE, done = FALSE;
+	int r = 0, progress_type = update_progress_type;
 
 	while (!done) {
 		if (update_progress_type != progress_type) {
@@ -296,16 +269,91 @@ BOOL HelperFormat(helper_t* h, const helper_job_t* job)
 
 disconnected:
 	ipc_close_fds(&in);
-	if (r < 0)
-		uprintf("Lost the connection to the helper: %s", WindowsErrorString());
-	else if (r == 0)
-		uprintf("Lost the connection to the helper");
-	else
-		uprintf("Unexpected message %u from the helper", in.type);
-	HelperExited(h);
-	if (!IS_ERROR(ErrorStatus))
-		ErrorStatus = RUFUS_ERROR(ERROR_GEN_FAILURE);
-	return FALSE;
+	return Disconnected(h, r, in.type);
+}
+
+
+BOOL HelperFormat(helper_t* h, const helper_job_t* job)
+{
+	char names[MAX_BOOT_FILES][MAX_PATH], path[2 * MAX_PATH];
+	uint32_t fd_flags = 0;
+	int i, n, fd, r = 0;
+
+	ErrorStatus = 0;
+	if (h->sock < 0) {
+		ErrorStatus = RUFUS_ERROR(ERROR_NOT_READY);
+		return FALSE;
+	}
+
+	// The boot files that the boot check found (or downloaded)
+	n = GetBootFiles(names, TRUE);
+	for (i = 0; i < n; i++) {
+		static_sprintf(path, "%s/%s/%s", app_data_dir, FILES_DIR, names[i]);
+		fd = open(path, O_RDONLY | O_CLOEXEC);
+		if (fd < 0) {
+			uprintf("Could not open '%s': %s", path, WindowsErrorString());
+			continue;
+		}
+		ipc_init(&out, IPC_FILE);
+		ipc_put_str(&out, names[i]);
+		ipc_put_fd(&out, fd);
+		r = ipc_send(h->sock, &out);
+		close(fd);
+		if (!r)
+			goto disconnected;
+	}
+
+	// What the progress text displays, which the front end may cycle (bare Alt) during the format
+	if (!SendProgressType(h))
+		goto disconnected;
+
+	ipc_init(&out, IPC_FORMAT);
+	ipc_put_u32(&out, sizeof(opts));
+	ipc_put_bytes(&out, &opts, sizeof(opts));
+	ipc_put_str(&out, job->devnode);
+	ipc_put_u64(&out, job->diskseq);
+	fd_flags |= (job->image_fd >= 0) ? IPC_FD_IMAGE : 0;
+	fd_flags |= (job->archive_fd >= 0) ? IPC_FD_ARCHIVE : 0;
+	fd_flags |= (job->bb_log_fd >= 0) ? IPC_FD_BB_LOG : 0;
+	fd_flags |= (job->unattend_fd >= 0) ? IPC_FD_UNATTEND : 0;
+	ipc_put_u32(&out, fd_flags);
+	ipc_put_str(&out, job->image_name);
+	ipc_put_str(&out, job->bb_log_path);
+	if (job->image_fd >= 0)
+		ipc_put_fd(&out, job->image_fd);
+	if (job->archive_fd >= 0)
+		ipc_put_fd(&out, job->archive_fd);
+	if (job->bb_log_fd >= 0)
+		ipc_put_fd(&out, job->bb_log_fd);
+	if (job->unattend_fd >= 0)
+		ipc_put_fd(&out, job->unattend_fd);
+	if (!ipc_send(h->sock, &out))
+		goto disconnected;
+
+	return RunJob(h);
+
+disconnected:
+	return Disconnected(h, (r == 0) ? 0 : -1, 0);
+}
+
+BOOL HelperSave(helper_t* h, const char* devnode, uint64_t diskseq, int type, int image_fd, const char* image_name)
+{
+	ErrorStatus = 0;
+	if (h->sock < 0) {
+		ErrorStatus = RUFUS_ERROR(ERROR_NOT_READY);
+		return FALSE;
+	}
+	if (!SendProgressType(h))
+		return Disconnected(h, -1, 0);
+	ipc_init(&out, IPC_SAVE);
+	ipc_put_str(&out, devnode);
+	ipc_put_u64(&out, diskseq);
+	ipc_put_u32(&out, (uint32_t)type);
+	ipc_put_str(&out, image_name);
+	ipc_put_fd(&out, image_fd);
+	if (!ipc_send(h->sock, &out))
+		return Disconnected(h, -1, 0);
+	return RunJob(h);
 }
 
 BOOL HelperCyclePort(helper_t* h, const char* devnode, uint64_t diskseq)

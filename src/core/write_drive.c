@@ -20,9 +20,9 @@
 
 /*
  * WriteDrive() of format.c, on file descriptors. The image is read with
- * pread() rather than asynchronously, and a fixed VHD is written from its
- * data, as the image upstream mounts with VirtDisk would give it. Dynamic
- * VHDs, VHDX and FFU images are not supported yet.
+ * pread() rather than asynchronously, and a VHD or VHDX is written from the
+ * disk it holds (vdisk.c), as the image upstream mounts with VirtDisk would give
+ * it. FFU images need DISM, which Linux does not have.
  */
 
 #include <errno.h>
@@ -34,6 +34,7 @@
 #include "rufus.h"
 #include "options.h"
 #include "write_drive.h"
+#include "vdisk.h"
 #include "missing.h"
 #include "resource.h"
 #include "localization.h"
@@ -42,7 +43,6 @@
 #define IMG_COMPRESSION_FFU         (BLED_COMPRESSION_MAX)
 #define IMG_COMPRESSION_VHD         (BLED_COMPRESSION_MAX + 1)
 #define IMG_COMPRESSION_VHDX        (BLED_COMPRESSION_MAX + 2)
-#define VHD_FOOTER_TYPE_FIXED       2
 
 static uint8_t* sec_buf = NULL;
 static unsigned int sec_buf_pos = 0;
@@ -144,21 +144,6 @@ static BOOL WriteWithRetries(int fd, const uint8_t* buf, uint32_t size, uint64_t
 	return FALSE;
 }
 
-// The size of the data of a fixed VHD, or 0 if it isn't one
-static uint64_t FixedVhdDataSize(int src_fd)
-{
-	uint8_t footer[512];
-	off_t size = lseek(src_fd, 0, SEEK_END);
-
-	if ((size < 512) || (pread(src_fd, footer, sizeof(footer), size - 512) != sizeof(footer)) ||
-		(memcmp(footer, "conectix", 8) != 0))
-		return 0;
-	// The disk type is big endian, at offset 60
-	if ((footer[60] | footer[61] | footer[62]) != 0 || footer[63] != VHD_FOOTER_TYPE_FIXED)
-		return 0;
-	return (uint64_t)size - 512;
-}
-
 BOOL WriteDrive(int fd, uint64_t disk_size, uint32_t sector_size, int src_fd, BOOL bZeroDrive)
 {
 	BOOL ret = FALSE;
@@ -169,6 +154,7 @@ BOOL WriteDrive(int fd, uint64_t disk_size, uint32_t sector_size, int src_fd, BO
 	uint8_t* buffer = NULL;
 	uint32_t zero_data, *cmp_buffer = NULL;
 	int throttle_fast_zeroing = 0;
+	vdisk_t* vd = NULL;
 
 	if (sector_size < 512) {
 		uprintf("Unexpected sector size (%d) - Aborting", sector_size);
@@ -281,20 +267,20 @@ BOOL WriteDrive(int fd, uint64_t disk_size, uint32_t sector_size, int src_fd, BO
 		if (IS_ERROR(ErrorStatus))
 			goto out;
 	} else {
-		if ((img_report.compression_type == IMG_COMPRESSION_FFU) || (img_report.compression_type == IMG_COMPRESSION_VHDX)) {
-			uprintf("FFU and VHDX images are not supported yet");
+		if (img_report.compression_type == IMG_COMPRESSION_FFU) {
+			uprintf("FFU images are not supported on Linux");
 			ErrorStatus = RUFUS_ERROR(ERROR_NOT_SUPPORTED);
 			goto out;
 		}
-		// NB: Upstream mounts VHDs with VirtDisk, and writes the disk they provide
-		if (img_report.compression_type == IMG_COMPRESSION_VHD) {
-			uint64_t vhd_size = FixedVhdDataSize(src_fd);
-			if (vhd_size == 0) {
-				uprintf("Only fixed VHDs are supported yet");
+		// NB: Upstream mounts VHD and VHDX images with VirtDisk, and writes the disk they provide
+		if ((img_report.compression_type == IMG_COMPRESSION_VHD) || (img_report.compression_type == IMG_COMPRESSION_VHDX)) {
+			vd = VdiskOpen(src_fd, (img_report.compression_type == IMG_COMPRESSION_VHD) ? VDISK_VHD : VDISK_VHDX);
+			if (vd == NULL) {
+				uprintf("Could not open the virtual disk image");
 				ErrorStatus = RUFUS_ERROR(ERROR_NOT_SUPPORTED);
 				goto out;
 			}
-			target_size = MIN(disk_size, vhd_size);
+			target_size = MIN(disk_size, VdiskSize(vd));
 		}
 
 		buffer = (uint8_t*)_mm_malloc(buf_size, sector_size);
@@ -312,7 +298,9 @@ BOOL WriteDrive(int fd, uint64_t disk_size, uint32_t sector_size, int src_fd, BO
 			CHECK_FOR_USER_CANCEL;
 
 			// 1. Read the data, without going past the source or target sizes
-			do {
+			if (vd != NULL) {
+				rs = VdiskRead(vd, buffer, (size_t)MIN(buf_size, target_size - wb), wb);
+			} else do {
 				rs = pread(src_fd, buffer, (size_t)MIN(buf_size, target_size - wb), (off_t)wb);
 			} while ((rs < 0) && (errno == EINTR));
 			if (rs <= 0) {
@@ -342,6 +330,7 @@ BOOL WriteDrive(int fd, uint64_t disk_size, uint32_t sector_size, int src_fd, BO
 	ret = TRUE;
 
 out:
+	VdiskClose(vd);
 	safe_mm_free(buffer);
 	safe_mm_free(cmp_buffer);
 	safe_mm_free(sec_buf);

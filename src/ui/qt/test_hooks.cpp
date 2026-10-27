@@ -61,6 +61,17 @@ static int keyFromName(const QString& name)
 	return 0;
 }
 
+// The file that the next file save dialog chooses
+static QString test_save_file;
+
+QString TakeTestSaveFile()
+{
+	QString file = test_save_file;
+
+	test_save_file.clear();
+	return file;
+}
+
 // Press and release keys, as the window system would deliver them to the widget that has the focus, or to 'name'
 static bool sendKeys(const QString& spec, const QString& name)
 {
@@ -150,6 +161,9 @@ static void runCommand(const QString& line)
 		}
 		QDropEvent drop(pos, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
 		QApplication::sendEvent(test_window, &drop);
+		answer(QStringLiteral("OK"));
+	} else if (command == QLatin1StringView("savefile")) {
+		test_save_file = arg;
 		answer(QStringLiteral("OK"));
 	} else if (command == QLatin1StringView("language")) {
 		// The language menu, which a headless compositor can't show without an input event: its

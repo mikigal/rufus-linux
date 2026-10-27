@@ -57,7 +57,10 @@
 #include "progress.h"
 #include "platform.h"
 #include "localization.h"
+#include "resource.h"
 #include "ipc.h"
+#include "vdisk.h"
+#include "helper_client.h"
 
 #define SOCK                        STDIN_FILENO
 #define MAX_BOOT_FILE_SIZE          (32 * MB)
@@ -70,14 +73,16 @@ static struct {
 } files[MAX_BOOT_FILES];
 static int nb_files = 0;
 
-// The format to run, from IPC_FORMAT
+// The format to run, from IPC_FORMAT, or the drive to save, from IPC_SAVE
 typedef struct {
+	BOOL save;
 	char devnode[64];
 	uint64_t diskseq;
 	char syspath[MAX_PATH];
 	int image_fd, archive_fd, bb_log_fd, unattend_fd;
 	char image_name[MAX_PATH];
 	char bb_log_path[MAX_PATH];
+	uint32_t save_type;				// SAVE_* (helper_client.h)
 } job_t;
 
 static ipc_msg_t in, out;
@@ -349,6 +354,98 @@ out:
 }
 
 /*
+ * Save a drive to an image (IDC_SAVE), to the file of the front end (job->image_fd):
+ * a VHD or VHDX of the whole drive, or an ISO of the files of its first volume,
+ * which gets mounted read-only for xorriso (oscdimg.exe upstream).
+ */
+static BOOL WorkSave(const job_t* job)
+{
+	const ui_iface_t iface = { .log = helper_log, .status = helper_status, .progress = helper_progress,
+		.ask = helper_ask, .event = helper_event };
+	char volume[64], fs_type[32], label[64], output[64], *mount_point = NULL;
+	// Level 3 for the files over 4 GB (upstream makes a UDF image for that), and Joliet for Windows
+	const char* xorriso[] = { "xorriso", "-outdev", output, "-volid", label, "-joliet", "on", "-rockridge", "on",
+		"-compliance", "iso_9660_level=3:joliet_long_names", "-map", NULL, "/", "-commit", NULL };
+	drive_t drive = { .fd = -1 };
+	disk_set_t disks = { 0 };
+	struct stat st;
+	BOOL ret = FALSE;
+	DWORD r;
+
+	ui_set_iface(&iface);
+	ErrorStatus = 0;
+	uprintf("Helper: saving %s to '%s' for the front end", job->devnode, job->image_name);
+	if ((fstat(job->image_fd, &st) != 0) || !S_ISREG(st.st_mode)) {
+		uprintf("The image is not a file");
+		ErrorStatus = RUFUS_ERROR(ERROR_INVALID_PARAMETER);
+		goto out;
+	}
+	if (!OpenDrive(job->devnode, job->diskseq, 0, &drive))
+		goto out;
+	// An image of a drive, on that drive, would never end
+	AddDisksOfDevice(&disks, st.st_dev);
+	if (DiskSetContains(&disks, drive.devnum)) {
+		uprintf("The image can not be saved on the drive that it is the image of");
+		ErrorStatus = RUFUS_ERROR(ERROR_ACCESS_DENIED);
+		goto out;
+	}
+	InitProgress(TRUE);
+
+	if (job->save_type != SAVE_ISO) {
+		ret = VdiskSave(drive.fd, drive.size, drive.sector_size, job->image_fd,
+			(job->save_type == SAVE_VHD) ? VDISK_VHD : VDISK_VHDX);
+		goto out;
+	}
+	if (!GetFirstVolume(job->syspath, volume, sizeof(volume), fs_type, sizeof(fs_type), label, sizeof(label))) {
+		uprintf("The drive has no file system to save to an ISO");
+		ErrorStatus = RUFUS_ERROR(ERROR_NOT_SUPPORTED);
+		goto out;
+	}
+	CloseDrive(&drive);
+	// The mounts of the worker must not be seen by the desktop
+	if (!EnterPrivateMountNamespace()) {
+		ErrorStatus = RUFUS_ERROR(APPERR(ERROR_CANT_MOUNT_VOLUME));
+		goto out;
+	}
+	mount_point = MountVolume(volume, fs_type, TRUE);
+	if (mount_point == NULL) {
+		ErrorStatus = RUFUS_ERROR(APPERR(ERROR_CANT_MOUNT_VOLUME));
+		goto out;
+	}
+	// ISO-9660 labels are up to 32 characters (and the defaults of upstream otherwise)
+	if (label[0] == 0)
+		static_strcpy(label, "CDROM");
+	label[32] = 0;
+	// The image, through the descriptor of the worker
+	static_sprintf(output, "stdio:/proc/%d/fd/%d", (int)getpid(), job->image_fd);
+	xorriso[12] = mount_point;
+	uprintf("Running command: 'xorriso -outdev <image> -volid \"%s\" -joliet on -rockridge on "
+		"-compliance iso_9660_level=3:joliet_long_names -map <%s> / -commit'", label, volume);
+	// For the progress report of xorriso: "xorriso : UPDATE :  15.03% done"
+	r = RunCommandWithProgress(xorriso, NULL, TRUE, MSG_261, ".* ([0-9\\.]+)% done.*");
+	if (r != 0) {
+		if (!IS_ERROR(ErrorStatus)) {
+			uprintf("Failed to write ISO image: xorriso returned %d", (int)r);
+			ErrorStatus = RUFUS_ERROR((r == ERROR_FILE_NOT_FOUND) ? ERROR_FILE_NOT_FOUND : ERROR_WRITE_FAULT);
+		}
+		goto out;
+	}
+	UpdateProgressWithInfo(OP_FORMAT, MSG_261, 1, 1);
+	ret = TRUE;
+
+out:
+	if (mount_point != NULL) {
+		UnmountVolume(mount_point);
+		free(mount_point);
+	}
+	CloseDrive(&drive);
+	DiskSetFree(&disks);
+	if (ret)
+		uprintf("Saved '%s'", job->image_name);
+	return ret && !IS_ERROR(ErrorStatus);
+}
+
+/*
  * The helper
  */
 
@@ -430,6 +527,30 @@ static void* ProgressTypeThread(void* param)
 	return NULL;
 }
 
+// A device node, as GetDevices() lists them ("/dev/sdb")
+static BOOL IsValidDevnode(const char* devnode)
+{
+	return (strncmp(devnode, "/dev/", 5) == 0) && (strchr(&devnode[5], '/') == NULL) &&
+		(devnode[5] != 0) && (devnode[5] != '.');
+}
+
+static BOOL ParseSave(ipc_msg_t* m, job_t* job)
+{
+	memset(job, 0, sizeof(*job));
+	job->image_fd = job->archive_fd = job->bb_log_fd = job->unattend_fd = -1;
+	job->save = TRUE;
+	if ((ipc_get_str(m, job->devnode, sizeof(job->devnode)) == NULL) || !IsValidDevnode(job->devnode))
+		return FALSE;
+	job->diskseq = ipc_get_u64(m);
+	job->save_type = ipc_get_u32(m);
+	if (ipc_get_str(m, job->image_name, sizeof(job->image_name)) == NULL)
+		job->image_name[0] = 0;
+	if (!ipc_end(m) || (m->nfds != 1) || (job->save_type < SAVE_VHD) || (job->save_type > SAVE_ISO))
+		return FALSE;
+	job->image_fd = ipc_take_fd(m, 0);
+	return (job->image_fd >= 0);
+}
+
 static BOOL ParseFormat(ipc_msg_t* m, job_t* job)
 {
 	uint32_t opts_size = ipc_get_u32(m), fd_flags;
@@ -439,9 +560,7 @@ static BOOL ParseFormat(ipc_msg_t* m, job_t* job)
 	job->image_fd = job->archive_fd = job->bb_log_fd = job->unattend_fd = -1;
 	if ((opts_size != sizeof(opts)) || !ipc_get_bytes(m, &opts, sizeof(opts)) || !CheckOptions(&opts))
 		return FALSE;
-	if ((ipc_get_str(m, job->devnode, sizeof(job->devnode)) == NULL) ||
-		(strncmp(job->devnode, "/dev/", 5) != 0) || (strchr(&job->devnode[5], '/') != NULL) ||
-		(job->devnode[5] == 0) || (job->devnode[5] == '.'))
+	if ((ipc_get_str(m, job->devnode, sizeof(job->devnode)) == NULL) || !IsValidDevnode(job->devnode))
 		return FALSE;
 	job->diskseq = ipc_get_u64(m);
 	fd_flags = ipc_get_u32(m);
@@ -519,7 +638,7 @@ static BOOL RunWorker(job_t* job)
 		if (pthread_create(&type_thread, NULL, ProgressTypeThread, (void*)(intptr_t)type_pipe[0]) == 0)
 			pthread_detach(type_thread);
 		sigaction(SIGUSR1, &sa, NULL);
-		result[0] = Work(job);
+		result[0] = job->save ? WorkSave(job) : Work(job);
 		result[1] = ErrorStatus;
 		_exit((write(result_pipe[1], result, sizeof(result)) == sizeof(result)) ? 0 : 1);
 	}
@@ -690,6 +809,22 @@ int main(int argc, char** argv)
 			if (!ipc_end(&in) || (type < 0) || (type >= UPT_MAX))
 				goto out;
 			update_progress_type = type;
+			break;
+		case IPC_SAVE:
+			ErrorStatus = 0;
+			if (!ParseSave(&in, &job)) {
+				uprintf("Invalid save request");
+				send_done(FALSE, RUFUS_ERROR(ERROR_INVALID_PARAMETER));
+			} else if ((dev = FindDevice(job.devnode, job.diskseq)) == NULL) {
+				send_done(FALSE, RUFUS_ERROR(ERROR_ACCESS_DENIED));
+			} else {
+				static_strcpy(job.syspath, dev->syspath);
+				if (!RunWorker(&job))
+					goto out;
+			}
+			if (job.image_fd >= 0)
+				close(job.image_fd);
+			job.image_fd = -1;
 			break;
 		case IPC_CYCLE_PORT:
 			ErrorStatus = 0;

@@ -26,8 +26,8 @@
 #define WIM_MAGIC							0x0000004D4957534DULL	// "MSWIM\0\0\0"
 #define MBR_SIZE							512	// Might need to review this once we see bootable 4k systems
 
-// NB: The VirtDisk structures and WIMGAPI messages of upstream are only needed by the
-// VHD/FFU saving code, which has moved to vhd_save.c until it is ported (stage 4).
+// NB: The VirtDisk structures and WIMGAPI messages of upstream are not needed: VHD and VHDX
+// images are read and saved by vdisk.c.
 
 extern int8_t IsBootableImage(const char* path);
 extern uint32_t GetWimVersion(const char* image);

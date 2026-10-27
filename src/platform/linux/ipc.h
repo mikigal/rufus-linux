@@ -39,6 +39,8 @@
  *   IPC_PROGRESS_TYPE u32 type (UPT_*): what the progress text displays, at any time
  *   IPC_CYCLE_PORT str devnode, u64 diskseq: disconnect a USB drive and connect it again (Alt-C),
  *                answered by IPC_DONE
+ *   IPC_SAVE     str devnode, u64 diskseq, u32 type (SAVE_*), str image name, fd image: save a
+ *                drive to an image, with the messages of a format until IPC_DONE
  * Helper → front end:
  *   IPC_HELLO    u32 version
  *   IPC_LOG      str text
@@ -70,6 +72,7 @@ enum ipc_type {
 	IPC_DONE,
 	IPC_PROGRESS_TYPE,
 	IPC_CYCLE_PORT,
+	IPC_SAVE,
 };
 
 /* The file descriptors that come with IPC_FORMAT */

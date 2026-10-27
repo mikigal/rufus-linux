@@ -346,6 +346,45 @@ class Base:
         self.assertEqual((job["image_fd"], job["image"]), (1, image))
         self.wait_ready(r)
 
+    def test_save(self):
+        # The save button (IDC_SAVE) is with the advanced drive properties: a VHDX, then a VHD (which needs
+        # the space of the drive)
+        r = self.run_rufus(devices=[dict(gui.USB_STICK, size=256 * 1024**2)])
+        r.click("IDC_ADVANCED_DRIVE_PROPERTIES")
+        r.wait(lambda: r.showing(r.get("IDC_SAVE")), what="the save button")
+        for name, save_type in (("saved.vhdx", 2), ("saved.vhd", 1)):
+            image = os.path.join(r.dir, name)
+            r.command(f"savefile {image}")
+            r.click("IDC_SAVE")
+            r.wait(lambda: any(e["event"] == "save" and e["image"] == image for e in r.helper_events()),
+                   timeout=30, what="the save request")
+            job = next(e for e in r.helper_events() if e["event"] == "save" and e["image"] == image)
+            self.assertEqual((job["devnode"], job["diskseq"], job["type"], job["image_fd"]), ("/dev/sdz", 42, save_type, 1))
+            # START needs an image, which this test does not select
+            r.wait(lambda: r.enabled("IDC_SAVE") and r.get("IDC_PROGRESS").get_description() == msg(210),
+                   timeout=30, what="the end of the save")
+            with open(image, "rb") as f:
+                self.assertEqual(f.read(), b"Fake image")
+        # The type of the last image is the one that the next save proposes
+        with open(os.path.join(r.dir, "config", "rufus", "rufus.ini")) as f:
+            self.assertIn("PreferredSaveImageType = vhd\n", f.read())
+        self.stop(r)
+
+        # A VHD needs the space of the drive
+        large = dict(gui.USB_STICK, size=64 * 1024**3)
+        r = self.run_rufus(devices=[large])
+        if shutil.disk_usage(r.dir).free >= large["size"]:
+            self.skipTest("too much free space to fail")
+        r.click("IDC_ADVANCED_DRIVE_PROPERTIES")
+        r.wait(lambda: r.showing(r.get("IDC_SAVE")), what="the save button")
+        r.command(f"savefile {os.path.join(r.dir, 'large.vhd')}")
+        r.click("IDC_SAVE")
+        dlg = r.dialog("IDD_NOTIFICATION")
+        self.assertEqual(dlg.get_name(), msg(42))
+        r.click("IDCLOSE", dlg)
+        r.dialog_closed("IDD_NOTIFICATION")
+        self.assertFalse(any(e["event"] == "save" for e in r.helper_events()))
+
     def test_selection(self):
         # An ISOHybrid: the boot check asks how to write it (IDD_SELECTION)
         missing = media.missing_tools("grub-mkrescue", "xorriso", "mformat")
@@ -448,8 +487,11 @@ class Base:
         r.key("alt+r")
         r.wait(lambda: r.status() == msg(248), what="the deletion of the settings")
         self.assertEqual(os.path.getsize(os.path.join(r.dir, "config", "rufus", "rufus.ini")), 0)
+        # Alt-O: an optical disc to an ISO, which needs a disc
+        r.key("alt+o")
+        r.wait(lambda: "No dumpable optical media found." in r.log(), what="the optical media message")
         # The ones that Linux does not need
-        for keys in ("alt+o", "alt+p", "alt+v", "alt+x"):
+        for keys in ("alt+p", "alt+v", "alt+x"):
             with self.subTest(keys=keys):
                 r.key(keys)
                 r.wait(lambda: ("Linux" in r.status()) or ("VDS" in r.status()) or ("not available" in r.status()),

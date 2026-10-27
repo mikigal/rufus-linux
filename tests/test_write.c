@@ -105,6 +105,8 @@ static void test_write_drive(void)
 		tmp_path("source.img"), tmp_path("fixed.vhd"), NULL };
 	const char* vhd_dynamic[] = { "qemu-img", "convert", "-q", "-f", "raw", "-O", "vpc", "-o", "subformat=dynamic",
 		tmp_path("source.img"), tmp_path("dynamic.vhd"), NULL };
+	const char* vhdx[] = { "qemu-img", "convert", "-q", "-f", "raw", "-O", "vhdx", "-o", "subformat=dynamic,block_size=1M",
+		tmp_path("source.img"), tmp_path("dynamic.vhdx"), NULL };
 	uint8_t zero[512] = { 0 };
 	uint32_t i;
 	int fd, src;
@@ -145,16 +147,30 @@ static void test_write_drive(void)
 		close(fd);
 	}
 
-	// VHDs: the data of a fixed one, and not yet the dynamic ones
+	// VHD and VHDX images: the disk they hold (see test_vdisk.c for the formats)
 	if (have("qemu-img")) {
 		CHECK(run(vhd_fixed));
 		CHECK(run(vhd_dynamic));
+		CHECK(run(vhdx));
 		fd = drive("vhd.drive", DRIVE_SIZE);
 		src = image("fixed.vhd", BLED_COMPRESSION_MAX + 1);
 		CHECK(WriteDrive(fd, DRIVE_SIZE, 512, src, FALSE));
 		CHECK(drive_is(fd, 0, source, source_size));
 		close(src);
+		close(fd);
+		fd = drive("dynamic-vhd.drive", DRIVE_SIZE);
 		src = image("dynamic.vhd", BLED_COMPRESSION_MAX + 1);
+		CHECK(WriteDrive(fd, DRIVE_SIZE, 512, src, FALSE));
+		CHECK(drive_is(fd, 0, source, source_size));
+		close(src);
+		close(fd);
+		fd = drive("vhdx.drive", DRIVE_SIZE);
+		src = image("dynamic.vhdx", BLED_COMPRESSION_MAX + 2);
+		CHECK(WriteDrive(fd, DRIVE_SIZE, 512, src, FALSE));
+		CHECK(drive_is(fd, 0, source, source_size));
+		close(src);
+		// Not a VHDX
+		src = image("source.img", BLED_COMPRESSION_MAX + 2);
 		CHECK(!WriteDrive(fd, DRIVE_SIZE, 512, src, FALSE));
 		CHECK_EQ_INT(ErrorStatus, RUFUS_ERROR(ERROR_NOT_SUPPORTED));
 		close(src);

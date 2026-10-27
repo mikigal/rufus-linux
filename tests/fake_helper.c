@@ -198,6 +198,42 @@ static BOOL format(void)
 	return send_done(TRUE, 0);
 }
 
+// IPC_SAVE: a fake image of the drive, written with progress
+static BOOL save(void)
+{
+	char devnode[64], image[MAX_PATH];
+	uint64_t diskseq;
+	uint32_t type;
+	int i, fd;
+
+	if (ipc_get_str(&in, devnode, sizeof(devnode)) == NULL)
+		return send_done(FALSE, RUFUS_ERROR(ERROR_INVALID_PARAMETER));
+	diskseq = ipc_get_u64(&in);
+	type = ipc_get_u32(&in);
+	if (ipc_get_str(&in, image, sizeof(image)) == NULL)
+		image[0] = 0;
+	fd = (in.nfds == 1) ? ipc_take_fd(&in, 0) : -1;
+	ipc_close_fds(&in);
+	record("{\"event\": \"save\", \"devnode\": \"%s\", \"diskseq\": %llu, \"type\": %u, \"image\": \"%s\", "
+		"\"image_fd\": %d}", devnode, (unsigned long long)diskseq, type, image, (fd >= 0) ? 1 : 0);
+	if (fd < 0)
+		return send_done(FALSE, RUFUS_ERROR(ERROR_INVALID_PARAMETER));
+	for (i = 0; i <= 10; i++) {
+		ipc_init(&out, IPC_PROGRESS);
+		ipc_put_u32(&out, (uint32_t)((uint64_t)i * MAX_PROGRESS / 10));
+		ipc_put_u32(&out, TRUE);
+		if (!ipc_send(SOCK, &out) || !wait_front_end(20, NULL)) {
+			close(fd);
+			record("{\"event\": \"done\", \"result\": \"cancelled\"}");
+			return send_done(FALSE, RUFUS_ERROR(ERROR_CANCELLED));
+		}
+	}
+	i = (write(fd, "Fake image", 10) == 10);
+	close(fd);
+	record("{\"event\": \"done\", \"result\": \"%s\"}", i ? "ok" : "failed");
+	return send_done(i, i ? 0 : RUFUS_ERROR(ERROR_WRITE_FAULT));
+}
+
 int main(int argc, char** argv)
 {
 	char name[MAX_PATH], devnode[64];
@@ -227,6 +263,9 @@ int main(int argc, char** argv)
 			break;
 		case IPC_FORMAT:
 			ok = format();
+			continue;
+		case IPC_SAVE:
+			ok = save();
 			continue;
 		case IPC_CYCLE_PORT:
 			record("{\"event\": \"cycle_port\", \"devnode\": \"%s\"}", ipc_get_str(&in, devnode, sizeof(devnode)));

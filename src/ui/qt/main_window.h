@@ -19,6 +19,8 @@
 
 #pragma once
 
+#include <functional>
+
 #include <atomic>
 
 #include <QAction>
@@ -103,6 +105,9 @@ private:
 	void onSelect(const QString& provided = QString());
 	void startImageScan(bool keep_image_name);
 	void onHash();
+	void onSave();
+	void onSaveOpticalDisc();
+	void startSaveThread(const QString& path, int fd, std::function<BOOL(int fd)> save);
 	void onStart(bool zero_drive = false);
 	void onClose();
 	void showLanguageMenu();

@@ -18,6 +18,7 @@ add_library(rufus_core STATIC
 	resource.c
 	rules.c
 	rules_text.c
+	vdisk.c
 	write_drive.c
 	ui_iface.c
 	../cregex_compile.c
@@ -27,6 +28,7 @@ add_library(rufus_core STATIC
 	../dos_locale.c
 	../hash.c
 	../iso.c
+	../iso_save.c
 	../localization.c
 	../parser.c
 	../pki.c

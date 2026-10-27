@@ -62,4 +62,15 @@ extern BOOL HelperFormat(helper_t* h, const helper_job_t* job);
  */
 extern BOOL HelperCyclePort(helper_t* h, const char* devnode, uint64_t diskseq);
 
+/*
+ * Save a drive to an image (IDC_SAVE), through the helper: a VHD or VHDX
+ * (SAVE_VHD, SAVE_VHDX, see vdisk.c), or an ISO of the files of its first volume
+ * (SAVE_ISO, with xorriso). The image is written to image_fd, opened by the
+ * caller. Runs in the calling thread, as HelperFormat() does.
+ */
+#define SAVE_VHD                    1
+#define SAVE_VHDX                   2
+#define SAVE_ISO                    3
+extern BOOL HelperSave(helper_t* h, const char* devnode, uint64_t diskseq, int type, int image_fd, const char* image_name);
+
 extern void StopHelper(helper_t* h);

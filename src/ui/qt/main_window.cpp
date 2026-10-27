@@ -21,6 +21,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/sysmacros.h>
 #include <time.h>
 #include <unistd.h>
@@ -467,11 +468,7 @@ void MainWindow::createWidgets()
 	// accessibility client that pressed them (a screen reader, or the tests) gets its answer
 	connect(select_, &QToolButton::clicked, this, [this] { onSelect(); }, Qt::QueuedConnection);
 	connect(hash_, &QToolButton::clicked, this, &MainWindow::onHash);
-	// IDC_SAVE: saving a drive to an image (vhd_save.c) comes with stage 4 of the port
-	connect(save_, &QToolButton::clicked, this, [] {
-		uprintf("Saving a drive to a VHD image is not available yet");
-		ui_status(FALSE, STATUS_MSG_TIMEOUT, "Save to VHD: not available yet");
-	});
+	connect(save_, &QToolButton::clicked, this, &MainWindow::onSave, Qt::QueuedConnection);
 	connect(start_, &QPushButton::clicked, this, [this] { onStart(); });
 	connect(close_, &QPushButton::clicked, this, &MainWindow::onClose, Qt::QueuedConnection);
 	connect(log_button_, &QToolButton::clicked, this, [this] { log_->toggle(); });
@@ -896,6 +893,139 @@ void MainWindow::onHash()
 	format_running_ = true;
 	PrintInfo(0, -1);
 	onEvent(UM_TIMER_START, 0);
+}
+
+/*
+ * Save to an image, in a thread: the operation ends with UM_FORMAT_COMPLETED, as a
+ * format does, and the image gets removed if it failed.
+ */
+void MainWindow::startSaveThread(const QString& path, int fd, std::function<BOOL(int fd)> save)
+{
+	std::string image = path.toStdString();
+
+	ErrorStatus = 0;
+	onEvent(UM_PROGRESS_INIT, 0);
+	// Disable all controls except cancel
+	EnableControls(&m_, FALSE, FALSE);
+	format_running_ = true;
+	render();
+	InitProgress(TRUE);
+	PrintInfo(0, -1);
+	onEvent(UM_TIMER_START, 0);
+	std::thread([fd, image, save] {
+		BOOL r = save(fd);
+
+		::close(fd);
+		if (!r)
+			unlink(image.c_str());
+		ui_event(UM_FORMAT_COMPLETED, FALSE);
+	}).detach();
+}
+
+// IDC_SAVE: save the drive to an image, through the helper (SaveImage() upstream)
+void MainWindow::onSave()
+{
+	const rufus_device_t* dev = selectedDevice();
+	// The types of image that the helper can save, as upstream offers them (FFU needs DISM)
+	const struct { const char* ext; int type; QString name; } types[] = {
+		{ "vhd", SAVE_VHD, lmstr(MSG_343) },
+		{ "vhdx", SAVE_VHDX, lmstr(MSG_342) },
+		{ "iso", SAVE_ISO, lmstr(MSG_036) },
+	};
+	QStringList filters;
+	QString filter, path, preferred = QStringLiteral("vhdx");
+	char* setting;
+	std::string devnode;
+	uint64_t diskseq, disk_size;
+	struct statvfs sv;
+	int i, n, type = 0, fd;
+
+	if (format_running_ || m_.op_in_progress || (dev == nullptr))
+		return;
+	devnode = dev->devnode;
+	diskseq = dev->diskseq;
+	disk_size = dev->size;
+	// An ISO needs a file system, and xorriso (oscdimg.exe upstream)
+	n = ((dev->fs_name[0] != 0) && !QStandardPaths::findExecutable(QStringLiteral("xorriso")).isEmpty()) ? 3 : 2;
+	setting = ReadSettingStr(SETTING_PREFERRED_SAVE_IMAGE_TYPE);
+	for (i = 0; i < n; i++) {
+		filters << QStringLiteral("%1 (*.%2)").arg(types[i].name, QString::fromUtf8(types[i].ext));
+		if (safe_strcmp(setting, types[i].ext) == 0)
+			preferred = QString::fromUtf8(types[i].ext);
+	}
+	for (i = 0; i < n; i++) {
+		if (preferred == QString::fromUtf8(types[i].ext))
+			filter = filters[i];
+	}
+	path = TakeTestSaveFile();
+	if (path.isEmpty())
+		path = QFileDialog::getSaveFileName(this, QString(), QDir::home().filePath(QStringLiteral("%1.%2")
+			.arg((strcmp(dev->label, STR_NO_LABEL) == 0) ? QStringLiteral("disk") : QString::fromUtf8(dev->label),
+			preferred)), filters.join(QStringLiteral(";;")), &filter);
+	if (path.isEmpty())
+		return;
+	// Start from the end of the types, as '.vhd' would match for '.vhdx' otherwise
+	for (i = n - 1; (i >= 0) && !path.endsWith(QStringLiteral(".") + QString::fromUtf8(types[i].ext), Qt::CaseInsensitive); i--);
+	if (i < 0) {
+		uprintf("WARNING: Can not determine image type from extension - Saving to uncompressed VHD.");
+		type = SAVE_VHD;
+	} else {
+		type = types[i].type;
+		WriteSettingStr(SETTING_PREFERRED_SAVE_IMAGE_TYPE, (char*)types[i].ext);
+	}
+	if ((type == SAVE_VHD) && (statvfs(QFileInfo(path).absolutePath().toUtf8().constData(), &sv) == 0) &&
+		((uint64_t)sv.f_bavail * sv.f_frsize < disk_size + 512)) {
+		uprintf("The VHD size is too large for the target drive");
+		Notification(MB_ICONERROR | MB_CLOSE, lmprintf(MSG_042), lmprintf(MSG_043, StrError(RUFUS_ERROR(ERROR_FILE_TOO_LARGE), FALSE)));
+		return;
+	}
+	fd = open(path.toUtf8().constData(), O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+	if (fd < 0) {
+		uprintf("Could not create '%s': %s", path.toUtf8().constData(), WindowsErrorString());
+		Notification(MB_ICONERROR | MB_CLOSE, lmprintf(MSG_042), lmprintf(MSG_043, WindowsErrorString()));
+		return;
+	}
+	uprintf("\r\nSave to image operation started");
+	startSaveThread(path, fd, [devnode, diskseq, type, path](int image_fd) {
+		if ((session_helper.sock < 0) && !StartHelper(&session_helper, selected_locale_name())) {
+			uprintf("Could not start the helper");
+			if (!IS_ERROR(ErrorStatus))
+				ErrorStatus = RUFUS_ERROR(ERROR_ACCESS_DENIED);
+			return FALSE;
+		}
+		return HelperSave(&session_helper, devnode.c_str(), diskseq, type, image_fd, path.toUtf8().constData());
+	});
+}
+
+// Alt-O: save the disc of an optical drive to an ISO (OpticalDiscSaveImage() upstream)
+void MainWindow::onSaveOpticalDisc()
+{
+	char devnode[64], label[64];
+	uint64_t size;
+	QString path;
+	int fd;
+
+	if (format_running_ || m_.op_in_progress)
+		return;
+	if (!GetOpticalMedia(devnode, sizeof(devnode), label, sizeof(label), &size)) {
+		uprintf("No dumpable optical media found.");
+		return;
+	}
+	path = TakeTestSaveFile();
+	if (path.isEmpty())
+		path = QFileDialog::getSaveFileName(this, QString(), QDir::home().filePath(QStringLiteral("%1.iso")
+			.arg((label[0] == 0) ? QStringLiteral("disc_image") : QString::fromUtf8(label))),
+			QStringLiteral("%1 (*.iso)").arg(lmstr(MSG_036)));
+	if (path.isEmpty())
+		return;
+	fd = open(path.toUtf8().constData(), O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+	if (fd < 0) {
+		uprintf("Could not create '%s': %s", path.toUtf8().constData(), WindowsErrorString());
+		return;
+	}
+	uprintf("\r\nSave to ISO operation started");
+	std::string disc = devnode;
+	startSaveThread(path, fd, [disc, size](int image_fd) { return SaveOpticalDisc(disc.c_str(), size, image_fd); });
 }
 
 // IDC_START
@@ -1665,8 +1795,7 @@ bool MainWindow::cheatCode(int key, Qt::KeyboardModifiers modifiers, bool check_
 		break;
 	// Alt-O => Save from Optical drive to ISO
 	case Qt::Key_O:
-		uprintf("Saving an optical disc to an ISO image is not available yet");
-		ui_status(FALSE, STATUS_MSG_TIMEOUT, "Optical disc to ISO: not available yet");
+		onSaveOpticalDisc();
 		break;
 	// Alt-P => Toggle GPT ESP to and from Basic Data type: Linux mounts an ESP as any partition
 	case Qt::Key_P:

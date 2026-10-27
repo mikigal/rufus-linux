@@ -373,3 +373,115 @@ BOOL CyclePort(const rufus_device_t* dev)
 	}
 	return TRUE;
 }
+
+/*
+ * The first volume of a drive: the file system of the whole disk, or of its partition with
+ * the lowest number, with the type that the kernel mounts it with.
+ */
+BOOL GetFirstVolume(const char* syspath, char* devnode, size_t devnode_size, char* fs_type, size_t fs_type_size,
+	char* label, size_t label_size)
+{
+	struct udev* udev = udev_new();
+	struct udev_device *dev = NULL, *part, *found = NULL;
+	struct udev_enumerate* e = NULL;
+	struct udev_list_entry* entry;
+	const char *type, *value;
+	uint64_t num, first = UINT64_MAX;
+	BOOL r = FALSE;
+
+	if (udev == NULL)
+		return FALSE;
+	dev = udev_device_new_from_syspath(udev, syspath);
+	if (dev == NULL)
+		goto out;
+	if (safe_strcmp(udev_device_get_property_value(dev, "ID_FS_USAGE"), "filesystem") == 0) {
+		found = udev_device_ref(dev);
+	} else {
+		e = udev_enumerate_new(udev);
+		if (e == NULL)
+			goto out;
+		udev_enumerate_add_match_parent(e, dev);
+		udev_enumerate_add_match_subsystem(e, "block");
+		udev_enumerate_add_match_property(e, "DEVTYPE", "partition");
+		udev_enumerate_scan_devices(e);
+		udev_list_entry_foreach(entry, udev_enumerate_get_list_entry(e)) {
+			part = udev_device_new_from_syspath(udev, udev_list_entry_get_name(entry));
+			if (part == NULL)
+				continue;
+			num = sysattr_u64(part, "partition");
+			if ((safe_strcmp(udev_device_get_property_value(part, "ID_FS_USAGE"), "filesystem") == 0) && (num < first)) {
+				first = num;
+				if (found != NULL)
+					udev_device_unref(found);
+				found = udev_device_ref(part);
+			}
+			udev_device_unref(part);
+		}
+	}
+	if ((found == NULL) || (udev_device_get_devnode(found) == NULL))
+		goto out;
+	type = udev_device_get_property_value(found, "ID_FS_TYPE");
+	if (type == NULL)
+		goto out;
+	safe_strcpy(devnode, devnode_size, udev_device_get_devnode(found));
+	// The kernel driver of NTFS is ntfs3
+	safe_strcpy(fs_type, fs_type_size, (strcmp(type, "ntfs") == 0) ? "ntfs3" : type);
+	value = udev_device_get_property_value(found, "ID_FS_LABEL");
+	safe_strcpy(label, label_size, (value == NULL) ? "" : value);
+	r = TRUE;
+
+out:
+	if (found != NULL)
+		udev_device_unref(found);
+	if (e != NULL)
+		udev_enumerate_unref(e);
+	if (dev != NULL)
+		udev_device_unref(dev);
+	udev_unref(udev);
+	return r;
+}
+
+/*
+ * The first optical drive with a data disc (GetOpticalMedia() upstream): its device
+ * node, the label and size of the disc. Its device can be read by the user of the
+ * active session (systemd gives it access to it).
+ */
+BOOL GetOpticalMedia(char* devnode, size_t devnode_size, char* label, size_t label_size, uint64_t* size)
+{
+	struct udev* udev = udev_new();
+	struct udev_enumerate* e;
+	struct udev_list_entry* entry;
+	struct udev_device* dev;
+	const char* value;
+	BOOL r = FALSE;
+
+	if (udev == NULL)
+		return FALSE;
+	e = udev_enumerate_new(udev);
+	if (e != NULL) {
+		udev_enumerate_add_match_subsystem(e, "block");
+		udev_enumerate_add_match_property(e, "ID_CDROM", "1");
+		udev_enumerate_scan_devices(e);
+		udev_list_entry_foreach(entry, udev_enumerate_get_list_entry(e)) {
+			dev = udev_device_new_from_syspath(udev, udev_list_entry_get_name(entry));
+			if (dev == NULL)
+				continue;
+			// A disc with a file system (not an audio CD, nor an empty drive)
+			if ((safe_strcmp(udev_device_get_property_value(dev, "ID_CDROM_MEDIA"), "1") == 0) &&
+				(udev_device_get_property_value(dev, "ID_FS_TYPE") != NULL) &&
+				(udev_device_get_devnode(dev) != NULL) && (sysattr_u64(dev, "size") != 0)) {
+				safe_strcpy(devnode, devnode_size, udev_device_get_devnode(dev));
+				value = udev_device_get_property_value(dev, "ID_FS_LABEL");
+				safe_strcpy(label, label_size, (value == NULL) ? "" : value);
+				*size = sysattr_u64(dev, "size") * 512;
+				r = TRUE;
+			}
+			udev_device_unref(dev);
+			if (r)
+				break;
+		}
+		udev_enumerate_unref(e);
+	}
+	udev_unref(udev);
+	return r;
+}

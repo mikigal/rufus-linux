@@ -135,10 +135,9 @@ Wayland, and tracks the progress of the port.
   - The lookups that relied on a case insensitive file system use
     `PathFileExistsNoCase()`, and the FAT attributes go through
     `FAT_IOCTL_SET_ATTRIBUTES`.
-  - Fixed and dynamic VHDs are read directly (upstream mounts them with VirtDisk); VHDX
-    is detected, but waits for `qemu-img`.
-  - Saving an image (optical disc to ISO, VHD/VHDX/FFU) waits for stage 4 in
-    `iso_save.c` and `vhd_save.c`, which are not built.
+  - VHD and VHDX images are read directly (`core/vdisk.c`, stage 4; upstream mounts them
+    with VirtDisk).
+  - Saving an image (optical disc to ISO, drive to VHD/VHDX/ISO) came with stage 4.
   - `tests/test_iso.c` builds Linux and Windows-like ISOs (xorriso, mtools, wimlib),
     VHDs (`qemu-img`) and disk images, and checks the image report, the extraction to
     FAT and NTFS (persistence and label patches, symbolic links, `md5sum.txt`) and the
@@ -283,9 +282,8 @@ Done:
   - `WriteMBR()`, `WriteSBR()` and `WritePBR()` are the upstream ones, through ms-sys on
     the file descriptor of the drive; the PBR is written at the offset of its partition,
     once the volume is unmounted (Windows writes it through the locked volume).
-  - `WriteDrive()` writes raw and compressed images (bled) and fixed VHDs from a file
-    descriptor, and zeroes drives (fast zeroing included). Dynamic VHDs, VHDX and FFU
-    wait for stage 4.
+  - `WriteDrive()` writes raw and compressed images (bled) and VHD/VHDX images (stage 4)
+    from a file descriptor, and zeroes drives (fast zeroing included). FFU needs DISM.
   - `tests/test_write.c` checks them on image files, with ms-sys identifying the boot
     records.
 - **Format pipeline** (`platform/linux/format_thread.c`): `FormatDrive()` is
@@ -420,8 +418,8 @@ Done:
   stick to the main window), saved to `$XDG_STATE_HOME/rufus/rufus.log` on exit.
   - The buttons that open a modal dialog do it once their click has returned, so that
     an accessibility client (a screen reader, or the tests) gets its answer.
-  - Fido (DOWNLOAD), saving a drive to an image (IDC_SAVE) and Alt-O wait for stage 4,
-    and say so. There is no update check (§5.7), hence no `IDD_UPDATE_POLICY` (and no
+  - Fido (DOWNLOAD) waits for stage 4, and says so; saving a drive to an image
+    (IDC_SAVE) and Alt-O came with stage 4. There is no update check (§5.7), hence no `IDD_UPDATE_POLICY` (and no
     IDC_SETTINGS button, which only opens it), `IDD_NEW_VERSION`, Alt-Y or Ctrl-Alt-Y.
 - **Localization**: the `.loc` of `$RUFUS_LOC`, the installed one or the one of the
   source tree; the locale of `-l`, the settings or `LC_ALL`/`LC_MESSAGES`/`LANG`. The
@@ -509,6 +507,29 @@ Done:
     `setupldr.bin`. `test_media.py` writes a Windows 11 like ISO with the default
     options through the helper in the VM, checks the hive of `boot.wim` on the stick,
     and boots it.
+- **Virtual disks and saved images** (`core/vdisk.c`, `iso_save.c`, the helper):
+  - What upstream does with VirtDisk: reading the disk of a fixed or dynamic VHD or VHDX
+    (to write it to a drive, and for the image analysis), and saving a drive to a fixed
+    VHD (the raw drive and a footer, usable as a DD image) or a dynamic VHDX (32 MB
+    blocks, without the ones that only hold zeroes, 512-byte logical sectors), as the
+    VirtDisk of upstream creates them. Differencing images, and VHDX images with a log
+    to replay, are refused. The geometry of a VHD whose size no CHS geometry gives is
+    the maximum one, so that the readers that use it (qemu) take the size of the footer.
+    `vhd_save.c` (VirtDisk and DISM) is gone, as FFU needs DISM.
+  - IDC_SAVE: the front end opens the image and sends it to the helper (`IPC_SAVE`),
+    which reads the drive (refusing an image on the drive itself), or mounts its first
+    volume read-only in its mount namespace for an ISO of its files, which xorriso
+    makes (ISO-9660 level 3 with Joliet and Rock Ridge, where upstream makes a UDF image
+    with oscdimg.exe). As upstream, a VHD needs the space of the drive, the type of the
+    last image is the one proposed (SETTING_PREFERRED_SAVE_IMAGE_TYPE), and the ISO is
+    only offered for a drive with a file system.
+  - Alt-O: the optical drive with a data disc, which the front end reads itself.
+  - `rufus-cli save <device> <file>` and `rufus-cli save-optical <file>`.
+  - `tests/test_vdisk.c` reads the VHD and VHDX images of `qemu-img` (fixed, dynamic,
+    small blocks) and checks the images of `VdiskSave()` with it; `tests/test_write.c`
+    writes dynamic VHDs and VHDX to drives. In the VM, `test_media.py` saves a written
+    stick to a VHD, a VHDX and an ISO, and a CD-ROM to an ISO. The GUI test saves
+    through the fake helper (`savefile`, a test hook for the file dialog).
 
 ---
 
@@ -644,7 +665,7 @@ Other dependencies:
   optionally hivex (without it, the registry keys of the Windows User Experience are
   created through `unattend.xml`, as the fallback of upstream does).
 - **Runtime tools**: `mkfs.fat`, `mkntfs`, `mkfs.exfat`, `mkudffs`, `mke2fs`, plus
-  optionally `qemu-img`.
+  optionally `xorriso` (saving a drive to an ISO).
 
 ### 4.5 Build and resources
 
@@ -792,7 +813,7 @@ Notes:
 | `RunCommandWithProgress` | `posix_spawn` + `poll` + `kill` |
 | `GetKeyboardLayoutName`/`GetOEMCP` (DOS locale) | XKB/`LANG` → KLID / OEM code page tables |
 | raw disk I/O (uncached) for bad blocks | **`O_DIRECT`**, otherwise fake drive detection passes from the page cache |
-| VirtDisk (VHD/VHDX) | fixed VHD = raw data + 512-byte footer (by hand); VHDX through `qemu-img` |
+| VirtDisk (VHD/VHDX) | `core/vdisk.c`: the VHD and VHDX formats, read and written by hand |
 
 ---
 
@@ -868,7 +889,7 @@ All of them are carried over (`rufus.c:3904-4280`, `cheatCode()` in
 | Alt-D | delete app files dir | `$XDG_DATA_HOME/Rufus` |
 | Ctrl-Alt-D | dark mode, with a relaunch | the colour scheme (or a dark palette), without a relaunch |
 | Alt-V, Alt-X, Alt-P | VDS, NoDriveTypeAutorun, ESP toggle | a message saying that Linux does not need them |
-| Alt-O | optical disc to ISO | stage 4 (a message until then) |
+| Alt-O | optical disc to ISO | the same, from the optical drive that udev reports with a data disc (read by the user, as systemd gives the session access to it) |
 | Alt-N, Alt-Q | NTFS compression, indexing | passed to the format (`mkntfs -C`, and no `-I`) |
 | Ctrl-T | test hashes (debug builds) | not carried over |
 | Alt-Y, Ctrl-Alt-Y | force the update check | not carried over: there is no update check (§5.7) |
@@ -892,8 +913,8 @@ All of them are carried over (`rufus.c:3904-4280`, `cheatCode()` in
 | Secure Boot checks: DBX, SBAT, SVN, certificates | ✅ | OpenSSL |
 | Bad blocks + fake drive detection | ✅ | requires `O_DIRECT` |
 | MD5/SHA-1/SHA-256/SHA-512 | ✅ | |
-| Save drive to VHD | ✅ | fixed VHD by hand |
-| Save to VHDX, write VHD/VHDX to drive | ⚠️ | `qemu-img` as an optional dependency |
+| Save drive to VHD, VHDX or ISO | ✅ | `core/vdisk.c` (fixed VHD, dynamic VHDX), xorriso for the ISO |
+| Write VHD/VHDX to drive | ✅ | `core/vdisk.c` reads fixed and dynamic VHD and VHDX |
 | Save optical disc to ISO | ✅ | read `/dev/sr*` |
 | USB HDDs, non-USB removables, VID:PID filters | ✅ | |
 | Processes blocking the drive | ✅ | helper, `/proc` |

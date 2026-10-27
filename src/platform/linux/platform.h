@@ -67,3 +67,16 @@ extern int GetDevices(rufus_device_t* devs, int max_devs, const device_filter_t*
  * Needs root.
  */
 extern BOOL CyclePort(const rufus_device_t* dev);
+
+/*
+ * The first volume of a drive (at syspath): its device node, the file system type
+ * that the kernel mounts it with, and its label. Returns FALSE if there is none.
+ */
+extern BOOL GetFirstVolume(const char* syspath, char* devnode, size_t devnode_size, char* fs_type, size_t fs_type_size,
+	char* label, size_t label_size);
+
+/*
+ * The first optical drive with a data disc in it: its device node, and the label
+ * and size of the disc (for Alt-O, saving it to an ISO). Returns FALSE if there is none.
+ */
+extern BOOL GetOpticalMedia(char* devnode, size_t devnode_size, char* label, size_t label_size, uint64_t* size);

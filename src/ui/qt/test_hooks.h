@@ -31,6 +31,8 @@
  *     capture <file>    Save a capture of the active window (or the main one),
  *                       and answer with its device pixel ratio and size
  *     drop <file>       Drop a file on the main window
+ *     savefile <file>   The file that the next file save dialog chooses, without
+ *                       being displayed (TakeTestSaveFile())
  *     language [text]   The entries of the language menu (IDC_LANG), or choose
  *                       the one that starts with text: a headless compositor
  *                       does not show a popup menu without an input event
@@ -53,3 +55,5 @@ class MainWindow;
 void InstallTestControl(MainWindow* window);
 // Returns -1 if RUFUS_TEST_DEVICES is not set
 int GetTestDevices(rufus_device_t* devs, int max_devs, const device_filter_t* filter);
+// The file of the "savefile" command, once, or an empty string
+QString TakeTestSaveFile();

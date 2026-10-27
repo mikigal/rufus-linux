@@ -27,6 +27,7 @@
 
 #include "rufus.h"
 #include "vhd.h"
+#include "vdisk.h"
 #include "missing.h"
 #include "resource.h"
 
@@ -44,61 +45,23 @@ static size_t split_root_len = 0;
 static struct wimlib_progress_info_split last_split_progress;
 
 /*
- * Read the first sector of the disk that a VHD contains, along with its size.
- * Upstream mounts the image with VirtDisk instead. Fixed and dynamic VHDs are
- * supported (differencing ones need their parent).
- * See https://learn.microsoft.com/en-us/windows/win32/vstor/about-vhd
+ * Read the first sector of the disk that a VHD or VHDX contains, along with its
+ * size. Upstream mounts the image with VirtDisk instead (see vdisk.c).
  */
-static BOOL ReadVhdFirstSector(const char* path, uint8_t* buf, uint64_t* disk_size)
+static BOOL ReadVdiskFirstSector(const char* path, enum vdisk_type type, uint8_t* buf, uint64_t* disk_size)
 {
-	uint8_t footer[512], header[1024];
-	uint64_t data_offset, table_offset;
-	uint32_t disk_type, block_size, bat_entry;
-	off_t file_size;
+	vdisk_t* vd;
 	BOOL r = FALSE;
-	int fd;
+	int fd = open(path, O_RDONLY | O_CLOEXEC);
 
-	fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
 		return FALSE;
-	file_size = lseek(fd, 0, SEEK_END);
-	// The footer is the last 512 bytes (or 511, for images created before Virtual PC 2004)
-	if ((file_size < 1024) || (((pread(fd, footer, sizeof(footer), file_size - 512) != sizeof(footer)) ||
-		(memcmp(footer, "conectix", 8) != 0)) && ((pread(fd, footer, sizeof(footer) - 1, file_size - 511) != sizeof(footer) - 1) ||
-		(memcmp(footer, "conectix", 8) != 0)))) {
-		uprintf("  Not a VHD image");
-		goto out;
+	vd = VdiskOpen(fd, type);
+	if (vd != NULL) {
+		*disk_size = VdiskSize(vd);
+		r = (VdiskRead(vd, buf, MBR_SIZE, 0) == MBR_SIZE);
+		VdiskClose(vd);
 	}
-	*disk_size = read_swap64(&footer[0x30]);
-	disk_type = read_swap32(&footer[0x3C]);
-	switch (disk_type) {
-	case 2:	// Fixed: the disk data comes first
-		r = (pread(fd, buf, MBR_SIZE, 0) == MBR_SIZE);
-		break;
-	case 3:	// Dynamic: locate the first block through the BAT
-		data_offset = read_swap64(&footer[0x10]);
-		if ((pread(fd, header, sizeof(header), (off_t)data_offset) != sizeof(header)) ||
-			(memcmp(header, "cxsparse", 8) != 0))
-			goto out;
-		table_offset = read_swap64(&header[0x10]);
-		block_size = read_swap32(&header[0x20]);
-		if ((block_size < MBR_SIZE) || (pread(fd, &bat_entry, sizeof(bat_entry), (off_t)table_offset) != sizeof(bat_entry)))
-			goto out;
-		bat_entry = bswap_uint32(bat_entry);
-		if (bat_entry == 0xFFFFFFFF) {
-			// Unallocated block
-			memset(buf, 0, MBR_SIZE);
-			r = TRUE;
-		} else {
-			// The block starts with its sector bitmap, padded to a 512-byte boundary
-			r = (pread(fd, buf, MBR_SIZE, (off_t)bat_entry * 512 + CEILING_ALIGN(block_size / 512 / 8, 512)) == MBR_SIZE);
-		}
-		break;
-	default:
-		uprintf("  Differencing VHDs are not supported");
-		break;
-	}
-out:
 	close(fd);
 	return r;
 }
@@ -179,14 +142,10 @@ static int8_t IsCompressedBootableImage(const char* path)
 				} else {
 					uprintf("  An FFU image was selected, but this system does not have FFU support!");
 				}
-			} else if (img_report.compression_type == BLED_COMPRESSION_MAX + 1) {
-				if (ReadVhdFirstSector(path, buf, &img_report.projected_size)) {
-					img_report.is_vhd = TRUE;
-					dc = MBR_SIZE;
-				}
-			} else {
-				// TODO: VHDX (through qemu-img, see LINUX_PORT.md)
-				uprintf("  VHDX images are not supported yet");
+			} else if (ReadVdiskFirstSector(path, (img_report.compression_type == BLED_COMPRESSION_MAX + 1) ?
+				VDISK_VHD : VDISK_VHDX, buf, &img_report.projected_size)) {
+				img_report.is_vhd = TRUE;
+				dc = MBR_SIZE;
 			}
 			if (dc != MBR_SIZE) {
 				free(buf);
