@@ -30,6 +30,7 @@
 #include <assert.h>
 
 #include "rufus.h"
+#include "options.h"
 #include "file.h"
 #include "drive.h"
 #include "format.h"
@@ -39,8 +40,6 @@
 #include "localization.h"
 
 #define die(msg, err) do { uprintf(msg); ErrorStatus = RUFUS_ERROR(err); goto out; } while(0)
-
-extern BOOL write_as_esp;
 
 /* Large FAT32 */
 #pragma pack(push, 1)
@@ -199,7 +198,7 @@ BOOL FormatLargeFAT32(DWORD DriveIndex, uint64_t PartitionOffset, DWORD ClusterS
 	VolumeId = GetVolumeID();
 
 	// Open the drive and lock it
-	hLogicalVolume = write_as_esp ?
+	hLogicalVolume = opts.write_as_esp ?
 		AltGetLogicalHandle(DriveIndex, PartitionOffset, TRUE, TRUE, FALSE) :
 		GetLogicalHandle(DriveIndex, PartitionOffset, TRUE, TRUE, FALSE);
 	if (IS_ERROR(ErrorStatus))
@@ -465,7 +464,7 @@ BOOL FormatLargeFAT32(DWORD DriveIndex, uint64_t PartitionOffset, DWORD ClusterS
 	}
 	// Handle must be closed for SetVolumeLabel to work
 	safe_closehandle(hLogicalVolume);
-	VolumeName = write_as_esp ?
+	VolumeName = opts.write_as_esp ?
 		AltGetLogicalName(DriveIndex, PartitionOffset, TRUE, TRUE) :
 		GetLogicalName(DriveIndex, PartitionOffset, TRUE, TRUE);
 	if ((VolumeName == NULL) || (!SetVolumeLabelA(VolumeName, Label))) {

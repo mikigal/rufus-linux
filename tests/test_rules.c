@@ -35,6 +35,8 @@
 #include "rufus.h"
 #include "resource.h"
 #include "rules.h"
+#include "options.h"
+#include "progress.h"
 #include "ui_iface.h"
 #include "rules_oracle/oracle.h"
 #include "../res/grub/grub_version.h"
@@ -80,6 +82,7 @@ static BOOL combo_has(const rules_combo_t* c, int data, uint8_t flags)
 static void test_scenarios(void)
 {
 	rules_state_t m;
+	rufus_options_t o;
 	RUFUS_IMG_REPORT img;
 
 	/* No image: non bootable, every FS, SFD allowed */
@@ -158,6 +161,30 @@ static void test_scenarios(void)
 	CHECK_EQ_INT(m.persistence_max, (16 * GB - 128 * MB - PERCENTAGE(PROJECTED_SIZE_RATIO, 5 * GB)) / GB);
 	CHECK(!m.persistence_units_visible);	// No persistence until the slider moves
 	CHECK(m.old_bios_fixes.enabled);
+	// The options of the format operation, and the progress allocation
+	rules_on_label(&m, "UBUNTU");
+	rules_on_check(&m, &m.extended_label);
+	rules_on_start(&m);
+	ResetOptions(&o);
+	rules_get_options(&m, &o);
+	CHECK_EQ_INT(o.boot_type, BT_IMAGE);
+	CHECK_EQ_INT(o.partition_type, PARTITION_STYLE_MBR);
+	CHECK_EQ_INT(o.target_type, TT_BIOS);
+	CHECK_EQ_INT(o.fs_type, FS_FAT32);
+	CHECK_EQ_INT(o.cluster_size, 8 * KB);
+	CHECK_EQ_STR(o.label, "UBUNTU");
+	CHECK(o.quick_format && !o.extended_label && !o.bad_blocks);
+	CHECK_EQ_INT(o.disk_size, 16 * GB - 128 * MB);
+	CHECK(o.lock_drive && o.use_rufus_mbr);	// Defaults, which the window does not hold
+	opts = o;
+	img_report = img;
+	InitProgress(FALSE);
+	CHECK_EQ_INT(nb_slots[OP_ANALYZE_MBR], 1);
+	CHECK_EQ_INT(nb_slots[OP_FILE_COPY], -1);
+	CHECK_EQ_INT(nb_slots[OP_CREATE_FS], nb_steps[FS_FAT32]);
+	CHECK_EQ_INT(nb_slots[OP_FINALIZE], 2);
+	CHECK(slot_end[OP_MAX] > 99.9f && slot_end[OP_MAX] < 100.1f);
+	rules_on_operation_end(&m);
 	// GPT: UEFI only
 	rules_on_partition_scheme(&m, 1);
 	CHECK_EQ_INT(rules_combo_data(&m.partition), PARTITION_STYLE_GPT);
@@ -174,8 +201,22 @@ static void test_scenarios(void)
 	CHECK(!m.partition_enabled && !m.target_enabled && !m.fs_enabled && !m.cluster_enabled);
 	CHECK(!m.quick_format.enabled && !m.quick_format.checked);
 	CHECK(!m.label_enabled);
-	CHECK(m.bad_blocks_enabled);
+	CHECK(m.bad_blocks.enabled);
 	CHECK(m.start_enabled);
+	rules_on_check(&m, &m.bad_blocks);
+	rules_on_nb_passes(&m, 3);
+	rules_on_start(&m);
+	ResetOptions(&o);
+	rules_get_options(&m, &o);
+	CHECK(o.bad_blocks);
+	CHECK_EQ_INT(o.nb_passes_sel, 3);	// MLC pattern
+	opts = o;
+	img_report = img;
+	InitProgress(FALSE);
+	CHECK_EQ_INT(nb_slots[OP_BADBLOCKS], -1);
+	CHECK_EQ_INT(nb_slots[OP_FORMAT], -1);	// The image write
+	CHECK_EQ_INT(nb_slots[OP_FILE_COPY], 0);
+	CHECK_EQ_INT(nb_slots[OP_CREATE_FS], 0);
 
 	/* FreeDOS: FAT only, MBR/BIOS only, and the FAT16 default for a small drive */
 	rules_drive_t small = usb_16gb;
@@ -417,6 +458,8 @@ static void snap_from_model(snapshot_t* s, const rules_state_t* m)
 	snap_from_check(&s->extended_label, &m->extended_label);
 	snap_from_check(&s->old_bios_fixes, &m->old_bios_fixes);
 	snap_from_check(&s->uefi_validation, &m->uefi_validation);
+	snap_from_check(&s->bad_blocks, &m->bad_blocks);
+	s->nb_passes_sel = m->nb_passes_sel;
 	s->device_enabled = m->device_enabled;
 	s->boot_enabled = m->boot_enabled;
 	s->hash_enabled = m->hash_enabled;
@@ -428,7 +471,6 @@ static void snap_from_model(snapshot_t* s, const rules_state_t* m)
 	s->persistence_units_enabled = m->persistence_units_enabled;
 	s->persistence_units_visible = m->persistence_units_visible;
 	s->label_enabled = m->label_enabled;
-	s->bad_blocks_enabled = m->bad_blocks_enabled;
 	s->partition_enabled = m->partition_enabled;
 	s->target_enabled = m->target_enabled;
 	s->fs_enabled = m->fs_enabled;
@@ -525,6 +567,9 @@ static BOOL cmp_snapshot(const snapshot_t* a, const snapshot_t* b)
 	CMP_INT(old_bios_fixes.checked);
 	CMP_INT(uefi_validation.enabled);
 	CMP_INT(uefi_validation.checked);
+	CMP_INT(bad_blocks.enabled);
+	CMP_INT(bad_blocks.checked);
+	CMP_INT(nb_passes_sel);
 	CMP_INT(device_enabled);
 	CMP_INT(boot_enabled);
 	CMP_INT(hash_enabled);
@@ -536,7 +581,6 @@ static BOOL cmp_snapshot(const snapshot_t* a, const snapshot_t* b)
 	CMP_INT(persistence_units_enabled);
 	CMP_INT(persistence_units_visible);
 	CMP_INT(label_enabled);
-	CMP_INT(bad_blocks_enabled);
 	CMP_INT(partition_enabled);
 	CMP_INT(target_enabled);
 	CMP_INT(fs_enabled);
@@ -594,8 +638,87 @@ static const oracle_drive_t* to_oracle_drive(const rules_drive_t* d, oracle_driv
 	return od;
 }
 
+/* The options of an operation and the progress allocation that derives from them */
+static BOOL cmp_options(const rufus_options_t* a, const rufus_options_t* b)
+{
+	CMP_INT(DeviceNum);
+	CMP_INT(device_index);
+	CMP_INT(disk_size);
+	CMP_INT(boot_type);
+	CMP_INT(partition_type);
+	CMP_INT(target_type);
+	CMP_INT(fs_type);
+	CMP_INT(cluster_size);
+	if (strcmp(a->label, b->label) != 0) {
+		fprintf(stderr, "Mismatch on options label: rules = '%s', windows = '%s'\n", a->label, b->label);
+		return FALSE;
+	}
+	CMP_INT(quick_format);
+	CMP_INT(extended_label);
+	CMP_INT(old_bios_fixes);
+	CMP_INT(bad_blocks);
+	CMP_INT(nb_passes_sel);
+	CMP_INT(image_option);
+	CMP_INT(image_options);
+	CMP_INT(persistence_size);
+	CMP_INT(validate_md5sum);
+	CMP_INT(write_as_image);
+	CMP_INT(write_as_esp);
+	CMP_INT(unattend_xml_flags);
+	CMP_INT(append_silent);
+	CMP_INT(allow_dual_uefi_bios);
+	CMP_INT(force_large_fat32);
+	return TRUE;
+}
+
+static BOOL compare_options(const rules_state_t* m)
+{
+	rufus_options_t a, b;
+	int i, win_nb_slots[OP_MAX];
+	float win_slot_end[OP_MAX + 1];
+	BOOL only_format = (rnd(4) == 0), has_archive = (rnd(4) == 0), has_unattend_xml = (rnd(3) == 0);
+
+	ResetOptions(&a);
+	ResetOptions(&b);
+	rules_get_options(m, &a);
+	oracle_options(&b);
+	if (!cmp_options(&a, &b))
+		goto fail;
+
+	// Upstream reads past nb_steps[] when there is no file system (and only the format slot is concerned)
+	if (!only_format && (a.fs_type < 0))
+		return TRUE;
+	opts = a;
+	img_report = m->img;
+	archive_path = has_archive ? "archive.zip" : NULL;
+	unattend_xml_path = has_unattend_xml ? "unattend.xml" : NULL;
+	InitProgress(only_format);
+	archive_path = NULL;
+	unattend_xml_path = NULL;
+	oracle_init_progress(only_format, has_archive, has_unattend_xml, win_nb_slots, win_slot_end);
+	for (i = 0; i < OP_MAX; i++) {
+		if (nb_slots[i] != win_nb_slots[i]) {
+			fprintf(stderr, "Mismatch on progress slots of op %d (only format %d, archive %d, unattend %d): "
+				"rules = %d, windows = %d\n", i, only_format, has_archive, has_unattend_xml, nb_slots[i], win_nb_slots[i]);
+			goto fail;
+		}
+	}
+	for (i = 0; i < OP_MAX + 1; i++) {
+		if (slot_end[i] != win_slot_end[i]) {
+			fprintf(stderr, "Mismatch on progress slot end %d: rules = %f, windows = %f\n", i, slot_end[i], win_slot_end[i]);
+			goto fail;
+		}
+	}
+	return TRUE;
+
+fail:
+	dump_history();
+	mismatches++;
+	return FALSE;
+}
+
 enum { EV_DEVICE, EV_DEVICE_REFRESH, EV_BOOT, EV_IMAGE_OPTION, EV_PARTITION, EV_TARGET, EV_FS, EV_CLUSTER,
-	EV_LABEL, EV_CHECK, EV_ADVANCED_DEVICE, EV_ADVANCED_FORMAT, EV_DUAL, EV_SCAN, EV_START, EV_MAX };
+	EV_PASSES, EV_LABEL, EV_CHECK, EV_ADVANCED_DEVICE, EV_ADVANCED_FORMAT, EV_DUAL, EV_SCAN, EV_START, EV_MAX };
 
 static BOOL run_sequence(int steps)
 {
@@ -606,7 +729,8 @@ static BOOL run_sequence(int steps)
 	RUFUS_IMG_REPORT img;
 	int step, ev, idx, result;
 	BOOL keep;
-	rules_check_t* checks[] = { &m.quick_format, &m.extended_label, &m.old_bios_fixes, &m.uefi_validation };
+	rules_check_t* checks[] = { &m.quick_format, &m.extended_label, &m.old_bios_fixes, &m.uefi_validation,
+		&m.bad_blocks };
 
 	history_len = 0;
 	random_env(&env);
@@ -709,6 +833,14 @@ static BOOL run_sequence(int steps)
 			rules_on_cluster_size(&m, idx);
 			oracle_cluster_size(idx);
 			break;
+		case EV_PASSES:
+			if (!m.bad_blocks.enabled)
+				continue;
+			idx = rnd(BADLOCKS_PATTERN_TYPES);
+			log_event("passes: %d", idx);
+			rules_on_nb_passes(&m, idx);
+			oracle_nb_passes(idx);
+			break;
 		case EV_LABEL:
 			if (!m.label_enabled)
 				continue;
@@ -763,6 +895,8 @@ static BOOL run_sequence(int steps)
 			log_event("start");
 			rules_on_start(&m);
 			oracle_start();
+			if (!compare(&m) || !compare_options(&m))
+				return FALSE;
 			break;
 		}
 		if (!compare(&m))

@@ -21,7 +21,7 @@
 
 #pragma once
 
-extern int unattend_xml_flags, unattend_xml_mask;
+extern int unattend_xml_mask;	// unattend_xml_flags is in options.h
 extern int wintogo_index, wininst_index;
 extern char* unattend_xml_path;
 

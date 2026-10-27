@@ -27,6 +27,7 @@
 #include <ctype.h>
 
 #include "rufus.h"
+#include "options.h"
 #include "missing.h"
 #include "resource.h"
 #include "msapi_utf8.h"
@@ -112,9 +113,9 @@ BOOL InstallSyslinux(DWORD drive_index, char drive_letter, int file_system)
 	int ldlinux_sectors;
 	uint32_t ldlinux_cluster;
 	int i, w, nsectors, sl_fs_stype;
-	BOOL use_v5 = (boot_type == BT_SYSLINUX_V6) || ((boot_type == BT_IMAGE) && (SL_MAJOR(img_report.sl_version) >= 5));
+	BOOL use_v5 = (opts.boot_type == BT_SYSLINUX_V6) || ((opts.boot_type == BT_IMAGE) && (SL_MAJOR(img_report.sl_version) >= 5));
 
-	PrintInfoDebug(0, MSG_234, (boot_type == BT_IMAGE) ? img_report.sl_version_str : embedded_sl_version_str[use_v5?1:0]);
+	PrintInfoDebug(0, MSG_234, (opts.boot_type == BT_IMAGE) ? img_report.sl_version_str : embedded_sl_version_str[use_v5?1:0]);
 
 	/* 4K sector size workaround */
 	SECTOR_SHIFT = 0;
@@ -218,7 +219,7 @@ BOOL InstallSyslinux(DWORD drive_index, char drive_letter, int file_system)
 	}
 
 	uprintf("Successfully wrote '%s'", &path[3]);
-	if (boot_type != BT_IMAGE)
+	if (opts.boot_type != BT_IMAGE)
 		UpdateProgress(OP_FILE_COPY, -1.0f);
 
 	/* Now flush the media */
@@ -332,7 +333,7 @@ BOOL InstallSyslinux(DWORD drive_index, char drive_letter, int file_system)
 	}
 	uprintf("Successfully wrote Syslinux boot record");
 
-	if (boot_type == BT_SYSLINUX_V6) {
+	if (opts.boot_type == BT_SYSLINUX_V6) {
 		IGNORE_RETVAL(_chdirU(app_data_dir));
 		static_sprintf(path, "%s\\%s-%s", FILES_DIR, syslinux, embedded_sl_version_str[1]);
 		IGNORE_RETVAL(_chdir(path));
@@ -382,7 +383,7 @@ BOOL InstallSyslinux(DWORD drive_index, char drive_letter, int file_system)
 		fclose(fd);
 	}
 
-	if (boot_type != BT_IMAGE)
+	if (opts.boot_type != BT_IMAGE)
 		UpdateProgress(OP_FILE_COPY, -1.0f);
 
 	r = TRUE;

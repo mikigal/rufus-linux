@@ -35,6 +35,7 @@
 #pragma once
 
 #include "rufus.h"
+#include "options.h"
 
 #define RULES_MAX_ENTRIES           24
 
@@ -125,6 +126,8 @@ typedef struct {
 	rules_check_t extended_label;
 	rules_check_t old_bios_fixes;
 	rules_check_t uefi_validation;
+	rules_check_t bad_blocks;		// Also applies to the passes dropdown
+	int nb_passes_sel;				// Selected entry of the passes dropdown (0 to 4, see rufus_options_t)
 
 	/* Enabled state of the other controls */
 	BOOL device_enabled;
@@ -137,7 +140,6 @@ typedef struct {
 	BOOL persistence_size_enabled;
 	BOOL persistence_units_enabled;
 	BOOL label_enabled;
-	BOOL bad_blocks_enabled;
 	BOOL partition_enabled;			// Also applies to the CSM help indicator
 	BOOL target_enabled;
 	BOOL fs_enabled;
@@ -195,6 +197,7 @@ extern void rules_on_partition_scheme(rules_state_t* m, int index);
 extern void rules_on_target_system(rules_state_t* m, int index);
 extern void rules_on_file_system(rules_state_t* m, int index);
 extern void rules_on_cluster_size(rules_state_t* m, int index);
+extern void rules_on_nb_passes(rules_state_t* m, int index);
 extern void rules_on_label(rules_state_t* m, const char* label);
 // A check box was clicked: 'check' is one of the rules_check_t of the state
 extern void rules_on_check(rules_state_t* m, rules_check_t* check);
@@ -210,6 +213,15 @@ extern void rules_on_image_scan_end(rules_state_t* m, const RUFUS_IMG_REPORT* im
 // START was pressed, and the operation completed
 extern void rules_on_start(rules_state_t* m);
 extern void rules_on_operation_end(rules_state_t* m);
+
+/*
+ * Fill the options of a format operation with the selections of the window,
+ * as the Windows version reads them on START and from its format thread, and
+ * reset the decisions that the boot check makes. The other fields (the drive
+ * index and the settings that the window does not hold) are left untouched,
+ * so the front end typically copies its settings to 'o' first.
+ */
+extern void rules_get_options(const rules_state_t* m, rufus_options_t* o);
 
 /* Lower level rules, also used by the events above */
 extern void SetAllowedFileSystems(rules_state_t* m, BOOL allowed_filesystem[FS_MAX]);

@@ -49,6 +49,10 @@
 #define SetPersistencePos           win_SetPersistencePos
 #define SetPersistenceSize          win_SetPersistenceSize
 #define ToggleImageOptions          win_ToggleImageOptions
+#define InitProgress                win_InitProgress
+#define archive_path                win_archive_path
+#define unattend_xml_path           win_unattend_xml_path
+// NB: These also rename the matching fields of rufus_options_t, in this file only
 
 #include "rufus.h"
 #include "resource.h"
@@ -57,6 +61,9 @@
 #include "../../res/grub2/grub2_version.h"
 
 #define BN_CLICKED                  0
+// The upstream form of the macro, which reads the global
+#undef IS_FAT32_COMPAT
+#define IS_FAT32_COMPAT(r)  (((r.has_4GB_file == 0 && !HAS_FATLESS_GRUB(r)) || (r.has_4GB_file == 0x11 && allow_dual_uefi_bios)) && !r.needs_ntfs)
 #define SETTING_ADVANCED_MODE_DEVICE "AdvancedDeviceMode"
 #define SETTING_ADVANCED_MODE_FORMAT "AdvancedFormatMode"
 
@@ -94,7 +101,7 @@ char embedded_sl_version_str[2][12];
 const char* FileSystemLabel[FS_MAX] = { "FAT", "FAT32", "NTFS", "UDF", "exFAT", "ReFS", "ext2", "ext3", "ext4" };
 static const char* sfd_name = "Super Floppy Disk";
 static char* short_image_path;
-static BOOL advanced_mode_device, advanced_mode_format, force_large_fat32, use_vds;
+static BOOL advanced_mode_device, advanced_mode_format, force_large_fat32;
 static BOOL has_uefi_csm, validate_md5sum, app_changed_size, enable_HDDs;
 static BOOL user_changed_label, app_changed_label, dont_display_image_name;
 static BOOL allowed_filesystem[FS_MAX];
@@ -107,6 +114,11 @@ static RUFUS_DRIVE_INFO SelectedDrive;
 static RUFUS_DRIVE rufus_drive[MAX_DRIVES];
 static oracle_drive_t current_drive;
 static int rh, section_vpos[3];
+static BOOL use_vds;
+char *archive_path, *unattend_xml_path;
+static int nb_slots[OP_MAX];
+static float slot_end[OP_MAX+1];	// shifted +1 so that we can subtract 1 to OP indexes
+static float previous_end;
 static const int image_option_move_ids[] = { IDS_IMAGE_OPTION_TXT };
 // From ui_data.h
 static int image_option_toggle_ids[][2] = {
@@ -119,7 +131,7 @@ static int image_option_toggle_ids[][2] = {
 
 /* Controls */
 static HWND hMainDialog, hDeviceList, hBootType, hImageOption, hPartitionScheme, hTargetSystem;
-static HWND hFileSystem, hClusterSize, hLabel, hSelectImage, hStart;
+static HWND hFileSystem, hClusterSize, hLabel, hSelectImage, hStart, hNBPasses;
 static HWND hMultiToolbar, hSaveToolbar, hHashToolbar, hAdvancedDeviceToolbar, hAdvancedFormatToolbar;
 static mock_ctrl_t controls[64];
 static int nb_controls;
@@ -155,6 +167,7 @@ void mock_reset(void)
 	hLabel = GetDlgItem(hMainDialog, IDC_LABEL);
 	hSelectImage = GetDlgItem(hMainDialog, IDC_SELECT);
 	hStart = GetDlgItem(hMainDialog, IDC_START);
+	hNBPasses = GetDlgItem(hMainDialog, IDC_NB_PASSES);
 	hMultiToolbar = GetDlgItem(hMainDialog, IDC_ABOUT);
 	hSaveToolbar = GetDlgItem(hMainDialog, IDC_SAVE);
 	hHashToolbar = GetDlgItem(hMainDialog, IDC_HASH);
@@ -1223,6 +1236,94 @@ void ToggleImageOptions(void)
 	InvalidateRect(hMainDialog, NULL, TRUE);
 }
 
+
+void InitProgress(BOOL bOnlyFormat)
+{
+	int i;
+	float last_end = 0.0f, slots_discrete = 0.0f, slots_analog = 0.0f;
+
+	memset(nb_slots, 0, sizeof(nb_slots));
+	memset(slot_end, 0, sizeof(slot_end));
+	previous_end = 0.0f;
+
+	if (bOnlyFormat) {
+		nb_slots[OP_FORMAT] = -1;
+	} else {
+		nb_slots[OP_ANALYZE_MBR] = 1;
+		if (IsChecked(IDC_BAD_BLOCKS)) {
+			nb_slots[OP_BADBLOCKS] = -1;
+		}
+		if (boot_type != BT_NON_BOOTABLE) {
+			// 1 extra slot for PBR writing
+			switch (selection_default) {
+			case BT_MSDOS:
+				nb_slots[OP_FILE_COPY] = 3 + 1;
+				break;
+			case BT_FREEDOS:
+				nb_slots[OP_FILE_COPY] = 5 + 1;
+				break;
+			case BT_IMAGE:
+				nb_slots[OP_FILE_COPY] = (img_report.is_iso || img_report.is_windows_img) ? -1 : 0;
+				if (HAS_WINDOWS(img_report) && (unattend_xml_path != NULL) &&
+					(ComboBox_GetCurItemData(hImageOption) != IMOP_WIN_TO_GO))
+					nb_slots[OP_PATCH] = -1;
+				break;
+			default:
+				nb_slots[OP_FILE_COPY] = 2 + 1;
+				break;
+			}
+		}
+		if (selection_default == BT_IMAGE && !(img_report.is_iso || img_report.is_windows_img)) {
+			nb_slots[OP_FORMAT] = -1;
+		} else {
+			nb_slots[OP_ZERO_MBR] = 1;
+			nb_slots[OP_PARTITION] = 1;
+			nb_slots[OP_FIX_MBR] = 1;
+			nb_slots[OP_CREATE_FS] = (use_vds) ? 2 :
+				nb_steps[ComboBox_GetCurItemData(hFileSystem)];
+			// So, yeah, if you're doing slow format, or using Large FAT32, and have persistence, you'll see
+			// the progress bar revert during format on account that we reuse the same operation for both
+			// partitions. Maybe one day I'll be bothered to handle two separate OP_FORMAT ops...
+			if ((!IsChecked(IDC_QUICK_FORMAT)) || (persistence_size != 0) || IS_EXT(fs_type) ||
+				((fs_type == FS_FAT32) && ((SelectedDrive.DiskSize >= LARGE_FAT32_SIZE) || (force_large_fat32)))) {
+				nb_slots[OP_FORMAT] = -1;
+				nb_slots[OP_CREATE_FS] = 0;
+			}
+			nb_slots[OP_FINALIZE] = ((selection_default == BT_IMAGE) && (fs_type == FS_NTFS)) ? 3 : 2;
+		}
+	}
+	if (archive_path != NULL) {
+		nb_slots[OP_EXTRACT_ZIP] = -1;
+	}
+
+	for (i = 0; i < OP_MAX; i++) {
+		if (nb_slots[i] > 0) {
+			slots_discrete += nb_slots[i] * 1.0f;
+		}
+		if (nb_slots[i] < 0) {
+			slots_analog += nb_slots[i] * 1.0f;
+		}
+	}
+
+	for (i = 0; i < OP_MAX; i++) {
+		if (nb_slots[i] == 0) {
+			slot_end[i + 1] = last_end;
+		} else if (nb_slots[i] > 0) {
+			slot_end[i + 1] = last_end + (1.0f * nb_slots[i]);
+		} else if (nb_slots[i] < 0) {
+			slot_end[i + 1] = last_end + (((100.0f - slots_discrete) * nb_slots[i]) / slots_analog);
+		}
+		last_end = slot_end[i + 1];
+	}
+
+	// If there's no analog, adjust our discrete ends to fill the whole bar
+	if (slots_analog == 0.0f) {
+		for (i = 0; i < OP_MAX; i++) {
+			slot_end[i + 1] *= 100.0f / slots_discrete;
+		}
+	}
+}
+
 /* ------------------------------ END UPSTREAM (ui.c) ------------------------------- */
 
 /* MainCallback(), WM_COMMAND part */
@@ -1475,7 +1576,12 @@ void oracle_init(const oracle_env_t* env)
 
 void oracle_startup(const oracle_drive_t* drive)
 {
+	int i;
+
 	// InitDialog()
+	for (i = 1; i <= 5; i++)
+		IGNORE_RETVAL(ComboBox_AddStringU(hNBPasses, "passes"));
+	IGNORE_RETVAL(ComboBox_SetCurSel(hNBPasses, 0));
 	SetBootOptions();
 	CheckDlgButton(hMainDialog, IDC_QUICK_FORMAT, BST_CHECKED);
 	CheckDlgButton(hMainDialog, IDC_EXTENDED_LABEL, BST_CHECKED);
@@ -1515,11 +1621,13 @@ void oracle_partition_scheme(int index) { SelectAndNotify(hPartitionScheme, inde
 void oracle_target_system(int index) { SelectAndNotify(hTargetSystem, index); }
 void oracle_file_system(int index) { SelectAndNotify(hFileSystem, index); }
 void oracle_cluster_size(int index) { SelectAndNotify(hClusterSize, index); }
+void oracle_nb_passes(int index) { SelectAndNotify(hNBPasses, index); }
 void oracle_label(const char* label) { SetWindowTextU(hLabel, label); }
 
 void oracle_check(enum oracle_check_id id)
 {
-	static const int ids[] = { IDC_QUICK_FORMAT, IDC_EXTENDED_LABEL, IDC_OLD_BIOS_FIXES, IDC_UEFI_MEDIA_VALIDATION };
+	static const int ids[] = { IDC_QUICK_FORMAT, IDC_EXTENDED_LABEL, IDC_OLD_BIOS_FIXES, IDC_UEFI_MEDIA_VALIDATION,
+		IDC_BAD_BLOCKS };
 	HWND h = GetDlgItem(hMainDialog, ids[id]);
 
 	if (!h->enabled)
@@ -1652,6 +1760,8 @@ void oracle_snapshot(snapshot_t* s)
 	snap_check(&s->extended_label, IDC_EXTENDED_LABEL);
 	snap_check(&s->old_bios_fixes, IDC_OLD_BIOS_FIXES);
 	snap_check(&s->uefi_validation, IDC_UEFI_MEDIA_VALIDATION);
+	snap_check(&s->bad_blocks, IDC_BAD_BLOCKS);
+	s->nb_passes_sel = hNBPasses->sel;
 	s->device_enabled = hDeviceList->enabled;
 	s->boot_enabled = hBootType->enabled;
 	s->hash_enabled = hHashToolbar->enabled;
@@ -1663,7 +1773,6 @@ void oracle_snapshot(snapshot_t* s)
 	s->persistence_units_enabled = hUnits->enabled;
 	s->persistence_units_visible = hUnits->visible;
 	s->label_enabled = GetDlgItem(hMainDialog, IDC_LABEL)->enabled;
-	s->bad_blocks_enabled = GetDlgItem(hMainDialog, IDC_BAD_BLOCKS)->enabled;
 	s->partition_enabled = hPartitionScheme->enabled;
 	s->target_enabled = hTargetSystem->enabled;
 	s->fs_enabled = hFileSystem->enabled;
@@ -1687,4 +1796,51 @@ void oracle_snapshot(snapshot_t* s)
 	s->g_op_in_progress = op_in_progress;
 	s->g_validate_md5sum = validate_md5sum;
 	s->g_user_changed_label = user_changed_label;
+}
+
+// What the format thread reads: the globals that IDC_START sets, and the controls
+void oracle_options(rufus_options_t* o)
+{
+	char label[192];
+
+	o->boot_type = boot_type;
+	o->partition_type = partition_type;
+	o->target_type = target_type;
+	o->fs_type = fs_type;
+	// IDC_START resets these, for the boot check to decide
+	o->write_as_image = FALSE;
+	o->write_as_esp = FALSE;
+	o->unattend_xml_flags = 0;
+	o->append_silent = FALSE;
+	o->disk_size = (uint64_t)SelectedDrive.DiskSize;
+	o->cluster_size = (DWORD)ComboBox_GetCurItemData(hClusterSize);
+	GetWindowTextU(hLabel, label, sizeof(label));
+	static_strcpy(o->label, label);
+	o->quick_format = IsChecked(IDC_QUICK_FORMAT);
+	o->extended_label = IsChecked(IDC_EXTENDED_LABEL);
+	o->old_bios_fixes = IsChecked(IDC_OLD_BIOS_FIXES);
+	o->bad_blocks = IsChecked(IDC_BAD_BLOCKS);
+	o->nb_passes_sel = ComboBox_GetCurSel(hNBPasses);
+	o->image_option = (int)ComboBox_GetCurItemData(hImageOption);
+	o->image_options = image_options;
+	o->persistence_size = persistence_size;
+	o->validate_md5sum = validate_md5sum;
+	o->allow_dual_uefi_bios = allow_dual_uefi_bios;
+	o->force_large_fat32 = force_large_fat32;
+}
+
+void oracle_init_progress(BOOL bOnlyFormat, BOOL has_archive, BOOL has_unattend_xml,
+	int out_nb_slots[OP_MAX], float out_slot_end[OP_MAX + 1])
+{
+	BOOL saved_use_vds = use_vds;
+
+	archive_path = has_archive ? "archive.zip" : NULL;
+	unattend_xml_path = has_unattend_xml ? "unattend.xml" : NULL;
+	// The Linux port never formats through VDS (which ReFS requires, see oracle_init())
+	use_vds = FALSE;
+	InitProgress(bOnlyFormat);
+	use_vds = saved_use_vds;
+	assert(previous_end == 0.0f);
+	memcpy(out_nb_slots, nb_slots, sizeof(nb_slots));
+	memcpy(out_slot_end, slot_end, sizeof(slot_end));
 }

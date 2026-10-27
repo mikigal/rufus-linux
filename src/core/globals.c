@@ -26,5 +26,8 @@
 #include "rufus.h"
 
 RUFUS_UPDATE update = { 0 };
+// The context of the operation: the image, its report, and the other files it uses
+RUFUS_IMG_REPORT img_report = { 0 };
+char *image_path = NULL, *archive_path = NULL, *unattend_xml_path = NULL;
 DWORD ErrorStatus = 0, LastWriteError = 0;
 BOOL right_to_left_mode = FALSE;

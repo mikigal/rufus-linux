@@ -31,8 +31,11 @@
 #include "rufus.h"
 #include "resource.h"
 #include "ui_iface.h"
+#include "options.h"
 #include "progress.h"
 
+// Number of steps for each FS for FCC_STRUCTURE_PROGRESS
+const int nb_steps[FS_MAX] = { 5, 5, 12, 1, 10, 1, 1, 1, 1 };
 int update_progress_type = UPT_PERCENT;
 int nb_slots[OP_MAX];
 float slot_end[OP_MAX+1];	// shifted +1 so that we can subtract 1 to OP indexes
@@ -44,6 +47,94 @@ static uint64_t GetTickCount64(void)
 
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
+}
+
+// Set up progress bar real estate allocation, from the options of the operation
+void InitProgress(BOOL bOnlyFormat)
+{
+	int i;
+	float last_end = 0.0f, slots_discrete = 0.0f, slots_analog = 0.0f;
+
+	memset(nb_slots, 0, sizeof(nb_slots));
+	memset(slot_end, 0, sizeof(slot_end));
+	previous_end = 0.0f;
+
+	if (bOnlyFormat) {
+		nb_slots[OP_FORMAT] = -1;
+	} else {
+		nb_slots[OP_ANALYZE_MBR] = 1;
+		if (opts.bad_blocks) {
+			nb_slots[OP_BADBLOCKS] = -1;
+		}
+		if (opts.boot_type != BT_NON_BOOTABLE) {
+			// 1 extra slot for PBR writing
+			switch (opts.boot_type) {
+			case BT_MSDOS:
+				nb_slots[OP_FILE_COPY] = 3 + 1;
+				break;
+			case BT_FREEDOS:
+				nb_slots[OP_FILE_COPY] = 5 + 1;
+				break;
+			case BT_IMAGE:
+				nb_slots[OP_FILE_COPY] = (img_report.is_iso || img_report.is_windows_img) ? -1 : 0;
+				if (HAS_WINDOWS(img_report) && (unattend_xml_path != NULL) &&
+					(opts.image_option != IMOP_WIN_TO_GO))
+					nb_slots[OP_PATCH] = -1;
+				break;
+			default:
+				nb_slots[OP_FILE_COPY] = 2 + 1;
+				break;
+			}
+		}
+		if (opts.boot_type == BT_IMAGE && !(img_report.is_iso || img_report.is_windows_img)) {
+			nb_slots[OP_FORMAT] = -1;
+		} else {
+			nb_slots[OP_ZERO_MBR] = 1;
+			nb_slots[OP_PARTITION] = 1;
+			nb_slots[OP_FIX_MBR] = 1;
+			// NB: Upstream uses 2 when formatting through VDS, and has no check on the FS index
+			nb_slots[OP_CREATE_FS] = ((opts.fs_type >= 0) && (opts.fs_type < FS_MAX)) ? nb_steps[opts.fs_type] : 0;
+			// So, yeah, if you're doing slow format, or using Large FAT32, and have persistence, you'll see
+			// the progress bar revert during format on account that we reuse the same operation for both
+			// partitions. Maybe one day I'll be bothered to handle two separate OP_FORMAT ops...
+			if ((!opts.quick_format) || (opts.persistence_size != 0) || IS_EXT(opts.fs_type) ||
+				((opts.fs_type == FS_FAT32) && ((opts.disk_size >= LARGE_FAT32_SIZE) || (opts.force_large_fat32)))) {
+				nb_slots[OP_FORMAT] = -1;
+				nb_slots[OP_CREATE_FS] = 0;
+			}
+			nb_slots[OP_FINALIZE] = ((opts.boot_type == BT_IMAGE) && (opts.fs_type == FS_NTFS)) ? 3 : 2;
+		}
+	}
+	if (archive_path != NULL) {
+		nb_slots[OP_EXTRACT_ZIP] = -1;
+	}
+
+	for (i = 0; i < OP_MAX; i++) {
+		if (nb_slots[i] > 0) {
+			slots_discrete += nb_slots[i] * 1.0f;
+		}
+		if (nb_slots[i] < 0) {
+			slots_analog += nb_slots[i] * 1.0f;
+		}
+	}
+
+	for (i = 0; i < OP_MAX; i++) {
+		if (nb_slots[i] == 0) {
+			slot_end[i + 1] = last_end;
+		} else if (nb_slots[i] > 0) {
+			slot_end[i + 1] = last_end + (1.0f * nb_slots[i]);
+		} else if (nb_slots[i] < 0) {
+			slot_end[i + 1] = last_end + (((100.0f - slots_discrete) * nb_slots[i]) / slots_analog);
+		}
+		last_end = slot_end[i + 1];
+	}
+
+	// If there's no analog, adjust our discrete ends to fill the whole bar
+	if (slots_analog == 0.0f) {
+		for (i = 0; i < OP_MAX; i++) {
+			slot_end[i + 1] *= 100.0f / slots_discrete;
+		}
+	}
 }
 
 // Position the progress bar within each operation range

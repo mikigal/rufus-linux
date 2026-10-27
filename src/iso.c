@@ -43,6 +43,7 @@
 #include <cdio/udf.h>
 
 #include "rufus.h"
+#include "options.h"
 #include "ui.h"
 #include "vhd.h"
 #include "drive.h"
@@ -88,7 +89,6 @@ int64_t iso_blocking_status = -1;
 uint64_t total_blocks, extra_blocks, nb_blocks, last_nb_blocks;
 
 extern uint64_t md5sum_totalbytes;
-extern BOOL preserve_timestamps, enable_ntfs_compression, validate_md5sum;
 extern HANDLE format_thread;
 extern StrArray modified_files;
 BOOL enable_iso = TRUE, enable_joliet = TRUE, enable_rockridge = TRUE, has_ldlinux_c32;
@@ -298,7 +298,7 @@ static BOOL check_iso_props(const char* psz_dirname, int64_t file_length, const 
 		}
 
 		// Split a >4GB install.wim if the target filesystem is FAT
-		if (file_length >= 4 * GB && psz_dirname != NULL && IS_FAT(fs_type) && img_report.has_4GB_file == 0x11) {
+		if (file_length >= 4 * GB && psz_dirname != NULL && IS_FAT(opts.fs_type) && img_report.has_4GB_file == 0x11) {
 			if (safe_stricmp(&psz_dirname[max(0, ((int)safe_strlen(psz_dirname)) -
 				((int)strlen(sources_str)))], sources_str) == 0) {
 				char wim_path[4 * MAX_PATH];
@@ -491,7 +491,7 @@ static void fix_config(const char* psz_fullpath, const char* psz_path, const cha
 	to_windows_path(src);
 
 	// Add persistence to the kernel options
-	if ((boot_type == BT_IMAGE) && HAS_PERSISTENCE(img_report) && persistence_size) {
+	if ((opts.boot_type == BT_IMAGE) && HAS_PERSISTENCE(img_report) && opts.persistence_size) {
 		if ((props->is_grub_cfg) || (props->is_menu_cfg) || (props->is_syslinux_cfg)) {
 			if (replace_in_token_data(src, props->is_grub_cfg ? "linux" : "append",
 				"file=/cdrom/preseed", "persistent file=/cdrom/preseed", TRUE) != NULL) {
@@ -688,7 +688,7 @@ static int udf_extract_files(udf_t *p_udf, udf_dirent_t *p_udf_dirent, const cha
 			if (!scan_only) {
 				psz_sanpath = sanitize_filename(psz_fullpath, &is_identical);
 				IGNORE_RETVAL(_mkdirU(psz_sanpath));
-				if (preserve_timestamps) {
+				if (opts.preserve_timestamps) {
 					set_directory_timestamp(psz_sanpath, to_filetime(udf_get_attribute_time(p_udf_dirent)),
 						to_filetime(udf_get_access_time(p_udf_dirent)), to_filetime(udf_get_modification_time(p_udf_dirent)));
 				}
@@ -707,7 +707,7 @@ static int udf_extract_files(udf_t *p_udf, udf_dirent_t *p_udf_dirent, const cha
 			}
 			print_extracted_file(psz_fullpath, file_length);
 			for (i = 0; i < NB_OLD_C32; i++) {
-				if (props.is_old_c32[i] && use_own_c32[i]) {
+				if (props.is_old_c32[i] && opts.use_own_c32[i]) {
 					static_sprintf(tmp, "%s/syslinux-%s/%s", FILES_DIR, embedded_sl_version_str[0], old_c32_name[i]);
 					if (CopyFileU(tmp, psz_fullpath, FALSE)) {
 						uprintf("  Replaced with local version %s", IsFileInDB(tmp)?"✓":"✗");
@@ -767,7 +767,7 @@ static int udf_extract_files(udf_t *p_udf, udf_dirent_t *p_udf_dirent, const cha
 					fprintf(fd_md5sum, "  ./%s\n", &psz_fullpath[3]);
 				}
 			}
-			if ((preserve_timestamps) && (!SetFileTime(file_handle, to_filetime(udf_get_attribute_time(p_udf_dirent)),
+			if ((opts.preserve_timestamps) && (!SetFileTime(file_handle, to_filetime(udf_get_attribute_time(p_udf_dirent)),
 				to_filetime(udf_get_access_time(p_udf_dirent)), to_filetime(udf_get_modification_time(p_udf_dirent)))))
 				uprintf("  Could not set timestamp: %s", WindowsErrorString());
 
@@ -881,7 +881,7 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 			if (!scan_only) {
 				psz_sanpath = sanitize_filename(psz_fullpath, &is_identical);
 				IGNORE_RETVAL(_mkdirU(psz_sanpath));
-				if (preserve_timestamps) {
+				if (opts.preserve_timestamps) {
 					LPFILETIME ft = to_filetime(mktime(&p_statbuf->tm));
 					set_directory_timestamp(psz_sanpath, ft, ft, ft);
 				}
@@ -915,7 +915,7 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 			if (!is_symlink)
 				print_extracted_file(psz_fullpath, file_length);
 			for (i = 0; i < NB_OLD_C32; i++) {
-				if (props.is_old_c32[i] && use_own_c32[i]) {
+				if (props.is_old_c32[i] && opts.use_own_c32[i]) {
 					static_sprintf(tmp, "%s/syslinux-%s/%s", FILES_DIR, embedded_sl_version_str[0], old_c32_name[i]);
 					if (CopyFileU(tmp, psz_fullpath, FALSE)) {
 						uprintf("  Replaced with local version %s", IsFileInDB(tmp)?"✓":"✗");
@@ -931,7 +931,7 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 				uprintf("  File name sanitized to '%s'", psz_sanpath);
 			create_file = TRUE;
 			if (is_symlink) {
-				if (fs_type == FS_NTFS) {
+				if (opts.fs_type == FS_NTFS) {
 					// Replicate symlinks if NTFS is being used
 					static_sprintf(target_path, "%s/%s", psz_path, p_statbuf->rr.psz_symlink);
 					iso9660_stat_t* p_statbuf2 = iso9660_ifs_stat_translate(p_iso, target_path);
@@ -1041,7 +1041,7 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 						nb_blocks += nb;
 						if (nb_blocks - last_nb_blocks >= PROGRESS_THRESHOLD) {
 							UpdateProgressWithInfo(OP_FILE_COPY, MSG_231, nb_blocks, total_blocks +
-								((fs_type != FS_NTFS) ? extra_blocks : 0));
+								((opts.fs_type != FS_NTFS) ? extra_blocks : 0));
 							last_nb_blocks = nb_blocks;
 						}
 					}
@@ -1052,7 +1052,7 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 						fprintf(fd_md5sum, "  ./%s\n", &psz_fullpath[3]);
 					}
 				}
-				if (preserve_timestamps) {
+				if (opts.preserve_timestamps) {
 					LPFILETIME ft = to_filetime(mktime(&p_statbuf->tm));
 					if (!SetFileTime(file_handle, ft, ft, ft))
 						uprintf("  Could not set timestamp: %s", WindowsErrorString());
@@ -1292,7 +1292,7 @@ BOOL ExtractISO(const char* src_iso, const char* dest_dir, BOOL scan)
 		iso_blocking_status = 0;
 		symlinked_syslinux[0] = 0;
 		StrArrayClear(&modified_files);
-		if (validate_md5sum) {
+		if (opts.validate_md5sum) {
 			md5sum_totalbytes = 0;
 			// If there isn't an already existing md5sum.txt create one
 			if (img_report.has_md5sum != 1) {
@@ -1597,7 +1597,7 @@ out:
 					to_unix_path(symlinked_syslinux);
 				}
 			}
-		} else if (HAS_BOOTMGR(img_report) && enable_ntfs_compression) {
+		} else if (HAS_BOOTMGR(img_report) && opts.enable_ntfs_compression) {
 			// bootmgr might need to be uncompressed: https://github.com/pbatard/rufus/issues/1381
 			RunCommand("compact /u bootmgr* efi/boot/*.efi", dest_dir, TRUE);
 		}

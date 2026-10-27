@@ -30,9 +30,6 @@
 
 const char* FileSystemLabel[FS_MAX] = { "FAT", "FAT32", "NTFS", "UDF", "exFAT", "ReFS", "ext2", "ext3", "ext4" };
 
-// IS_FAT32_COMPAT() from rufus.h reads the allow_dual_uefi_bios global
-#define IS_FAT32_COMPAT_M(m) (((m->img.has_4GB_file == 0 && !HAS_FATLESS_GRUB(m->img)) || \
-	(m->img.has_4GB_file == 0x11 && m->allow_dual_uefi_bios)) && !m->img.needs_ntfs)
 
 /*
  * Dropdown operations, with the semantics of the Win32 combo box messages
@@ -148,6 +145,7 @@ void rules_init(rules_state_t* m)
 	m->extended_label.enabled = TRUE;
 	m->old_bios_fixes.enabled = TRUE;
 	m->uefi_validation.enabled = TRUE;
+	m->bad_blocks.enabled = TRUE;
 	m->device_enabled = TRUE;
 	m->boot_enabled = TRUE;
 	m->hash_enabled = TRUE;
@@ -158,7 +156,6 @@ void rules_init(rules_state_t* m)
 	m->persistence_size_enabled = TRUE;
 	m->persistence_units_enabled = TRUE;
 	m->label_enabled = TRUE;
-	m->bad_blocks_enabled = TRUE;
 	m->partition_enabled = TRUE;
 	m->target_enabled = TRUE;
 	m->fs_enabled = TRUE;
@@ -187,7 +184,7 @@ void SetAllowedFileSystems(rules_state_t* m, BOOL allowed_filesystem[FS_MAX])
 		if (!m->has_image || !HAS_NTFSLESS_GRUB(m->img))
 			allowed_filesystem[FS_NTFS] = TRUE;
 		// Don't allow anything besides NTFS if the image is not compatible
-		if (m->has_image && !IS_FAT32_COMPAT_M(m)) {
+		if (m->has_image && !IS_FAT32_COMPAT(m->img, m->allow_dual_uefi_bios)) {
 			// Only disable FAT32 if we have NTFS enabled
 			if (allowed_filesystem[FS_NTFS])
 				break;
@@ -707,7 +704,7 @@ static void EnableBootOptions(rules_state_t* m, BOOL enable, BOOL remove_checkbo
 	}
 	EnableQuickFormat(m, actual_enable, remove_checkboxes);
 	EnableExtendedLabel(m, actual_enable, remove_checkboxes);
-	m->bad_blocks_enabled = actual_enable_bb;
+	m->bad_blocks.enabled = actual_enable_bb;
 }
 
 // Toggle controls according to operation
@@ -1026,6 +1023,13 @@ void rules_on_cluster_size(rules_state_t* m, int index)
 	ComboBox_SetCurSel(&m->cluster, index);
 }
 
+void rules_on_nb_passes(rules_state_t* m, int index)
+{
+	// The 5 entries are 1 pass, 2 passes, then the SLC, MLC and TLC patterns (4 passes)
+	if ((index >= 0) && (index < BADLOCKS_PATTERN_TYPES))
+		m->nb_passes_sel = index;
+}
+
 void rules_on_label(rules_state_t* m, const char* label)
 {
 	static_strcpy(m->label, label);
@@ -1132,4 +1136,33 @@ void rules_on_start(rules_state_t* m)
 void rules_on_operation_end(rules_state_t* m)
 {
 	EnableControls(m, TRUE, FALSE);
+}
+
+void rules_get_options(const rules_state_t* m, rufus_options_t* o)
+{
+	// IDC_START
+	o->boot_type = rules_combo_data(&m->boot);
+	o->partition_type = rules_combo_data(&m->partition);
+	o->target_type = rules_combo_data(&m->target);
+	o->fs_type = rules_combo_data(&m->fs);
+	o->write_as_image = FALSE;
+	o->write_as_esp = FALSE;
+	o->unattend_xml_flags = 0;
+	o->append_silent = FALSE;
+	// The controls that the format thread reads
+	o->disk_size = m->drive.disk_size;
+	o->cluster_size = (uint32_t)rules_combo_data(&m->cluster);
+	static_strcpy(o->label, m->label);
+	o->quick_format = m->quick_format.checked;
+	o->extended_label = m->extended_label.checked;
+	o->old_bios_fixes = m->old_bios_fixes.checked;
+	o->bad_blocks = m->bad_blocks.checked;
+	o->nb_passes_sel = m->nb_passes_sel;
+	o->image_option = rules_combo_data(&m->image_option);
+	o->image_options = m->image_options;
+	// The globals that the window modifies
+	o->persistence_size = m->persistence_size;
+	o->validate_md5sum = m->validate_md5sum;
+	o->allow_dual_uefi_bios = m->allow_dual_uefi_bios;
+	o->force_large_fat32 = m->force_large_fat32;
 }

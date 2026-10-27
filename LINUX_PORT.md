@@ -111,15 +111,28 @@ Done:
   - The configuration file functions work on UTF-8 with explicit BOM/UTF-16LE handling
     and Windows text mode line endings, so patched files match the Windows output.
   - `.loc` strings use LF line breaks.
+- **Options of an operation** (`core/options.h`): `rufus_options_t opts` holds everything
+  a format depends on: the selections and check boxes of the window, the decisions of the
+  boot check (DD/ESP mode, WUE flags, `.c32` replacements) and the settings and cheat
+  modes. It is what the GUI will send to the helper.
+  - `rules_get_options()` takes the snapshot on START; the differential test compares it
+    with what the Windows format thread reads from the controls and globals.
+  - The worker code (`format*.c`, `dos.c`, `wue.c`, `drive.c`, `iso.c`, `syslinux.c`,
+    `badblocks.c`, `hash.c`) no longer reads any control, and reads `opts.*` instead of
+    the globals it replaces (same names).
+  - Files (image, extra archive, `unattend.xml`), the image report and the drive
+    properties stay process context (`core/globals.c`); the helper gets the files as
+    file descriptors and establishes the rest itself.
+  - `InitProgress()` is in `core/progress.c`, and is checked against the upstream one
+    (without VDS) for every START of the differential test.
 
 Next:
 
-1. `rufus_options_t`: the option snapshot taken on START, `InitProgress()`, and the
-   ~40 widget reads of `format.c`, `dos.c`, `wue.c`...
-2. Image analysis in the core: `iso.c` (path refactor), `hash.c`, `syslinux.c`, the image
+1. Image analysis in the core: `iso.c` (path refactor), `hash.c`, `syslinux.c`, the image
    detection of `vhd.c`, Secure Boot checks (OpenSSL), then `ImageScanThread` and
-   `BootCheckThread` with their questions through `ui_ask()`.
-3. pthreads, atomic `ErrorStatus` and cooperative cancellation.
+   `BootCheckThread` with their questions through `ui_ask()`. The boot check (still in
+   `rufus.c`) then writes its decisions to `opts`.
+2. pthreads, atomic `ErrorStatus` and cooperative cancellation.
 
 ---
 

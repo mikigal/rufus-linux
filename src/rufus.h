@@ -323,7 +323,8 @@ enum EFI_BOOT_TYPE {
 #define HAS_NTFSLESS_GRUB(r)((r.has_grub2 & 0x80) && !(r.has_grub2_fs & 0x4))
 #define IS_WINDOWS_1X(r)    (r.has_bootmgr_efi && (r.win_version.major >= 10))
 #define IS_WINDOWS_11(r)    (r.has_bootmgr_efi && (r.win_version.major >= 11))
-#define IS_FAT32_COMPAT(r)  (((r.has_4GB_file == 0 && !HAS_FATLESS_GRUB(r)) || (r.has_4GB_file == 0x11 && allow_dual_uefi_bios)) && !r.needs_ntfs)
+#define IS_FAT32_COMPAT(r, allow_dual_uefi_bios) (((r.has_4GB_file == 0 && !HAS_FATLESS_GRUB(r)) || \
+	(r.has_4GB_file == 0x11 && (allow_dual_uefi_bios))) && !r.needs_ntfs)
 #define HAS_EFI_IMG(r)      (r.efi_img_path[0] != 0)
 #define IS_DD_BOOTABLE(r)   (r.is_bootable_img > 0)
 #define IS_DD_ONLY(r)       ((r.is_bootable_img > 0) && (!r.is_iso || r.disable_iso))
@@ -666,21 +667,22 @@ extern RUFUS_UPDATE update;
 extern RUFUS_IMG_REPORT img_report;
 extern WORD selected_langid;
 extern DWORD ErrorStatus, DownloadStatus, LastWriteError;
-extern BOOL use_own_c32[NB_OLD_C32], detect_fakes, op_in_progress, right_to_left_mode;
-extern BOOL allow_dual_uefi_bios, large_drive, usb_debug;
-extern uint8_t image_options, *pe256ssp;
+extern BOOL op_in_progress, right_to_left_mode;
+extern BOOL large_drive, usb_debug;
+extern uint8_t *pe256ssp;
 extern uint16_t rufus_version[3], embedded_sl_version[2];
 extern uint32_t pe256ssp_size;
-extern uint64_t persistence_size;
 extern int64_t iso_blocking_status;
 extern size_t ubuffer_pos;
 extern const int nb_steps[FS_MAX];
 extern sbat_entry_t* sbat_entries;
 extern thumbprint_list_t *sb_active_certs, *sb_revoked_certs;
-extern int force_update, fs_type, boot_type, partition_type, target_type;
+extern int force_update;
 extern unsigned long syslinux_ldlinux_len[2];
 extern char ubuffer[UBUFFER_SIZE], embedded_sl_version_str[2][12];
-extern char app_dir[MAX_PATH], temp_dir[MAX_PATH], app_data_dir[MAX_PATH], *image_path, *fido_url;
+extern char app_dir[MAX_PATH], temp_dir[MAX_PATH], app_data_dir[MAX_PATH], *fido_url;
+// The files of the current operation (the options of the operation are in options.h)
+extern char *image_path, *archive_path, *unattend_xml_path;
 extern StrArray modified_files;
 
 /*

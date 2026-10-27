@@ -28,6 +28,7 @@
 #include <stdint.h>
 
 #include "rufus.h"
+#include "options.h"
 
 #define SNAP_MAX_ITEMS              32
 #define SNAP_TEXT                   256
@@ -53,10 +54,11 @@ typedef struct {
 
 typedef struct {
 	snap_combo_t boot, image_option, partition, target, fs, cluster;
-	snap_check_t quick_format, extended_label, old_bios_fixes, uefi_validation;
+	snap_check_t quick_format, extended_label, old_bios_fixes, uefi_validation, bad_blocks;
+	int nb_passes_sel;
 	BOOL device_enabled, boot_enabled, hash_enabled, save_enabled, start_enabled;
 	BOOL image_option_enabled, persistence_slider_enabled, persistence_size_enabled, persistence_units_enabled;
-	BOOL persistence_units_visible, label_enabled, bad_blocks_enabled;
+	BOOL persistence_units_visible, label_enabled;
 	BOOL partition_enabled, target_enabled, fs_enabled, cluster_enabled;
 	char label[SNAP_TEXT];
 	int persistence_units, persistence_unit_sel;
@@ -86,7 +88,8 @@ typedef struct {
 	char proposed_label[16];
 } oracle_drive_t;
 
-enum oracle_check_id { ORACLE_QUICK_FORMAT, ORACLE_EXTENDED_LABEL, ORACLE_OLD_BIOS_FIXES, ORACLE_UEFI_VALIDATION };
+enum oracle_check_id { ORACLE_QUICK_FORMAT, ORACLE_EXTENDED_LABEL, ORACLE_OLD_BIOS_FIXES, ORACLE_UEFI_VALIDATION,
+	ORACLE_BAD_BLOCKS };
 
 extern void oracle_init(const oracle_env_t* env);
 extern void oracle_startup(const oracle_drive_t* drive);
@@ -98,6 +101,7 @@ extern void oracle_partition_scheme(int index);
 extern void oracle_target_system(int index);
 extern void oracle_file_system(int index);
 extern void oracle_cluster_size(int index);
+extern void oracle_nb_passes(int index);
 extern void oracle_label(const char* label);
 extern void oracle_check(enum oracle_check_id id);
 extern void oracle_toggle_advanced_device(void);
@@ -109,3 +113,8 @@ extern void oracle_image_scan_end(const RUFUS_IMG_REPORT* report, int result, BO
 extern void oracle_start(void);
 extern void oracle_operation_end(void);
 extern void oracle_snapshot(snapshot_t* snap);
+// The options that the Windows format thread reads (from the controls and the globals), after START
+extern void oracle_options(rufus_options_t* o);
+// InitProgress() from ui.c, with or without an extra archive and an unattend.xml
+extern void oracle_init_progress(BOOL bOnlyFormat, BOOL has_archive, BOOL has_unattend_xml,
+	int nb_slots[OP_MAX], float slot_end[OP_MAX + 1]);

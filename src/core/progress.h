@@ -54,3 +54,6 @@ extern int update_progress_type;
 extern int nb_slots[OP_MAX];
 extern float slot_end[OP_MAX+1];
 extern float previous_end;
+
+// Allocate the progress bar to the operations that the current options (opts) require
+extern void InitProgress(BOOL bOnlyFormat);

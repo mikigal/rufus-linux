@@ -3,6 +3,7 @@
 # Upstream files keep their place in src/, to ease merges; new ones live here.
 add_library(rufus_core STATIC
 	globals.c
+	options.c
 	progress.c
 	rules.c
 	ui_iface.c

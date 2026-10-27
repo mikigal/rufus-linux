@@ -25,6 +25,7 @@
 #include <stdint.h>
 
 #include "rufus.h"
+#include "options.h"
 #include "resource.h"
 #include "msapi_utf8.h"
 #include "localization.h"
@@ -449,7 +450,7 @@ static unsigned int test_rw(HANDLE hDrive, blk64_t last_block, size_t block_size
 	for (pat_idx = 0; pat_idx < nb_passes; pat_idx++) {
 		if (cancel_ops)
 			goto out;
-		if (detect_fakes && (pat_idx == 0)) {
+		if (opts.detect_fakes && (pat_idx == 0)) {
 			srand((unsigned int)GetTickCount64());
 			id_offset = rand() * (block_size - sizeof(blk64_t)) / RAND_MAX;
 			uprintf("%sUsing offset %zu for fake device check\n", bb_prefix, id_offset);
@@ -476,7 +477,7 @@ static unsigned int test_rw(HANDLE hDrive, blk64_t last_block, size_t block_size
 			}
 			if (currently_testing + tryout > last_block)
 				tryout = last_block - currently_testing;
-			if (detect_fakes && (pat_idx == 0)) {
+			if (opts.detect_fakes && (pat_idx == 0)) {
 				/* Add the block number at a fixed (random) offset during each pass to
 				   allow for the detection of 'fake' media (eg. 2GB USB masquerading as 16GB) */
 				for (i=0; i<(int)blocks_at_once; i++) {
@@ -524,7 +525,7 @@ static unsigned int test_rw(HANDLE hDrive, blk64_t last_block, size_t block_size
 			}
 			if (currently_testing + tryout > last_block)
 				tryout = last_block - currently_testing;
-			if (detect_fakes && (pat_idx == 0)) {
+			if (opts.detect_fakes && (pat_idx == 0)) {
 				for (i=0; i<(int)blocks_at_once; i++) {
 					blk_id = (blk64_t*)(intptr_t)(buffer + id_offset+ i*block_size);
 					*blk_id = (blk64_t)(currently_testing + i);

@@ -36,6 +36,7 @@
 #endif
 
 #include "rufus.h"
+#include "options.h"
 #include "format.h"
 #include "missing.h"
 #include "resource.h"
@@ -73,9 +74,7 @@ static unsigned int sec_buf_pos = 0;
 extern const int nb_steps[FS_MAX];
 extern const char* md5sum_name[2];
 extern uint32_t dur_mins, dur_secs;
-extern BOOL force_large_fat32, enable_ntfs_compression, lock_drive, zero_drive, fast_zeroing, enable_file_indexing;
-extern BOOL write_as_image, use_vds, write_as_esp, is_vds_available, has_ffu_support, use_rufus_mbr, append_silent;
-extern char* archive_path;
+extern BOOL use_vds, is_vds_available, has_ffu_support;
 uint8_t *grub2_buf = NULL, *sec_buf = NULL;
 long grub2_len;
 
@@ -670,7 +669,7 @@ BOOL FormatPartition(DWORD DriveIndex, uint64_t PartitionOffset, DWORD UnitAlloc
 		return FALSE;
 	}
 	actual_fs_type = FSType;
-	if ((FSType == FS_FAT32) && ((SelectedDrive.DiskSize > LARGE_FAT32_SIZE) || (force_large_fat32) || (Flags & FP_LARGE_FAT32)))
+	if ((FSType == FS_FAT32) && ((SelectedDrive.DiskSize > LARGE_FAT32_SIZE) || (opts.force_large_fat32) || (Flags & FP_LARGE_FAT32)))
 		return FormatLargeFAT32(DriveIndex, PartitionOffset, UnitAllocationSize, FileSystemLabel[FSType], Label, Flags);
 	else if (IS_EXT(FSType))
 		return FormatExtFs(DriveIndex, PartitionOffset, UnitAllocationSize, FileSystemLabel[FSType], Label, Flags);
@@ -688,7 +687,7 @@ static BOOL CheckDisk(char DriveLetter)
 	BOOL r = FALSE;
 	PF_DECL(Chkdsk);
 	WCHAR wDriveRoot[] = L"?:\\";
-	WCHAR wFSType[32];
+	WCHAR wFSType[32] = { 0 };
 	size_t i;
 
 	wDriveRoot[0] = (WCHAR)DriveLetter;
@@ -696,13 +695,11 @@ static BOOL CheckDisk(char DriveLetter)
 
 	PF_INIT_OR_OUT(Chkdsk, Fmifs);
 
-	GetWindowTextW(hFileSystem, wFSType, ARRAYSIZE(wFSType));
-	// We may have a " (Default)" trail
-	for (i=0; i<wcslen(wFSType); i++) {
-		if (wFSType[i] == ' ') {
-			wFSType[i] = 0;
-			break;
-		}
+	// NB: Upstream reads the file system name from the dropdown, up to the first space
+	if ((opts.fs_type >= 0) && (opts.fs_type < FS_MAX)) {
+		for (i = 0; (i < ARRAYSIZE(wFSType) - 1) && (FileSystemLabel[opts.fs_type][i] != 0); i++)
+			wFSType[i] = (WCHAR)FileSystemLabel[opts.fs_type][i];
+		wFSType[i] = 0;
 	}
 
 	pfChkdsk(wDriveRoot, wFSType, FALSE, FALSE, FALSE, FALSE, NULL, NULL, ChkdskCallback);
@@ -769,7 +766,7 @@ static BOOL WriteMBR(HANDLE hPhysicalDrive)
 	if (SelectedDrive.SectorSize < 512)
 		goto out;
 
-	if (partition_type == PARTITION_STYLE_GPT) {
+	if (opts.partition_type == PARTITION_STYLE_GPT) {
 		// Add a notice with a protective MBR
 		fake_fd._handle = (char*)hPhysicalDrive;
 		set_bytes_per_sector(SelectedDrive.SectorSize);
@@ -793,7 +790,7 @@ static BOOL WriteMBR(HANDLE hPhysicalDrive)
 		goto out;
 	}
 
-	switch (ComboBox_GetCurItemData(hFileSystem)) {
+	switch (opts.fs_type) {
 	case FS_FAT16:
 		if (buffer[0x1c2] == 0x0e) {
 			uprintf("Partition is already FAT16 LBA...");
@@ -811,7 +808,7 @@ static BOOL WriteMBR(HANDLE hPhysicalDrive)
 		buffer[0x1c2] = 0x0c;
 		break;
 	}
-	if ((boot_type != BT_NON_BOOTABLE) && (target_type == TT_BIOS)) {
+	if ((opts.boot_type != BT_NON_BOOTABLE) && (opts.target_type == TT_BIOS)) {
 		// Set first partition bootable or masquerade as second disk
 		buffer[0x1be] = needs_masquerading ? 0x81 : 0x80;
 		uprintf("Set bootable USB partition as 0x%02X", buffer[0x1be]);
@@ -828,47 +825,47 @@ static BOOL WriteMBR(HANDLE hPhysicalDrive)
 
 	// What follows is really a case statement with complex conditions listed
 	// by order of preference
-	if ((boot_type == BT_IMAGE) && HAS_WINDOWS(img_report) && (allow_dual_uefi_bios) && (target_type == TT_BIOS))
+	if ((opts.boot_type == BT_IMAGE) && HAS_WINDOWS(img_report) && (opts.allow_dual_uefi_bios) && (opts.target_type == TT_BIOS))
 		goto windows_mbr;
 
 	// Non bootable or forced UEFI (zeroed MBR)
-	if ((boot_type == BT_NON_BOOTABLE) || (target_type == TT_UEFI)) {
+	if ((opts.boot_type == BT_NON_BOOTABLE) || (opts.target_type == TT_UEFI)) {
 		uprintf(using_msg, "Zeroed");
 		r = write_zero_mbr(fp);
 		goto notify;
 	}
 
 	// Syslinux
-	if ( (boot_type == BT_SYSLINUX_V4) || (boot_type == BT_SYSLINUX_V6) ||
-		 ((boot_type == BT_IMAGE) && HAS_SYSLINUX(img_report)) ) {
+	if ( (opts.boot_type == BT_SYSLINUX_V4) || (opts.boot_type == BT_SYSLINUX_V6) ||
+		 ((opts.boot_type == BT_IMAGE) && HAS_SYSLINUX(img_report)) ) {
 		uprintf(using_msg, "Syslinux");
 		r = write_syslinux_mbr(fp);
 		goto notify;
 	}
 
 	// Grub 2.0
-	if ( ((boot_type == BT_IMAGE) && (img_report.has_grub2)) || (boot_type == BT_GRUB2) ) {
+	if ( ((opts.boot_type == BT_IMAGE) && (img_report.has_grub2)) || (opts.boot_type == BT_GRUB2) ) {
 		uprintf(using_msg, "Grub 2.0");
 		r = write_grub2_mbr(fp);
 		goto notify;
 	}
 
 	// Grub4DOS
-	if ( ((boot_type == BT_IMAGE) && (img_report.has_grub4dos)) || (boot_type == BT_GRUB4DOS) ) {
+	if ( ((opts.boot_type == BT_IMAGE) && (img_report.has_grub4dos)) || (opts.boot_type == BT_GRUB4DOS) ) {
 		uprintf(using_msg, "Grub4DOS");
 		r = write_grub4dos_mbr(fp);
 		goto notify;
 	}
 
 	// ReactOS
-	if (boot_type == BT_REACTOS) {
+	if (opts.boot_type == BT_REACTOS) {
 		uprintf(using_msg, "ReactOS");
 		r = write_reactos_mbr(fp);
 		goto notify;
 	}
 
 	// KolibriOS
-	if ( (boot_type == BT_IMAGE) && HAS_KOLIBRIOS(img_report) && (IS_FAT(fs_type))) {
+	if ( (opts.boot_type == BT_IMAGE) && HAS_KOLIBRIOS(img_report) && (IS_FAT(opts.fs_type))) {
 		uprintf(using_msg, "KolibriOS");
 		r = write_kolibrios_mbr(fp);
 		goto notify;
@@ -876,7 +873,7 @@ static BOOL WriteMBR(HANDLE hPhysicalDrive)
 
 	// If everything else failed, fall back to a conventional Windows/Rufus MBR
 windows_mbr:
-	if (needs_masquerading || use_rufus_mbr) {
+	if (needs_masquerading || opts.use_rufus_mbr) {
 		uprintf(using_msg, APPLICATION_NAME);
 		r = write_rufus_mbr(fp);
 	} else {
@@ -901,7 +898,7 @@ static BOOL WriteSBR(HANDLE hPhysicalDrive)
 {
 	// TODO: Do we need anything special for 4K sectors?
 	DWORD size, max_size, br_size = 0x200;
-	int r, sub_type = boot_type;
+	int r, sub_type = opts.boot_type;
 	uint8_t *buf = NULL;
 	FAKE_FD fake_fd = { 0 };
 	FILE* fp = (FILE*)&fake_fd;
@@ -909,7 +906,7 @@ static BOOL WriteSBR(HANDLE hPhysicalDrive)
 	fake_fd._handle = (char*)hPhysicalDrive;
 	set_bytes_per_sector(SelectedDrive.SectorSize);
 	// Syslinux has precedence over Grub
-	if ((boot_type == BT_IMAGE) && (!HAS_SYSLINUX(img_report))) {
+	if ((opts.boot_type == BT_IMAGE) && (!HAS_SYSLINUX(img_report))) {
 		if (img_report.has_grub4dos)
 			sub_type = BT_GRUB4DOS;
 		if (img_report.has_grub2)
@@ -917,7 +914,7 @@ static BOOL WriteSBR(HANDLE hPhysicalDrive)
 	}
 
 	// Use BT_MAX for the protective message
-	if ((boot_type != BT_NON_BOOTABLE) && (partition_type == PARTITION_STYLE_GPT))
+	if ((opts.boot_type != BT_NON_BOOTABLE) && (opts.partition_type == PARTITION_STYLE_GPT))
 		sub_type = BT_MAX;
 
 	switch (sub_type) {
@@ -981,11 +978,11 @@ static BOOL WriteSBR(HANDLE hPhysicalDrive)
  * Process the Partition Boot Record
  */
 static __inline const char* bt_to_name(void) {
-	switch (boot_type) {
+	switch (opts.boot_type) {
 	case BT_FREEDOS: return "FreeDOS";
 	case BT_REACTOS: return "ReactOS";
 	default:
-		return ((boot_type == BT_IMAGE) && HAS_KOLIBRIOS(img_report)) ? "KolibriOS" : "Standard";
+		return ((opts.boot_type == BT_IMAGE) && HAS_KOLIBRIOS(img_report)) ? "KolibriOS" : "Standard";
 	}
 }
 
@@ -1007,11 +1004,11 @@ BOOL WritePBR(HANDLE hLogicalVolume)
 			break;
 		}
 		uprintf("Confirmed new volume has a FAT16 boot sector");
-		if (boot_type == BT_FREEDOS) {
+		if (opts.boot_type == BT_FREEDOS) {
 			if (!write_fat_16_fd_br(fp, 0)) break;
-		} else if (boot_type == BT_REACTOS) {
+		} else if (opts.boot_type == BT_REACTOS) {
 			if (!write_fat_16_ros_br(fp, 0)) break;
-		} else if ((boot_type == BT_IMAGE) && HAS_KOLIBRIOS(img_report)) {
+		} else if ((opts.boot_type == BT_IMAGE) && HAS_KOLIBRIOS(img_report)) {
 			uprintf("FAT16 is not supported for KolibriOS"); break;
 		} else {
 			if (!write_fat_16_br(fp, 0)) break;
@@ -1029,15 +1026,15 @@ BOOL WritePBR(HANDLE hLogicalVolume)
 			}
 			uprintf("Confirmed new volume has a %s FAT32 boot sector", i ? "secondary" : "primary");
 			uprintf("Setting %s FAT32 boot sector for boot...", i ? "secondary" : "primary");
-			if (boot_type == BT_FREEDOS) {
+			if (opts.boot_type == BT_FREEDOS) {
 				if (!write_fat_32_fd_br(fp, 0)) break;
-			} else if (boot_type == BT_REACTOS) {
+			} else if (opts.boot_type == BT_REACTOS) {
 				if (!write_fat_32_ros_br(fp, 0)) break;
-			} else if ((boot_type == BT_IMAGE) && HAS_KOLIBRIOS(img_report)) {
+			} else if ((opts.boot_type == BT_IMAGE) && HAS_KOLIBRIOS(img_report)) {
 				if (!write_fat_32_kos_br(fp, 0)) break;
-			} else if ((boot_type == BT_IMAGE) && HAS_BOOTMGR(img_report)) {
+			} else if ((opts.boot_type == BT_IMAGE) && HAS_BOOTMGR(img_report)) {
 				if (!write_fat_32_pe_br(fp, 0)) break;
-			} else if ((boot_type == BT_IMAGE) && HAS_WINPE(img_report)) {
+			} else if ((opts.boot_type == BT_IMAGE) && HAS_WINPE(img_report)) {
 				if (!write_fat_32_nt_br(fp, 0)) break;
 			} else {
 				if (!write_fat_32_br(fp, 0)) break;
@@ -1173,7 +1170,7 @@ static BOOL WriteDrive(HANDLE hPhysicalDrive, BOOL bZeroDrive)
 	UpdateProgressWithInfoInit(NULL, FALSE);
 
 	if (bZeroDrive) {
-		uprintf(fast_zeroing ? "Fast-zeroing drive:" : "Zeroing drive:");
+		uprintf(opts.fast_zeroing ? "Fast-zeroing drive:" : "Zeroing drive:");
 		// Our buffer size must be a multiple of the sector size and *ALIGNED* to the sector size
 		buf_size = ((DD_BUFFER_SIZE + SelectedDrive.SectorSize - 1) / SelectedDrive.SectorSize) * SelectedDrive.SectorSize;
 		buffer = (uint8_t*)_mm_malloc(buf_size, SelectedDrive.SectorSize);
@@ -1186,9 +1183,9 @@ static BOOL WriteDrive(HANDLE hPhysicalDrive, BOOL bZeroDrive)
 			goto out;
 
 		// Clear buffer
-		memset(buffer, fast_zeroing ? 0xff : 0x00, buf_size);
+		memset(buffer, opts.fast_zeroing ? 0xff : 0x00, buf_size);
 
-		if (fast_zeroing) {
+		if (opts.fast_zeroing) {
 			cmp_buffer = (uint32_t*)_mm_malloc(buf_size, SelectedDrive.SectorSize);
 			if (cmp_buffer == NULL) {
 				ErrorStatus = RUFUS_ERROR(ERROR_NOT_ENOUGH_MEMORY);
@@ -1202,7 +1199,7 @@ static BOOL WriteDrive(HANDLE hPhysicalDrive, BOOL bZeroDrive)
 		read_size[0] = buf_size;
 		uprint_progress(0, 0);
 		for (wb = 0, write_size = 0; wb < target_size; wb += write_size) {
-			UpdateProgressWithInfo(OP_FORMAT, fast_zeroing ? MSG_306 : MSG_286, wb, target_size);
+			UpdateProgressWithInfo(OP_FORMAT, opts.fast_zeroing ? MSG_306 : MSG_286, wb, target_size);
 			uprint_progress(wb, target_size);
 			// Don't overflow our projected size (mostly for VHDs)
 			if (wb + read_size[0] > target_size)
@@ -1218,7 +1215,7 @@ static BOOL WriteDrive(HANDLE hPhysicalDrive, BOOL bZeroDrive)
 			// Also, a back-off strategy is used to limit reading.
 			if (throttle_fast_zeroing) {
 				throttle_fast_zeroing--;
-			} else if (fast_zeroing) {
+			} else if (opts.fast_zeroing) {
 				CHECK_FOR_USER_CANCEL;
 
 				// Read block and compare against the block that needs to be written
@@ -1445,7 +1442,7 @@ out:
 DWORD WINAPI FormatThread(void* param)
 {
 	int i, r;
-	BOOL ret, windows_to_go, actual_lock_drive = lock_drive, write_as_ext = FALSE;
+	BOOL ret, windows_to_go, actual_lock_drive = opts.lock_drive, write_as_ext = FALSE;
 	// Windows 11 and VDS (which I suspect is what fmifs.dll's FormatEx() is now calling behind the scenes)
 	// require us to unlock the physical drive to format the drive, else access denied is returned.
 	BOOL need_logical = FALSE, must_unlock_physical = (use_vds || WindowsVersion.Version >= WINDOWS_11);
@@ -1463,44 +1460,44 @@ DWORD WINAPI FormatThread(void* param)
 	char kolibri_dst[] = "?:\\MTLD_F32";
 	char grub4dos_dst[] = "?:\\grldr";
 
-	windows_to_go = (image_options & IMOP_WINTOGO) && (boot_type == BT_IMAGE) && HAS_WINTOGO(img_report) &&
-		(ComboBox_GetCurItemData(hImageOption) == IMOP_WIN_TO_GO);
+	windows_to_go = (opts.image_options & IMOP_WINTOGO) && (opts.boot_type == BT_IMAGE) && HAS_WINTOGO(img_report) &&
+		(opts.image_option == IMOP_WIN_TO_GO);
 	large_drive = (SelectedDrive.DiskSize > (1*TB));
 	if (large_drive)
 		uprintf("Notice: Large drive detected (may produce short writes)");
 
 	// Find out if we need to add any extra partitions
 	extra_partitions = 0;
-	if ((boot_type == BT_IMAGE) && !write_as_image && HAS_PERSISTENCE(img_report) && persistence_size)
+	if ((opts.boot_type == BT_IMAGE) && !opts.write_as_image && HAS_PERSISTENCE(img_report) && opts.persistence_size)
 		extra_partitions |= XP_PERSISTENCE;
 	// According to Microsoft, every GPT disk (we RUN Windows from) must have an MSR due to not having hidden sectors
 	// https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/windows-and-gpt-faq#disks-that-require-an-msr
-	if ((windows_to_go) && (target_type == TT_UEFI) && (partition_type == PARTITION_STYLE_GPT))
+	if ((windows_to_go) && (opts.target_type == TT_UEFI) && (opts.partition_type == PARTITION_STYLE_GPT))
 		extra_partitions |= XP_ESP | XP_MSR;
 	// If we have a bootable image with UEFI bootloaders and the target file system is NTFS or exFAT
 	// or the UEFI:NTFS option is selected, we add the UEFI:NTFS partition...
-	else if ((((boot_type == BT_IMAGE) && IS_EFI_BOOTABLE(img_report)) && ((fs_type == FS_NTFS) || (fs_type == FS_EXFAT))) ||
-			 (boot_type == BT_UEFI_NTFS)) {
+	else if ((((opts.boot_type == BT_IMAGE) && IS_EFI_BOOTABLE(img_report)) && ((opts.fs_type == FS_NTFS) || (opts.fs_type == FS_EXFAT))) ||
+			 (opts.boot_type == BT_UEFI_NTFS)) {
 		extra_partitions |= XP_UEFI_NTFS;
 		// ...but only if we're not dealing with a Windows image in installer mode with target
 		//  system set to BIOS and without dual BIOS+UEFI boot enabled.
-		if ((boot_type == BT_IMAGE) && HAS_BOOTMGR_BIOS(img_report) && (!windows_to_go) &&
-			(target_type == TT_BIOS) && (!allow_dual_uefi_bios))
+		if ((opts.boot_type == BT_IMAGE) && HAS_BOOTMGR_BIOS(img_report) && (!windows_to_go) &&
+			(opts.target_type == TT_BIOS) && (!opts.allow_dual_uefi_bios))
 			extra_partitions &= ~XP_UEFI_NTFS;
 	}
-	if (IsChecked(IDC_OLD_BIOS_FIXES))
+	if (opts.old_bios_fixes)
 		extra_partitions |= XP_COMPAT;
 
 	// On pre 1703 platforms (and even on later ones), anything with ext2/ext3 doesn't sit
 	// too well with Windows. Same with ESPs. Relaxing our locking rules seems to help...
-	if ((extra_partitions & (XP_ESP | XP_PERSISTENCE)) || IS_EXT(fs_type))
+	if ((extra_partitions & (XP_ESP | XP_PERSISTENCE)) || IS_EXT(opts.fs_type))
 		actual_lock_drive = FALSE;
 	// Windows 11 is a lot more proactive in locking ESPs and MSRs than previous versions
 	// were, meaning that we also can't lock the drive without incurring errors...
 	if ((WindowsVersion.Version >= WINDOWS_11) && extra_partitions)
 		actual_lock_drive = FALSE;
 	// Fixed drives + ext2/ext3 don't play nice and require the same handling as ESPs
-	write_as_ext = IS_EXT(fs_type) && (GetDriveTypeFromIndex(DriveIndex) == DRIVE_FIXED);
+	write_as_ext = IS_EXT(opts.fs_type) && (GetDriveTypeFromIndex(DriveIndex) == DRIVE_FIXED);
 
 	PrintInfoDebug(0, MSG_225);
 	hPhysicalDrive = GetPhysicalHandle(DriveIndex, actual_lock_drive, FALSE, !actual_lock_drive);
@@ -1519,7 +1516,7 @@ DWORD WINAPI FormatThread(void* param)
 	// Unassign all drives letters
 	// For raw images, keep the primary partition on the earliest prior letter
 	// so we don't steal the secondary partition's former mountpoint.
-	drive_name[0] = RemoveDriveLetters(DriveIndex, !((boot_type == BT_IMAGE) && write_as_image), FALSE);
+	drive_name[0] = RemoveDriveLetters(DriveIndex, !((opts.boot_type == BT_IMAGE) && opts.write_as_image), FALSE);
 	if (drive_name[0] == 0) {
 		uprintf("Unable to find a drive letter to use");
 		ErrorStatus = RUFUS_ERROR(APPERR(ERROR_CANT_ASSIGN_LETTER));
@@ -1556,7 +1553,7 @@ DWORD WINAPI FormatThread(void* param)
 	// If we write an image that contains an ESP, Windows forcibly reassigns/removes the target
 	// drive, which causes a write error. To work around this, we must lock the logical drive.
 	// Also need to lock logical drive if we couldn't delete partitions, to keep Windows happy...
-	if (((boot_type == BT_IMAGE) && write_as_image) || (need_logical)) {
+	if (((opts.boot_type == BT_IMAGE) && opts.write_as_image) || (need_logical)) {
 		uprintf("Requesting logical volume handle...");
 		hLogicalVolume = GetLogicalHandle(DriveIndex, 0, TRUE, FALSE, !actual_lock_drive);
 		if (hLogicalVolume == INVALID_HANDLE_VALUE) {
@@ -1571,13 +1568,13 @@ DWORD WINAPI FormatThread(void* param)
 	}
 	CHECK_FOR_USER_CANCEL;
 
-	if (!zero_drive && !write_as_image) {
+	if (!opts.zero_drive && !opts.write_as_image) {
 		PrintInfoDebug(0, MSG_226);
 		AnalyzeMBR(hPhysicalDrive, "Drive", FALSE);
 		UpdateProgress(OP_ANALYZE_MBR, -1.0f);
 	}
 
-	if (zero_drive) {
+	if (opts.zero_drive) {
 		WriteDrive(hPhysicalDrive, TRUE);
 		goto out;
 	}
@@ -1587,7 +1584,7 @@ try_clear:
 	// Note, Microsoft's way of cleaning partitions (IOCTL_DISK_CREATE_DISK, which is what we apply
 	// in InitializeDisk) is *NOT ENOUGH* to reset a disk and can render it inoperable for partitioning
 	// or formatting under Windows. See https://github.com/pbatard/rufus/issues/759 for details.
-	if ((boot_type != BT_IMAGE) || (img_report.is_iso && !write_as_image)) {
+	if ((opts.boot_type != BT_IMAGE) || (img_report.is_iso && !opts.write_as_image)) {
 		if ((!ClearMBRGPT(hPhysicalDrive, SelectedDrive.DiskSize, SelectedDrive.SectorSize)) ||
 			(!InitializeDisk(hPhysicalDrive))) {
 			// If VDS is available, try cycling the device to see it it helps
@@ -1595,11 +1592,11 @@ try_clear:
 				uprintf("Cycling the device to see if it helps...");
 				// Note: This may leave the device disabled on re-plug or reboot
 				// so only do this for the experimental VDS path for now...
-				cr = CycleDevice(ComboBox_GetCurSel(hDeviceList));
+				cr = CycleDevice(opts.device_index);
 				if (cr == ERROR_DEVICE_REINITIALIZATION_NEEDED) {
 					uprintf("Zombie device detected, trying again...");
 					Sleep(1000);
-					cr = CycleDevice(ComboBox_GetCurSel(hDeviceList));
+					cr = CycleDevice(opts.device_index);
 				}
 				if (cr == 0)
 					uprintf("Successfully cycled device");
@@ -1615,10 +1612,10 @@ try_clear:
 		}
 	}
 
-	if (IsChecked(IDC_BAD_BLOCKS)) {
+	if (opts.bad_blocks) {
 		do {
 			FILE* log_fd;
-			int sel = ComboBox_GetCurSel(hNBPasses);
+			int sel = opts.nb_passes_sel;
 			// create a log file for bad blocks report. Since %USERPROFILE% may
 			// have localized characters, we use the UTF-8 API.
 			userdir = getenvU("USERPROFILE");
@@ -1682,7 +1679,7 @@ try_clear:
 	}
 
 	// Write an image file
-	if ((boot_type == BT_IMAGE) && write_as_image) {
+	if ((opts.boot_type == BT_IMAGE) && opts.write_as_image) {
 		// Special case for FFU images
 		if (img_report.compression_type == IMG_COMPRESSION_FFU) {
 			char cmd[MAX_PATH + 128], *physical = NULL;
@@ -1709,8 +1706,8 @@ try_clear:
 	UpdateProgress(OP_ZERO_MBR, -1.0f);
 	CHECK_FOR_USER_CANCEL;
 
-	if (!CreatePartition(hPhysicalDrive, partition_type, fs_type, (partition_type == PARTITION_STYLE_MBR)
-		&& (target_type == TT_UEFI), extra_partitions)) {
+	if (!CreatePartition(hPhysicalDrive, opts.partition_type, opts.fs_type, (opts.partition_type == PARTITION_STYLE_MBR)
+		&& (opts.target_type == TT_UEFI), extra_partitions)) {
 		ErrorStatus = (LastWriteError != 0) ? LastWriteError : RUFUS_ERROR(ERROR_PARTITION_FAILURE);
 		goto out;
 	}
@@ -1735,11 +1732,11 @@ try_clear:
 		// Note: This may leave the device disabled on re-plug or reboot
 		// so only do this for the experimental VDS path for now...
 		uprintf("Cycling device...");
-		cr = CycleDevice(ComboBox_GetCurSel(hDeviceList));
+		cr = CycleDevice(opts.device_index);
 		if (cr == ERROR_DEVICE_REINITIALIZATION_NEEDED) {
 			uprintf("Zombie device detected, trying again...");
 			Sleep(1000);
-			cr = CycleDevice(ComboBox_GetCurSel(hDeviceList));
+			cr = CycleDevice(opts.device_index);
 		}
 		if (cr == 0)
 			uprintf("Successfully cycled device");
@@ -1755,7 +1752,7 @@ try_clear:
 	// Wait for the logical drive we just created to appear
 	uprintf("Waiting for logical drive to reappear...");
 	Sleep(200);
-	if (write_as_esp || write_as_ext) {
+	if (opts.write_as_esp || write_as_ext) {
 		// Can't format ESPs or ext2/ext3 partitions unless we mount them ourselves
 		volume_name = AltMountVolume(DriveIndex, SelectedDrive.Partition[partition_index[PI_MAIN]].Offset, FALSE);
 		if (volume_name == NULL) {
@@ -1782,32 +1779,32 @@ try_clear:
 		if (!FormatPartition(DriveIndex, SelectedDrive.Partition[partition_index[PI_CASPER]].Offset, 0, FS_EXT2 + (ext_version - 2),
 			img_report.uses_casper ? "casper-rw" : "persistence",
 			(img_report.uses_casper ? 0 : FP_CREATE_PERSISTENCE_CONF) |
-			(IsChecked(IDC_QUICK_FORMAT) ? FP_QUICK : 0))) {
+			(opts.quick_format ? FP_QUICK : 0))) {
 			if (!IS_ERROR(ErrorStatus))
 				ErrorStatus = RUFUS_ERROR(ERROR_WRITE_FAULT);
 			goto out;
 		}
 	}
 
-	GetWindowTextU(hLabel, label, sizeof(label));
+	static_strcpy(label, opts.label);
 	// Append a " (SILENT)" suffix to the label for fully unattended silent installation media.
-	if (append_silent && strstr(label, " (SILENT)") == NULL)
+	if (opts.append_silent && strstr(label, " (SILENT)") == NULL)
 		static_strcat(label, " (SILENT)");
-	if (fs_type < FS_EXT2)
-		ToValidLabel(label, (fs_type == FS_FAT16) || (fs_type == FS_FAT32) || (fs_type == FS_EXFAT));
-	ClusterSize = (DWORD)ComboBox_GetCurItemData(hClusterSize);
-	if ((ClusterSize < 0x200) || (write_as_esp))
+	if (opts.fs_type < FS_EXT2)
+		ToValidLabel(label, (opts.fs_type == FS_FAT16) || (opts.fs_type == FS_FAT32) || (opts.fs_type == FS_EXFAT));
+	ClusterSize = (DWORD)opts.cluster_size;
+	if ((ClusterSize < 0x200) || (opts.write_as_esp))
 		ClusterSize = 0;	// 0 = default cluster size
 
 	Flags = FP_FORCE;
-	if (IsChecked(IDC_QUICK_FORMAT))
+	if (opts.quick_format)
 		Flags |= FP_QUICK;
-	if ((fs_type == FS_NTFS) && (enable_ntfs_compression))
+	if ((opts.fs_type == FS_NTFS) && (opts.enable_ntfs_compression))
 		Flags |= FP_COMPRESSION;
-	if (write_as_esp)
+	if (opts.write_as_esp)
 		Flags |= FP_LARGE_FAT32;
 
-	ret = FormatPartition(DriveIndex, SelectedDrive.Partition[partition_index[PI_MAIN]].Offset, ClusterSize, fs_type, label, Flags);
+	ret = FormatPartition(DriveIndex, SelectedDrive.Partition[partition_index[PI_MAIN]].Offset, ClusterSize, opts.fs_type, label, Flags);
 	if (!ret) {
 		// Error will be set by FormatPartition() in ErrorStatus
 		uprintf("Format error: %s", StrError(ErrorStatus, TRUE));
@@ -1824,7 +1821,7 @@ try_clear:
 	}
 
 	// Thanks to Microsoft, we must fix the MBR AFTER the drive has been formatted
-	if ((partition_type == PARTITION_STYLE_MBR) || ((boot_type != BT_NON_BOOTABLE) && (partition_type == PARTITION_STYLE_GPT))) {
+	if ((opts.partition_type == PARTITION_STYLE_MBR) || ((opts.boot_type != BT_NON_BOOTABLE) && (opts.partition_type == PARTITION_STYLE_GPT))) {
 		PrintInfoDebug(0, MSG_228);	// "Writing master boot record..."
 		if ((!WriteMBR(hPhysicalDrive)) || (!WriteSBR(hPhysicalDrive))) {
 			if (!IS_ERROR(ErrorStatus))
@@ -1835,7 +1832,7 @@ try_clear:
 	}
 	Sleep(200);
 
-	if (!write_as_esp && !write_as_ext) {
+	if (!opts.write_as_esp && !write_as_ext) {
 		WaitForLogical(DriveIndex, 0);
 		// Try to continue
 		CHECK_FOR_USER_CANCEL;
@@ -1860,7 +1857,7 @@ try_clear:
 		CHECK_FOR_USER_CANCEL;
 
 		// Disable file indexing, unless it was force-enabled by the user
-		if ((!enable_file_indexing) && ((fs_type == FS_NTFS) || (fs_type == FS_UDF) || (fs_type == FS_REFS))) {
+		if ((!opts.enable_file_indexing) && ((opts.fs_type == FS_NTFS) || (opts.fs_type == FS_UDF) || (opts.fs_type == FS_REFS))) {
 			uprintf("Disabling file indexing...");
 			if (!SetFileAttributesA(volume_name, FILE_ATTRIBUTE_NOT_CONTENT_INDEXED))
 				uprintf("Could not disable file indexing: %s", WindowsErrorString());
@@ -1869,28 +1866,28 @@ try_clear:
 
 	// Refresh the drive label - This is needed as Windows may have altered it from
 	// the name we proposed, and we require an exact label, to patch config files.
-	if ((fs_type < FS_EXT2) && !GetVolumeInformationU(drive_name, img_report.usb_label,
+	if ((opts.fs_type < FS_EXT2) && !GetVolumeInformationU(drive_name, img_report.usb_label,
 		ARRAYSIZE(img_report.usb_label), NULL, NULL, NULL, NULL, 0)) {
 		uprintf("WARNING: Failed to refresh label: %s", WindowsErrorString());
-	} else if (IS_EXT(fs_type)) {
+	} else if (IS_EXT(opts.fs_type)) {
 		const char* ext_label = GetExtFsLabel(DriveIndex, 0);
 		if (ext_label != NULL)
 			static_strcpy(img_report.usb_label, label);
 	}
 
-	if (boot_type != BT_NON_BOOTABLE) {
-		if (boot_type == BT_UEFI_NTFS) {
+	if (opts.boot_type != BT_NON_BOOTABLE) {
+		if (opts.boot_type == BT_UEFI_NTFS) {
 			// All good
-		} else if (target_type == TT_UEFI) {
+		} else if (opts.target_type == TT_UEFI) {
 			// For once, no need to do anything - just check our sanity
-			if_assert_fails((boot_type == BT_IMAGE) && IS_EFI_BOOTABLE(img_report) && (fs_type <= FS_NTFS)) {
+			if_assert_fails((opts.boot_type == BT_IMAGE) && IS_EFI_BOOTABLE(img_report) && (opts.fs_type <= FS_NTFS)) {
 				ErrorStatus = RUFUS_ERROR(ERROR_INSTALL_FAILURE);
 				goto out;
 			}
-		} else if ( (boot_type == BT_SYSLINUX_V4) || (boot_type == BT_SYSLINUX_V6) ||
-			((boot_type == BT_IMAGE) && (HAS_SYSLINUX(img_report) || HAS_REACTOS(img_report)) &&
-				(!HAS_WINDOWS(img_report) || !allow_dual_uefi_bios)) ) {
-			if (!InstallSyslinux(DriveIndex, drive_name[0], fs_type)) {
+		} else if ( (opts.boot_type == BT_SYSLINUX_V4) || (opts.boot_type == BT_SYSLINUX_V6) ||
+			((opts.boot_type == BT_IMAGE) && (HAS_SYSLINUX(img_report) || HAS_REACTOS(img_report)) &&
+				(!HAS_WINDOWS(img_report) || !opts.allow_dual_uefi_bios)) ) {
+			if (!InstallSyslinux(DriveIndex, drive_name[0], opts.fs_type)) {
 				ErrorStatus = RUFUS_ERROR(ERROR_INSTALL_FAILURE);
 				goto out;
 			}
@@ -1915,7 +1912,7 @@ try_clear:
 			safe_unlockclose(hLogicalVolume);
 		}
 	} else {
-		if (IsChecked(IDC_EXTENDED_LABEL))
+		if (opts.extended_label)
 			SetAutorun(drive_name);
 	}
 	CHECK_FOR_USER_CANCEL;
@@ -1927,8 +1924,8 @@ try_clear:
 		goto out;
 	CHECK_FOR_USER_CANCEL;
 
-	if (boot_type != BT_NON_BOOTABLE) {
-		if ((boot_type == BT_MSDOS) || (boot_type == BT_FREEDOS)) {
+	if (opts.boot_type != BT_NON_BOOTABLE) {
+		if ((opts.boot_type == BT_MSDOS) || (opts.boot_type == BT_FREEDOS)) {
 			UpdateProgress(OP_FILE_COPY, -1.0f);
 			PrintInfoDebug(0, MSG_230);
 			if (!ExtractDOS(drive_name)) {
@@ -1936,14 +1933,14 @@ try_clear:
 					ErrorStatus = RUFUS_ERROR(ERROR_CANNOT_COPY);
 				goto out;
 			}
-		} else if (boot_type == BT_GRUB4DOS) {
+		} else if (opts.boot_type == BT_GRUB4DOS) {
 			grub4dos_dst[0] = drive_name[0];
 			IGNORE_RETVAL(_chdirU(app_data_dir));
 			uprintf("Installing: %s (Grub4DOS loader) %s", grub4dos_dst,
 				IsFileInDB(FILES_DIR "\\grub4dos-" GRUB4DOS_VERSION "\\grldr")?"✓":"✗");
 			if (!CopyFileU(FILES_DIR "\\grub4dos-" GRUB4DOS_VERSION "\\grldr", grub4dos_dst, FALSE))
 				uprintf("Failed to copy file: %s", WindowsErrorString());
-		} else if ((boot_type == BT_IMAGE) && (image_path != NULL) && (img_report.is_iso || img_report.is_windows_img)) {
+		} else if ((opts.boot_type == BT_IMAGE) && (image_path != NULL) && (img_report.is_iso || img_report.is_windows_img)) {
 			UpdateProgress(OP_FILE_COPY, 0.0f);
 			drive_name[2] = 0;	// Ensure our drive is something like 'D:'
 			if (windows_to_go) {
@@ -1954,7 +1951,7 @@ try_clear:
 					goto out;
 				}
 				if (unattend_xml_path != NULL) {
-					if (!ApplyWindowsCustomization(drive_name[0], unattend_xml_flags | UNATTEND_WINDOWS_TO_GO))
+					if (!ApplyWindowsCustomization(drive_name[0], opts.unattend_xml_flags | UNATTEND_WINDOWS_TO_GO))
 						ErrorStatus = RUFUS_ERROR(APPERR(ERROR_CANT_PATCH));
 				}
 			} else {
@@ -1974,7 +1971,7 @@ try_clear:
 					}
 				}
 				// EFI mode selected, with no 'boot###.efi' but Windows 7 x64's 'bootmgr.efi' (bit #0)
-				if (((target_type == TT_UEFI) || allow_dual_uefi_bios) && HAS_WIN7_EFI(img_report)) {
+				if (((opts.target_type == TT_UEFI) || opts.allow_dual_uefi_bios) && HAS_WIN7_EFI(img_report)) {
 					PrintInfo(0, MSG_232, lmprintf(MSG_307));
 					uprintf("Win7 EFI boot setup");
 					img_report.wininst_path[0][0] = drive_name[0];
@@ -1991,13 +1988,13 @@ try_clear:
 						}
 					}
 				}
-				if ( (target_type == TT_BIOS) && HAS_WINPE(img_report) ) {
+				if ( (opts.target_type == TT_BIOS) && HAS_WINPE(img_report) ) {
 					// Apply WinPE fixup
 					if (!SetupWinPE(drive_name[0]))
 						ErrorStatus = RUFUS_ERROR(APPERR(ERROR_CANT_PATCH));
 				}
 				if (unattend_xml_path != NULL) {
-					if (!ApplyWindowsCustomization(drive_name[0], unattend_xml_flags))
+					if (!ApplyWindowsCustomization(drive_name[0], opts.unattend_xml_flags))
 						ErrorStatus = RUFUS_ERROR(APPERR(ERROR_CANT_PATCH));
 				}
 			}
@@ -2005,14 +2002,14 @@ try_clear:
 
 		UpdateProgress(OP_FINALIZE, -1.0f);
 		PrintInfoDebug(0, MSG_233);
-		if ((boot_type == BT_IMAGE) && (image_path != NULL) && (img_report.is_iso) && (!windows_to_go))
+		if ((opts.boot_type == BT_IMAGE) && (image_path != NULL) && (img_report.is_iso) && (!windows_to_go))
 			UpdateMD5Sum(drive_name, md5sum_name[img_report.has_md5sum ? img_report.has_md5sum - 1 : 0]);
-		if (IsChecked(IDC_EXTENDED_LABEL))
+		if (opts.extended_label)
 			SetAutorun(drive_name);
 		// Issue another complete remount before we exit, to ensure we're clean
 		RemountVolume(drive_name, TRUE);
 		// NTFS fixup (WinPE/AIK images don't seem to boot without an extra checkdisk)
-		if ((boot_type == BT_IMAGE) && (img_report.is_iso) && (fs_type == FS_NTFS)) {
+		if ((opts.boot_type == BT_IMAGE) && (img_report.is_iso) && (opts.fs_type == FS_NTFS)) {
 			// Try to ensure that all messages from Checkdisk will be in English
 			if (PRIMARYLANGID(GetThreadUILanguage()) != LANG_ENGLISH) {
 				SetThreadUILanguage(MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US));
@@ -2028,19 +2025,19 @@ try_clear:
 	if (!IS_ERROR(ErrorStatus)) {
 		UpdateProgress(OP_EXTRACT_ZIP, 0.0f);
 		drive_name[2] = 0;
-		if (archive_path != NULL && fs_type < FS_EXT2 && !ExtractZip(archive_path, drive_name) && !IS_ERROR(ErrorStatus))
+		if (archive_path != NULL && opts.fs_type < FS_EXT2 && !ExtractZip(archive_path, drive_name) && !IS_ERROR(ErrorStatus))
 			uprintf("WARNING: Could not copy additional files");
 	}
 
 out:
-	if ((write_as_esp || write_as_ext) && volume_name != NULL)
+	if ((opts.write_as_esp || write_as_ext) && volume_name != NULL)
 		AltUnmountVolume(volume_name, TRUE);
 	else
 		safe_free(volume_name);
 	safe_free(buffer);
 	safe_unlockclose(hLogicalVolume);
 	safe_unlockclose(hPhysicalDrive);	// This can take a while
-	if ((boot_type == BT_IMAGE) && write_as_image) {
+	if ((opts.boot_type == BT_IMAGE) && opts.write_as_image) {
 		PrintInfo(0, MSG_320, lmprintf(MSG_307));
 		Sleep(200);
 		VdsRescan(VDS_RESCAN_REFRESH, 0, TRUE);

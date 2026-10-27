@@ -72,6 +72,7 @@
 #include "db.h"
 #include "efi.h"
 #include "rufus.h"
+#include "options.h"
 #include "winio.h"
 #include "missing.h"
 #include "darkmode.h"
@@ -104,7 +105,7 @@
 char hash_str[HASH_MAX][150];
 HANDLE data_ready[HASH_MAX] = { 0 }, thread_ready[HASH_MAX] = { 0 };
 DWORD read_size[NUM_BUFFERS];
-BOOL enable_extra_hashes = FALSE, validate_md5sum = FALSE;
+BOOL enable_extra_hashes = FALSE;
 BOOL cpu_has_sha1_accel = FALSE, cpu_has_sha256_accel = FALSE;
 uint8_t ALIGNED(64) buffer[NUM_BUFFERS][BUFFER_SIZE];
 uint8_t* pe256ssp = NULL;
@@ -2479,7 +2480,7 @@ void UpdateMD5Sum(const char* dest_dir, const char* md5sum_name)
 	char md5_path[64], path1[64], path2[64], bootloader_name[32];
 	char *md5_data = NULL, *new_data = NULL, *str_pos, *d, *s, *p;
 
-	if (!img_report.has_md5sum && !validate_md5sum)
+	if (!img_report.has_md5sum && !opts.validate_md5sum)
 		return;
 
 	static_sprintf(md5_path, "%s\\%s", dest_dir, md5sum_name);
@@ -2517,7 +2518,7 @@ void UpdateMD5Sum(const char* dest_dir, const char* md5sum_name)
 	}
 
 	// If we validate md5sum we need to update the original bootloader names and add md5sum_totalbytes
-	if (validate_md5sum) {
+	if (opts.validate_md5sum) {
 		new_size = md5_size;
 		new_data = malloc(md5_size + 1024);
 		assert(new_data != NULL);

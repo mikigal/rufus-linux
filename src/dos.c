@@ -31,6 +31,7 @@
 #include <string.h>
 
 #include "rufus.h"
+#include "options.h"
 #include "missing.h"
 #include "resource.h"
 #include "msapi_utf8.h"
@@ -405,7 +406,7 @@ BOOL ExtractFreeDOS(const char* path)
 
 BOOL ExtractDOS(const char* path)
 {
-	switch(ComboBox_GetCurItemData(hBootType)) {
+	switch(opts.boot_type) {
 	case BT_MSDOS:
 		return ExtractMSDOS(path);
 	case BT_FREEDOS:

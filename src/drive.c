@@ -33,6 +33,7 @@
 #endif
 
 #include "rufus.h"
+#include "options.h"
 #include "ntdll.h"
 #include "missing.h"
 #include "resource.h"
@@ -75,10 +76,8 @@ const IID IID_IVdsVolumeMF3 = { 0x6788FAF9, 0x214E, 0x4B85, { 0xBA, 0x59, 0x26, 
  * Globals
  */
 RUFUS_DRIVE_INFO SelectedDrive;
-extern BOOL write_as_esp;
 extern windows_version_t WindowsVersion;
 int partition_index[PI_MAX];
-uint64_t persistence_size = 0;
 
 /*
  * The following methods get or set the AutoMount setting (which is different from AutoRun)
@@ -1216,7 +1215,7 @@ BOOL IsSourceImageLocatedOnTargetDrive(DWORD DriveIndex)
 	size_t i;
 	char drive_letters[27] = { 0 };
 
-	if (boot_type != BT_IMAGE || !GetDriveLetters(DriveIndex, drive_letters) || drive_letters[0] == 0)
+	if (opts.boot_type != BT_IMAGE || !GetDriveLetters(DriveIndex, drive_letters) || drive_letters[0] == 0)
 		return FALSE;
 
 	for (i = 0; i < strlen(drive_letters); i++)
@@ -1248,7 +1247,7 @@ char RemoveDriveLetters(DWORD DriveIndex, BOOL bReturnLast, BOOL bSilent)
 	// Unmount all mounted volumes that belong to this drive
 	for (i = 0; i < len; i++) {
 		// Check that the current image isn't located on a drive we are trying to dismount
-		if ((boot_type == BT_IMAGE) && (drive_letters[i] == (PathGetDriveNumberU(image_path) + 'A'))) {
+		if ((opts.boot_type == BT_IMAGE) && (drive_letters[i] == (PathGetDriveNumberU(image_path) + 'A'))) {
 			if ((PathGetDriveNumberU(image_path) + 'A') == drive_letters[i]) {
 				suprintf("ABORTED: Cannot use an image that is located on the target drive!");
 				return 0;
@@ -2319,7 +2318,7 @@ BOOL CreatePartition(HANDLE hDrive, int partition_style, int file_system, BOOL m
 	// https://docs.microsoft.com/en-us/windows-hardware/manufacture/desktop/configure-uefigpt-based-hard-drive-partitions
 	// and folks using MacOS: https://github.com/pbatard/rufus/issues/979
 	LONGLONG esp_size = 260 * MB, main_size;
-	LONGLONG ClusterSize = (LONGLONG)ComboBox_GetCurItemData(hClusterSize);
+	LONGLONG ClusterSize = (LONGLONG)opts.cluster_size;
 
 	PrintInfoDebug(0, MSG_238, PartitionTypeName[partition_style]);
 
@@ -2342,7 +2341,7 @@ BOOL CreatePartition(HANDLE hDrive, int partition_style, int file_system, BOOL m
 	memset(SelectedDrive.Partition, 0, sizeof(SelectedDrive.Partition));
 
 	// Compute the starting offset of the first partition
-	if ((partition_style == PARTITION_STYLE_GPT) || (!IsChecked(IDC_OLD_BIOS_FIXES))) {
+	if ((partition_style == PARTITION_STYLE_GPT) || (!opts.old_bios_fixes)) {
 		// Go with the MS 1 MB wastage at the beginning...
 		SelectedDrive.Partition[pi].Offset = 1 * MB;
 	} else {
@@ -2398,16 +2397,16 @@ BOOL CreatePartition(HANDLE hDrive, int partition_style, int file_system, BOOL m
 	partition_index[PI_MAIN] = pi++;
 	// Shorthand for the main index.
 	mi = partition_index[PI_MAIN];
-	wcscpy(SelectedDrive.Partition[mi].Name, write_as_esp ? L"EFI System Partition" : L"Main Data Partition");
+	wcscpy(SelectedDrive.Partition[mi].Name, opts.write_as_esp ? L"EFI System Partition" : L"Main Data Partition");
 
 	if (extra_partitions) {
 		// Adjust the size according to extra partitions (which we always align to a track)
 		// TODO: Should we align these to cluster as well?
 		if (extra_partitions & XP_PERSISTENCE) {
-			assert(persistence_size != 0);
+			assert(opts.persistence_size != 0);
 			partition_index[PI_CASPER] = pi;
 			wcscpy(SelectedDrive.Partition[pi].Name, L"Linux Persistence");
-			SelectedDrive.Partition[pi++].Size = CEILING_ALIGN(persistence_size, bytes_per_track);
+			SelectedDrive.Partition[pi++].Size = CEILING_ALIGN(opts.persistence_size, bytes_per_track);
 		}
 		if (extra_partitions & XP_ESP) {
 			partition_index[PI_ESP] = pi;
@@ -2439,7 +2438,7 @@ BOOL CreatePartition(HANDLE hDrive, int partition_style, int file_system, BOOL m
 	// With the above, compute the main partition size (which we align to a track)
 	main_size = last_offset - SelectedDrive.Partition[mi].Offset;
 	assert(main_size > 0);
-	if (write_as_esp)
+	if (opts.write_as_esp)
 		main_size = min(main_size, MAX_ISO_TO_ESP_SIZE);
 	SelectedDrive.Partition[mi].Size = FLOOR_ALIGN(main_size, bytes_per_track);
 	// Try to make sure that the main partition size is a multiple of the cluster size
@@ -2472,7 +2471,7 @@ BOOL CreatePartition(HANDLE hDrive, int partition_style, int file_system, BOOL m
 		DriveLayoutEx.PartitionEntry[i].RewritePartition = TRUE;
 		if (partition_style == PARTITION_STYLE_MBR) {
 			if (i == mi) {
-				DriveLayoutEx.PartitionEntry[i].Mbr.BootIndicator = (boot_type != BT_NON_BOOTABLE);
+				DriveLayoutEx.PartitionEntry[i].Mbr.BootIndicator = (opts.boot_type != BT_NON_BOOTABLE);
 				switch (file_system) {
 				case FS_FAT16:
 					DriveLayoutEx.PartitionEntry[i].Mbr.PartitionType = 0x0e;	// FAT16 LBA

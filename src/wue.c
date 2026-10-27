@@ -24,6 +24,7 @@
 #include <assert.h>
 
 #include "rufus.h"
+#include "options.h"
 #include "vhd.h"
 #include "xml.h"
 #include "drive.h"
@@ -44,13 +45,13 @@
 
 const char* bypass_name[] = { "BypassTPMCheck", "BypassSecureBootCheck", "BypassRAMCheck" };
 
-int unattend_xml_flags = 0, wintogo_index = -1, wininst_index = 0;
+int wintogo_index = -1, wininst_index = 0;
 int unattend_xml_mask = UNATTEND_DEFAULT_SELECTION_MASK;
 int unattend_edition_index = 1;
-char *unattend_xml_path = NULL, unattend_username[MAX_USERNAME_LENGTH];
+char unattend_username[MAX_USERNAME_LENGTH];	// unattend_xml_path is in core/globals.c
 uint32_t removable_section[2] = { 0, 0 };
 
-extern BOOL validate_md5sum, bcdboot_supports_ex;
+extern BOOL bcdboot_supports_ex;
 extern uint64_t md5sum_totalbytes;
 extern StrArray modified_files;
 extern const char* efi_archname[ARCH_MAX];
@@ -118,7 +119,7 @@ char* CreateUnattendXml(int arch, int flags)
 	FILE* fd;
 	DYNAMIC_TIME_ZONE_INFORMATION dtz_info;
 	int i, order;
-	unattend_xml_flags = flags;
+	opts.unattend_xml_flags = flags;
 	StrArray commands = { 0 };
 	if (arch < ARCH_X86_32 || arch > ARCH_ARM_64 || flags == 0) {
 		uprintf("Note: No Windows User Experience options selected");
@@ -869,7 +870,7 @@ int SetWinToGoIndex(void)
 	// Sanity checks
 	wintogo_index = -1;
 	wininst_index = 0;
-	if (ComboBox_GetCurItemData(hFileSystem) != FS_NTFS)
+	if (opts.fs_type != FS_NTFS)
 		return -1;
 
 	// If we have multiple windows install images, ask the user the one to use
@@ -1065,7 +1066,7 @@ BOOL SetupWinToGo(DWORD DriveIndex, const char* drive_name, BOOL use_esp)
 	// to create a Windows 10 Windows To Go drive on an up to date Windows platform.
 	// So we need to specify /offline and /bootex very carefully.
 	static_sprintf(path, "%s\\Windows\\Boot\\EFI_EX", drive_name);
-	use_bootex = (bcdboot_supports_ex && (unattend_xml_flags & UNATTEND_USE_MS2023_BOOTLOADERS) && PathFileExistsU(path));
+	use_bootex = (bcdboot_supports_ex && (opts.unattend_xml_flags & UNATTEND_USE_MS2023_BOOTLOADERS) && PathFileExistsU(path));
 	static_sprintf(cmd, "%s\\bcdboot.exe %s\\Windows /v %s%s/f %s /s %s", sysnative_dir, drive_name,
 		bcdboot_supports_ex ? "/offline " : "", use_bootex ? "/bootex " : "",
 		HAS_BOOTMGR_BIOS(img_report) ? (HAS_BOOTMGR_EFI(img_report) ? "ALL" : "BIOS") : "UEFI",
@@ -1086,7 +1087,7 @@ BOOL SetupWinToGo(DWORD DriveIndex, const char* drive_name, BOOL use_esp)
 	// "upgrade" the ReFS version on all drives to v3.7, thereby preventing you from being able to mount
 	// those volumes back on Windows 10 ever again. Yes, I have been stung by this Microsoft bullshit!
 	// See: https://gist.github.com/0xbadfca11/da0598e47dd643d933dc#Mountability
-	if (unattend_xml_flags & UNATTEND_OFFLINE_INTERNAL_DRIVES) {
+	if (opts.unattend_xml_flags & UNATTEND_OFFLINE_INTERNAL_DRIVES) {
 		uprintf("Setting the target's internal drives offline using command:");
 		// This applies the "offlineServicing" section of the unattend.xml (while ignoring the other sections)
 		static_sprintf(cmd, "dism /Image:%s\\ /Apply-Unattend:%s", drive_name, unattend_xml_path);
@@ -1176,7 +1177,7 @@ BOOL ApplyWindowsCustomization(char drive_letter, int flags)
 				CloseHandle(CreateFileU(appraiserres_dll_src, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
 					NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL));
 				uprintf("Created '%s' placeholder", appraiserres_dll_src);
-				if (validate_md5sum) {
+				if (opts.validate_md5sum) {
 					md5sum_totalbytes -= _filesizeU(appraiserres_dll_dst);
 					StrArrayAdd(&modified_files, appraiserres_dll_src, TRUE);
 				}
@@ -1202,7 +1203,7 @@ BOOL ApplyWindowsCustomization(char drive_letter, int flags)
 							uprintf("Could not access embedded 'setup.exe'");
 						} else if (write_file(setup_exe, buf, dwSize) == dwSize) {
 							uprintf("Created '%s' bypass wrapper (from embedded)", setup_exe);
-							if (validate_md5sum) {
+							if (opts.validate_md5sum) {
 								if ((fd_md5sum = fopenU(md5sum_path, "ab")) != NULL) {
 									fprintf(fd_md5sum, "00000000000000000000000000000000  ./setup.dll\n");
 									fclose(fd_md5sum);
@@ -1224,7 +1225,7 @@ BOOL ApplyWindowsCustomization(char drive_letter, int flags)
 		// We only need to alter boot.wim if we have windowsPE data to deal with.
 		// If not, we can just copy our unattend.xml in \sources\$OEM$\$$\Panther\.
 		if (flags & UNATTEND_WINPE_SETUP_MASK || flags & UNATTEND_USE_MS2023_BOOTLOADERS) {
-			if (validate_md5sum)
+			if (opts.validate_md5sum)
 				md5sum_totalbytes -= _filesizeU(boot_wim_path);
 			// Some "unofficial" ISOs have a modified boot.wim that doesn't have Windows Setup at index 2...
 			// TODO: we could try to look for "Microsoft Windows Setup" in the XML DESCRIPTION to locate the index
@@ -1380,14 +1381,14 @@ BOOL ApplyWindowsCustomization(char drive_letter, int flags)
 			for (i = 0; i < (int)files.Index; i++) {
 				static_sprintf(path, "%c:\\efi\\microsoft\\boot%s", drive_letter, &files.String[i][len]);
 				rep = remove_substr(path, "_EX");
-				if (validate_md5sum)
+				if (opts.validate_md5sum)
 					md5sum_totalbytes -= _filesizeU(rep);
 				// TODO: Could we get fragmented data from CopyFile() that may trigger the AMI bug?
 				if (!CopyFileU(files.String[i], rep, FALSE)) {
 					uprintf("WARNING: Could not copy '%s': %s", path, WindowsErrorString());
 				} else {
 					num_replaced++;
-					if (validate_md5sum) {
+					if (opts.validate_md5sum) {
 						md5sum_totalbytes += _filesizeU(files.String[i]);
 						StrArrayAdd(&modified_files, rep, TRUE);
 					}
@@ -1403,13 +1404,13 @@ BOOL ApplyWindowsCustomization(char drive_letter, int flags)
 				static_sprintf(path, "%c:\\efi\\boot\\boot%s.efi", drive_letter, efi_archname[i]);
 				if (!PathFileExistsA(path))
 					continue;
-				if (validate_md5sum)
+				if (opts.validate_md5sum)
 					md5sum_totalbytes -= _filesizeU(path);
 				if (!CopyFileU(tmp_path[1], path, FALSE)) {
 					uprintf("WARNING: Could not replace 'boot%s.efi': %s", efi_archname[i], WindowsErrorString());
 				} else {
 					num_replaced++;
-					if (validate_md5sum) {
+					if (opts.validate_md5sum) {
 						md5sum_totalbytes += _filesizeU(tmp_path[1]);
 						StrArrayAdd(&modified_files, path, TRUE);
 					}
@@ -1426,7 +1427,7 @@ BOOL ApplyWindowsCustomization(char drive_letter, int flags)
 					uprintf("WARNING: Could not replace 'bootmgr.efi': %s", WindowsErrorString());
 				} else {
 					num_replaced++;
-					if (validate_md5sum) {
+					if (opts.validate_md5sum) {
 						md5sum_totalbytes -= _filesizeU(tmp_path[1]);
 						md5sum_totalbytes += _filesizeU(path);
 						StrArrayAdd(&modified_files, path, TRUE);
@@ -1475,7 +1476,7 @@ out:
 			free(wuc[i].add.fs_source_path);
 		wimlib_free(wim);
 		wimlib_global_cleanup();
-		if (validate_md5sum) {
+		if (opts.validate_md5sum) {
 			md5sum_totalbytes += _filesizeU(boot_wim_path);
 			StrArrayAdd(&modified_files, boot_wim_path, TRUE);
 		}
