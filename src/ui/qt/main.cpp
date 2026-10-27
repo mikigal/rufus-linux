@@ -46,11 +46,12 @@ extern char embedded_sl_version_str[2][12], embedded_sl_version_ext[2][32];
 
 static void PrintUsage(const char* appname)
 {
-	printf("\nUsage: %s [-x] [-h] [-v] [-f FILESYSTEM] [-i PATH] [-l LOCALE]\n", appname);
+	printf("\nUsage: %s [-x] [-h] [-v] [-f FILESYSTEM] [-i PATH] [-l LOCALE] [PATH]\n", appname);
 	printf("  -x, --extra-devs\n");
 	printf("     List extra devices, such as USB HDDs\n");
 	printf("  -i PATH, --iso=PATH\n");
-	printf("     Select the ISO image pointed by PATH to be used on startup\n");
+	printf("     Select the ISO image pointed by PATH to be used on startup (as does a PATH\n");
+	printf("     without -i)\n");
 	printf("  -l LOCALE, --locale=LOCALE\n");
 	printf("     Select the locale to be used on startup\n");
 	printf("  -f FILESYSTEM, --filesystem=FILESYSTEM\n");
@@ -59,6 +60,18 @@ static void PrintUsage(const char* appname)
 	printf("     Copy the log to the standard error\n");
 	printf("  -h, --help\n");
 	printf("     This usage guide.\n");
+}
+
+// The absolute path of the image of the command line, if it is a file
+static QString ImageArgument(const char* arg)
+{
+	QFileInfo info(QString::fromLocal8Bit(arg));
+
+	if (!info.isFile()) {
+		printf("Could not find image '%s'\n", arg);
+		return QString();
+	}
+	return info.absoluteFilePath();
 }
 
 int main(int argc, char* argv[])
@@ -83,11 +96,7 @@ int main(int argc, char* argv[])
 			enable_HDDs = TRUE;
 			break;
 		case 'i':
-			if (!QFileInfo(QString::fromLocal8Bit(optarg)).isFile()) {
-				printf("Could not find image '%s'\n", optarg);
-				break;
-			}
-			provided_image = QFileInfo(QString::fromLocal8Bit(optarg)).absoluteFilePath();
+			provided_image = ImageArgument(optarg);
 			break;
 		case 'l':
 			locale_name = optarg;
@@ -116,6 +125,9 @@ int main(int argc, char* argv[])
 			return 2;
 		}
 	}
+	// An image without -i, as the desktop file gives it (Exec=rufus %f)
+	if ((optind < argc) && provided_image.isEmpty())
+		provided_image = ImageArgument(argv[optind]);
 
 	QApplication app(argc, argv);
 	QApplication::setApplicationName(QStringLiteral(APPLICATION_NAME));
