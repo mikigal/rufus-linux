@@ -773,9 +773,6 @@ static BOOL run_sequence(int steps)
 
 static void silent_log(const char* text) { }
 
-// TODO: Drop once stdio.c is part of the core
-void uprintf(const char* format, ...) { }
-
 int main(void)
 {
 	const ui_iface_t iface = { .log = silent_log };

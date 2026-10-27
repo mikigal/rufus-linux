@@ -155,6 +155,7 @@ typedef struct {
 
 /* Win32 error codes used by Rufus (values match the Windows SDK) */
 #define ERROR_SUCCESS                           0
+#define NO_ERROR                                0
 #define ERROR_FILE_NOT_FOUND                    2
 #define ERROR_PATH_NOT_FOUND                    3
 #define ERROR_ACCESS_DENIED                     5
@@ -185,10 +186,12 @@ typedef struct {
 #define ERROR_ALREADY_EXISTS                    183
 #define ERROR_FILE_TOO_LARGE                    223
 #define ERROR_NO_MORE_ITEMS                     259
+#define ERROR_CANNOT_COPY                       266
 #define ERROR_MR_MID_NOT_FOUND                  317
 #define ERROR_OPERATION_ABORTED                 995
 #define ERROR_IO_PENDING                        997
 #define ERROR_SERVICE_DEPENDENCY_FAIL           1068
+#define ERROR_PARTITION_FAILURE                 1105
 #define ERROR_NO_MEDIA_IN_DRIVE                 1112
 #define ERROR_NOT_ALL_ASSIGNED                  1300
 #define ERROR_FILE_CORRUPT                      1392

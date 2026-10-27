@@ -17,30 +17,19 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/* Memory leaks detection - define _CRTDBG_MAP_ALLOC as preprocessor macro */
-#ifdef _CRTDBG_MAP_ALLOC
-#include <stdlib.h>
-#include <crtdbg.h>
-#endif
-
-#include <windows.h>
-#include <wincrypt.h>
-#include <wintrust.h>
 #include <stdio.h>
-#include <wchar.h>
+#include <stdlib.h>
 #include <string.h>
-#include <malloc.h>
-#include <io.h>
+#include <ctype.h>
+#include <errno.h>
 #include <fcntl.h>
 
 #include "rufus.h"
 #include "missing.h"
-#include "msapi_utf8.h"
 #include "localization.h"
+#include "winpe.h"
 
 static const char space[] = " \t";
-static const wchar_t wspace[] = L" \t";
-static const char* conversion_error = "Could not convert '%s' to UTF-16";
 
 const struct {char c; int flag;} attr_parse[] = {
 	{ 'r', LOC_RIGHT_TO_LEFT },
@@ -64,7 +53,7 @@ static loc_cmd* get_loc_cmd(char c, char* line) {
 		return NULL;
 	}
 
-	lcmd = (loc_cmd*)calloc(sizeof(loc_cmd), 1);
+	lcmd = (loc_cmd*)calloc(1, sizeof(loc_cmd));
 	if (lcmd == NULL) {
 		luprint("could not allocate command");
 		return NULL;
@@ -206,7 +195,6 @@ static void get_loc_data_line(char* line)
 FILE* open_loc_file(const char* filename)
 {
 	FILE* fd = NULL;
-	wchar_t *wfilename = NULL;
 	const char* tmp_ext = ".tmp";
 
 	if (filename == NULL)
@@ -220,18 +208,11 @@ FILE* open_loc_file(const char* filename)
 	} else {
 		loc_filename = safe_strdup(filename);
 	}
-	wfilename = utf8_to_wchar(filename);
-	if (wfilename == NULL) {
-		uprintf(conversion_error, filename);
-		goto out;
-	}
-	fd = _wfopen(wfilename, L"rb");
+	fd = fopen(filename, "rbe");
 	if (fd == NULL) {
 		uprintf("localization: could not open '%s'\n", filename);
 	}
 
-out:
-	safe_free(wfilename);
 	return fd;
 }
 
@@ -494,12 +475,11 @@ BOOL get_loc_data_file(const char* filename, loc_cmd* lcmd)
 				escape_sequence = TRUE;
 				break;
 			}
-			// fall through on escape sequence
+			// Fall through - on escape sequence
 		default:
 			if (escape_sequence) {
 				switch (c) {
-				case 'n':	// \n -> CRLF
-					buf[i++] = '\r';
+				case 'n':	// \n -> LF (CRLF on Windows)
 					buf[i++] = '\n';
 					break;
 				case '"':	// \" carried as is
@@ -566,49 +546,276 @@ out:
 
 
 /*
- * Parse a line of UTF-16 text and return the data if it matches the 'token'
+ * Configuration files can be ANSI, UTF-8 or UTF-16. Windows opens them with
+ * _wfopen(..., "r, ccs=UNICODE"), which detects a UTF-16LE or a UTF-8 BOM, and
+ * otherwise uses the ANSI code page (which is UTF-8 on Linux). The functions
+ * below read and write them the same way, through UTF-8 buffers with LF line
+ * endings, and preserve the encoding (and BOM) of the file they modify.
+ * As with Windows text mode, files that get modified end up with CR/LF line
+ * endings, unless dos2unix is requested, in which case all the CRs are removed.
+ */
+enum text_encoding {
+	TEXT_ANSI = 0,
+	TEXT_UTF8_BOM,
+	TEXT_UTF16LE,
+};
+
+static char* utf16le_to_utf8_text(const uint8_t* src, size_t len)
+{
+	size_t i, j = 0;
+	uint32_t c, c2;
+	char* dst = malloc(3 * (len / 2) + 1);
+
+	if (dst == NULL)
+		return NULL;
+	for (i = 0; i + 1 < len; i += 2) {
+		c = src[i] | (src[i + 1] << 8);
+		if ((c >= 0xD800) && (c < 0xDC00) && (i + 3 < len)) {
+			c2 = src[i + 2] | (src[i + 3] << 8);
+			if ((c2 >= 0xDC00) && (c2 < 0xE000)) {
+				c = 0x10000 + ((c - 0xD800) << 10) + (c2 - 0xDC00);
+				i += 2;
+			}
+		}
+		if (c < 0x80) {
+			dst[j++] = (char)c;
+		} else if (c < 0x800) {
+			dst[j++] = (char)(0xC0 | (c >> 6));
+			dst[j++] = (char)(0x80 | (c & 0x3F));
+		} else if (c < 0x10000) {
+			dst[j++] = (char)(0xE0 | (c >> 12));
+			dst[j++] = (char)(0x80 | ((c >> 6) & 0x3F));
+			dst[j++] = (char)(0x80 | (c & 0x3F));
+		} else {
+			dst[j++] = (char)(0xF0 | (c >> 18));
+			dst[j++] = (char)(0x80 | ((c >> 12) & 0x3F));
+			dst[j++] = (char)(0x80 | ((c >> 6) & 0x3F));
+			dst[j++] = (char)(0x80 | (c & 0x3F));
+		}
+	}
+	dst[j] = 0;
+	return dst;
+}
+
+// Returns the number of bytes written to dst (which must hold 2 * strlen(src) bytes)
+static size_t utf8_to_utf16le_text(const char* src, uint8_t* dst)
+{
+	const uint8_t* s = (const uint8_t*)src;
+	size_t j = 0;
+	uint32_t c;
+
+	while (*s != 0) {
+		if ((s[0] >= 0xF0) && (s[1] & 0x80) && (s[2] & 0x80) && (s[3] & 0x80)) {
+			c = ((s[0] & 0x07) << 18) | ((s[1] & 0x3F) << 12) | ((s[2] & 0x3F) << 6) | (s[3] & 0x3F);
+			s += 4;
+		} else if ((s[0] >= 0xE0) && (s[1] & 0x80) && (s[2] & 0x80)) {
+			c = ((s[0] & 0x0F) << 12) | ((s[1] & 0x3F) << 6) | (s[2] & 0x3F);
+			s += 3;
+		} else if ((s[0] >= 0xC0) && (s[1] & 0x80)) {
+			c = ((s[0] & 0x1F) << 6) | (s[1] & 0x3F);
+			s += 2;
+		} else {
+			c = *s++;
+		}
+		if (c >= 0x10000) {
+			c -= 0x10000;
+			dst[j++] = (uint8_t)((0xD800 + (c >> 10)) & 0xFF);
+			dst[j++] = (uint8_t)((0xD800 + (c >> 10)) >> 8);
+			c = 0xDC00 + (c & 0x3FF);
+		}
+		dst[j++] = (uint8_t)(c & 0xFF);
+		dst[j++] = (uint8_t)(c >> 8);
+	}
+	return j;
+}
+
+/*
+ * Read a text file into a UTF-8 buffer with LF line endings.
+ * The returned buffer must be freed by the caller.
+ */
+static char* read_text_file(const char* filename, enum text_encoding* encoding)
+{
+	uint8_t* raw = NULL;
+	char *text = NULL, *p, *q;
+	uint32_t len;
+
+	*encoding = TEXT_ANSI;
+	len = read_file(filename, &raw);
+	if (raw == NULL) {
+		// read_file() fails on empty files, which we must handle
+		FILE* fd = fopen(filename, "rbe");
+		if (fd == NULL)
+			return NULL;
+		fclose(fd);
+		return strdup("");
+	}
+	if ((len >= 2) && (raw[0] == 0xFF) && (raw[1] == 0xFE)) {
+		*encoding = TEXT_UTF16LE;
+		text = utf16le_to_utf8_text(&raw[2], len - 2);
+	} else if ((len >= 3) && (raw[0] == 0xEF) && (raw[1] == 0xBB) && (raw[2] == 0xBF)) {
+		*encoding = TEXT_UTF8_BOM;
+		text = strdup((char*)&raw[3]);
+	} else {
+		text = strdup((char*)raw);
+	}
+	free(raw);
+	if (text == NULL)
+		return NULL;
+	// Text mode: CR/LF -> LF
+	for (p = q = text; *p != 0; p++) {
+		if ((p[0] == '\r') && (p[1] == '\n'))
+			continue;
+		*q++ = *p;
+	}
+	*q = 0;
+	return text;
+}
+
+/*
+ * Write a UTF-8 buffer with LF line endings to a text file, with the given encoding.
+ * The file is replaced atomically.
+ */
+static BOOL write_text_file(const char* filename, const char* text, enum text_encoding encoding, BOOL dos2unix)
+{
+	static const uint8_t bom[3][3] = { { 0 }, { 0xEF, 0xBB, 0xBF }, { 0xFF, 0xFE } };
+	static const size_t bom_len[3] = { 0, 3, 2 };
+	char *crlf = NULL, *tmpname = NULL;
+	uint8_t* utf16 = NULL;
+	const void* data;
+	size_t i, j, len;
+	FILE* fd = NULL;
+	BOOL r = FALSE;
+
+	// Text mode: LF -> CR/LF, unless all the CRs are to be removed
+	crlf = malloc(2 * strlen(text) + 1);
+	if (crlf == NULL)
+		goto out;
+	for (i = 0, j = 0; text[i] != 0; i++) {
+		if (text[i] == '\r' && dos2unix)
+			continue;
+		if (text[i] == '\n' && !dos2unix)
+			crlf[j++] = '\r';
+		crlf[j++] = text[i];
+	}
+	crlf[j] = 0;
+	data = crlf;
+	len = j;
+	if (encoding == TEXT_UTF16LE) {
+		utf16 = malloc(2 * len + 2);
+		if (utf16 == NULL)
+			goto out;
+		len = utf8_to_utf16le_text(crlf, utf16);
+		data = utf16;
+	}
+
+	if (asprintf(&tmpname, "%s~", filename) < 0) {
+		tmpname = NULL;
+		goto out;
+	}
+	fd = fopen(tmpname, "wbe");
+	if (fd == NULL) {
+		uprintf("Could not open temporary output file '%s': %s", tmpname, strerror(errno));
+		goto out;
+	}
+	if ((fwrite(bom[encoding], 1, bom_len[encoding], fd) != bom_len[encoding]) ||
+		(fwrite(data, 1, len, fd) != len) || (fclose(fd) != 0)) {
+		fd = NULL;
+		uprintf("Could not write '%s': %s", tmpname, strerror(errno));
+		goto out;
+	}
+	fd = NULL;
+	if (rename(tmpname, filename) != 0) {
+		uprintf("Could not replace '%s': %s", filename, strerror(errno));
+		goto out;
+	}
+	r = TRUE;
+
+out:
+	if (fd != NULL)
+		fclose(fd);
+	if (!r && (tmpname != NULL))
+		unlink(tmpname);
+	free(tmpname);
+	free(crlf);
+	free(utf16);
+	return r;
+}
+
+/* Iterate over the lines of a text buffer. Each line includes its trailing LF, if any. */
+static __inline const char* next_line(const char* text, size_t* len)
+{
+	const char* eol;
+
+	if (*text == 0)
+		return NULL;
+	eol = strchr(text, '\n');
+	*len = (eol == NULL) ? strlen(text) : (size_t)(eol - text + 1);
+	return text;
+}
+
+/* Append len bytes of str to a growing buffer. Returns FALSE on allocation failure. */
+static BOOL append_text(char** buf, size_t* size, size_t* pos, const char* str, size_t len)
+{
+	char* tmp;
+
+	if (*pos + len + 1 > *size) {
+		*size = 2 * (*pos + len + 1);
+		tmp = realloc(*buf, *size);
+		if (tmp == NULL)
+			return FALSE;
+		*buf = tmp;
+	}
+	memcpy(&(*buf)[*pos], str, len);
+	*pos += len;
+	(*buf)[*pos] = 0;
+	return TRUE;
+}
+#define append_str(buf, size, pos, str) append_text(buf, size, pos, str, strlen(str))
+
+/*
+ * Parse a line of text and return the data if it matches the 'token'
  * The parsed line is of the form: [ ][<][ ]token[ ][=|>][ ]["]data["][ ][<] and is
  * modified by the parser
  */
-static wchar_t* get_token_data_line(const wchar_t* wtoken, wchar_t* wline)
+static char* get_token_data_line(const char* token, char* line)
 {
 	size_t i, r;
 	BOOLEAN quoteth = FALSE;
 	BOOLEAN xml = FALSE;
 
-	if ((wtoken == NULL) || (wline == NULL) || (wline[0] == 0))
+	if ((token == NULL) || (line == NULL) || (line[0] == 0))
 		return NULL;
 
 	i = 0;
 
 	// Skip leading spaces and opening '<'
-	i += wcsspn(&wline[i], wspace);
-	if (wline[i] == L'<')
+	i += strspn(&line[i], space);
+	if (line[i] == '<')
 		i++;
-	i += wcsspn(&wline[i], wspace);
+	i += strspn(&line[i], space);
 
 	// Our token should begin a line
-	if (_wcsnicmp(&wline[i], wtoken, wcslen(wtoken)) != 0)
+	if (_strnicmp(&line[i], token, strlen(token)) != 0)
 		return NULL;
 
 	// Token was found, move past token
-	i += wcslen(wtoken);
+	i += strlen(token);
 
 	// Skip spaces
-	i += wcsspn(&wline[i], wspace);
+	i += strspn(&line[i], space);
 
 	// Check for '=' or '>' sign
-	if (wline[i] == L'>')
+	if (line[i] == '>')
 		xml = TRUE;
-	else if (wline[i] != L'=')
+	else if (line[i] != '=')
 		return NULL;
 	i++;
 
 	// Skip spaces
-	i += wcsspn(&wline[i], wspace);
+	i += strspn(&line[i], space);
 
 	// eliminate leading quote, if it exists
-	if (wline[i] == L'"') {
+	if (line[i] == '"') {
 		quoteth = TRUE;
 		i++;
 	}
@@ -617,15 +824,15 @@ static wchar_t* get_token_data_line(const wchar_t* wtoken, wchar_t* wline)
 	r = i;
 
 	// locate end of string or quote
-	while ( (wline[i] != 0) && (((wline[i] != L'"') && (wline[i] != L'<')) || ((wline[i] == L'"') && (!quoteth)) || ((wline[i] == L'<') && (!xml))) )
+	while ( (line[i] != 0) && (((line[i] != '"') && (line[i] != '<')) || ((line[i] == '"') && (!quoteth)) || ((line[i] == '<') && (!xml))) )
 		i++;
-	wline[i--] = 0;
+	line[i--] = 0;
 
 	// Eliminate trailing EOL characters
-	while ((i>=r) && ((wline[i] == L'\r') || (wline[i] == L'\n')))
-		wline[i--] = 0;
+	while ((i>=r) && ((line[i] == '\r') || (line[i] == '\n')))
+		line[i--] = 0;
 
-	return (wline[r] == 0)?NULL:&wline[r];
+	return (line[r] == 0)?NULL:&line[r];
 }
 
 /*
@@ -635,44 +842,37 @@ static wchar_t* get_token_data_line(const wchar_t* wtoken, wchar_t* wline)
 char* get_token_data_file_indexed(const char* token, const char* filename, int index)
 {
 	int i = 0;
-	wchar_t *wtoken = NULL, *wdata= NULL, *wfilename = NULL;
-	wchar_t buf[1024];
-	FILE* fd = NULL;
-	char *ret = NULL;
+	enum text_encoding encoding;
+	char *text = NULL, *line = NULL, *data, *ret = NULL;
+	const char* p;
+	size_t len;
 
 	if ((filename == NULL) || (token == NULL))
 		return NULL;
 	if ((filename[0] == 0) || (token[0] == 0))
 		return NULL;
 
-	wfilename = utf8_to_wchar(filename);
-	if (wfilename == NULL) {
-		uprintf(conversion_error, filename);
+	text = read_text_file(filename, &encoding);
+	if (text == NULL)
 		goto out;
-	}
-	wtoken = utf8_to_wchar(token);
-	if (wtoken == NULL) {
-		uprintf(conversion_error, token);
+	line = malloc(strlen(text) + 1);
+	if (line == NULL)
 		goto out;
-	}
-	fd = _wfopen(wfilename, L"r, ccs=UNICODE");
-	if (fd == NULL) goto out;
 
-	// Process individual lines. NUL is always appended.
-	// Ideally, we'd check that our buffer fits the line
-	while (fgetws(buf, ARRAYSIZE(buf), fd) != NULL) {
-		wdata = get_token_data_line(wtoken, buf);
-		if ((wdata != NULL) && (++i == index)) {
-			ret = wchar_to_utf8(wdata);
+	// Process individual lines
+	for (p = text; (p = next_line(p, &len)) != NULL; p += len) {
+		memcpy(line, p, len);
+		line[len] = 0;
+		data = get_token_data_line(token, line);
+		if ((data != NULL) && (++i == index)) {
+			ret = strdup(data);
 			break;
 		}
 	}
 
 out:
-	if (fd != NULL)
-		fclose(fd);
-	safe_free(wfilename);
-	safe_free(wtoken);
+	free(line);
+	free(text);
 	return ret;
 }
 
@@ -681,160 +881,79 @@ out:
  */
 char* set_token_data_file(const char* token, const char* data, const char* filename)
 {
-	const wchar_t* outmode[] = { L"w", L"w, ccs=UTF-8", L"w, ccs=UTF-16LE" };
-	wchar_t *wtoken = NULL, *wfilename = NULL, *wtmpname = NULL, *wdata = NULL, bom = 0;
-	wchar_t buf[1024];
-	FILE *fd_in = NULL, *fd_out = NULL;
-	size_t i, size;
-	int mode = 0;
-	char *ret = NULL, tmp[2];
+	enum text_encoding encoding;
+	char *text = NULL, *out = NULL, *ret = NULL;
+	const char* line;
+	size_t i, len, size = 0, pos = 0;
 
 	if ((filename == NULL) || (token == NULL) || (data == NULL))
 		return NULL;
 	if ((filename[0] == 0) || (token[0] == 0) || (data[0] == 0))
 		return NULL;
 
-	wfilename = utf8_to_wchar(filename);
-	if (wfilename == NULL) {
-		uprintf(conversion_error, filename);
-		goto out;
-	}
-	wtoken = utf8_to_wchar(token);
-	if (wtoken == NULL) {
-		uprintf(conversion_error, token);
-		goto out;
-	}
-	wdata = utf8_to_wchar(data);
-	if (wdata == NULL) {
-		uprintf(conversion_error, data);
-		goto out;
-	}
-
-	fd_in = _wfopen(wfilename, L"r, ccs=UNICODE");
-	if (fd_in == NULL) {
+	text = read_text_file(filename, &encoding);
+	if (text == NULL) {
 		uprintf("Could not open file '%s'\n", filename);
 		goto out;
 	}
-	// Check the input file's BOM and create an output file with the same
-	if (fread(&bom, sizeof(bom), 1, fd_in) == 1) {
-		switch(bom) {
-		case 0xFEFF:
-			mode = 2;	// UTF-16 (LE)
-			break;
-		case 0xBBEF:	// Yeah, the UTF-8 BOM is really 0xEF,0xBB,0xBF, but
-			mode = 1;	// find me a non UTF-8 file that actually begins with "ï»"
-			break;
-		default:
-			mode = 0;	// ANSI
-			break;
-		}
-		fseek(fd_in, 0, SEEK_SET);
-	}
-
-	wtmpname = (wchar_t*)calloc(wcslen(wfilename)+2, sizeof(wchar_t));
-	if (wtmpname == NULL) {
-		uprintf("Could not allocate space for temporary output name\n");
+	if (!append_str(&out, &size, &pos, ""))
 		goto out;
-	}
-	wcscpy(wtmpname, wfilename);
-	wtmpname[wcslen(wtmpname)] = '~';
 
-	fd_out = _wfopen(wtmpname, outmode[mode]);
-	if (fd_out == NULL) {
-		uprintf("Could not open temporary output file '%s~'\n", filename);
-		goto out;
-	}
-
-	// Process individual lines. NUL is always appended.
-	while (fgetws(buf, ARRAYSIZE(buf), fd_in) != NULL) {
+	// Process individual lines
+	for (line = text; (line = next_line(line, &len)) != NULL; line += len) {
 
 		i = 0;
 
 		// Skip leading spaces
-		i += wcsspn(&buf[i], wspace);
+		i += strspn(&line[i], space);
 
-		// Ignore comments or section headers
-		if ((buf[i] == ';') || (buf[i] == '[')) {
-			fputws(buf, fd_out);
-			continue;
-		}
-
-		// Our token should begin a line
-		if (_wcsnicmp(&buf[i], wtoken, wcslen(wtoken)) != 0) {
-			fputws(buf, fd_out);
+		// Ignore comments or section headers, and lines that don't begin with our token
+		if ((line[i] == ';') || (line[i] == '[') || (_strnicmp(&line[i], token, strlen(token)) != 0)) {
+			if (!append_text(&out, &size, &pos, line, len))
+				goto out;
 			continue;
 		}
 
 		// Token was found, move past token
-		i += wcslen(wtoken);
+		i += strlen(token);
 
 		// Skip spaces
-		i += wcsspn(&buf[i], wspace);
+		i += strspn(&line[i], space);
 
 		// Check for an equal sign
-		if (buf[i] != L'=') {
-			fputws(buf, fd_out);
+		if (line[i] != '=') {
+			if (!append_text(&out, &size, &pos, line, len))
+				goto out;
 			continue;
 		}
 		i++;
 
 		// Skip spaces after equal sign
-		i += wcsspn(&buf[i], wspace);
+		i += strspn(&line[i], space);
 
-		// Output the token
-		buf[i] = 0;
-		fputws(buf, fd_out);
-
-		// Now output the new data
-		// coverity[invalid_type]
-		fwprintf_s(fd_out, L"%s\n", wdata);
+		// Output the token, then the new data
+		if (!append_text(&out, &size, &pos, line, i) || !append_str(&out, &size, &pos, data) ||
+			!append_str(&out, &size, &pos, "\n"))
+			goto out;
 		ret = (char*)data;
 	}
 
 	if (ret == NULL) {
 		// Didn't find an existing token => append it
-		// coverity[invalid_type]
-		fwprintf_s(fd_out, L"%s = %s\n", wtoken, wdata);
+		if (!append_str(&out, &size, &pos, token) || !append_str(&out, &size, &pos, " = ") ||
+			!append_str(&out, &size, &pos, data) || !append_str(&out, &size, &pos, "\n"))
+			goto out;
 		ret = (char*)data;
 	}
 
+	if (!write_text_file(filename, out, encoding, FALSE)) {
+		uprintf("Could not write '%s' - original file has been left unmodified\n", filename);
+		ret = NULL;
+	}
+
 out:
-	if (fd_in != NULL) {
-		fclose(fd_in);
-		fd_in = NULL;
-	}
-	if (fd_out != NULL)
-		fclose(fd_out);
-
-	// If an insertion occurred, delete existing file and use the new one
-	if (ret != NULL) {
-		// We're in Windows text mode => Remove CRs if requested
-		if (wtmpname != NULL)
-			fd_in = _wfopen(wtmpname, L"rb");
-		fd_out = _wfopen(wfilename, L"wb");
-		// Don't check fds
-		if ((fd_in != NULL) && (fd_out != NULL)) {
-			size = (mode==2)?2:1;
-			while(fread(tmp, size, 1, fd_in) == 1)
-				fwrite(tmp, size, 1, fd_out);
-			fclose(fd_in);
-			fclose(fd_out);
-		} else {
-			uprintf("Could not write '%s' - original file has been left unmodified\n", filename);
-			ret = NULL;
-			if (fd_in != NULL)
-				fclose(fd_in);
-			if (fd_out != NULL)
-				fclose(fd_out);
-		}
-	}
-	if (wtmpname != NULL)
-		_wunlink(wtmpname);
-	safe_free(wfilename);
-	safe_free(wtmpname);
-	safe_free(wtoken);
-	safe_free(wdata);
-
+	free(text);
+	free(out);
 	return ret;
 }
 
@@ -845,7 +964,7 @@ out:
 char* get_token_data_buffer(const char* token, unsigned int n, const char* buffer, size_t buffer_size)
 {
 	unsigned int j, curly_count;
-	wchar_t *wtoken = NULL, *wdata = NULL, *wbuffer = NULL, *wline = NULL;
+	char *data = NULL, *copy = NULL, *line = NULL;
 	size_t i;
 	BOOL done = FALSE;
 	char* ret = NULL;
@@ -858,34 +977,32 @@ char* get_token_data_buffer(const char* token, unsigned int n, const char* buffe
 	if (buffer[buffer_size-1] != 0)
 		goto out;
 
-	wbuffer = utf8_to_wchar(buffer);
-	wtoken = utf8_to_wchar(token);
-	if ((wbuffer == NULL) || (wtoken == NULL))
+	copy = strdup(buffer);
+	if (copy == NULL)
 		goto out;
 
 	// Process individual lines (or multiple lines when between {}, for RTF)
 	for (i=0,j=0,done=FALSE; (j!=n)&&(!done); ) {
-		wline = &wbuffer[i];
+		line = &copy[i];
 
-		for(curly_count=0;((curly_count>0)||((wbuffer[i]!=L'\n')&&(wbuffer[i]!=L'\r')))&&(wbuffer[i]!=0);i++) {
-			if (wbuffer[i] == L'{') curly_count++;
-			if (wbuffer[i] == L'}') curly_count--;
+		for(curly_count=0;((curly_count>0)||((copy[i]!='\n')&&(copy[i]!='\r')))&&(copy[i]!=0);i++) {
+			if (copy[i] == '{') curly_count++;
+			if (copy[i] == '}') curly_count--;
 		}
-		if (wbuffer[i]==0) {
+		if (copy[i]==0) {
 			done = TRUE;
 		} else {
-			wbuffer[i++] = 0;
+			copy[i++] = 0;
 		}
-		wdata = get_token_data_line(wtoken, wline);
-		if (wdata != NULL) {
+		data = get_token_data_line(token, line);
+		if (data != NULL) {
 			j++;
 		}
 	}
 out:
-	if (wdata != NULL)
-		ret = wchar_to_utf8(wdata);
-	safe_free(wbuffer);
-	safe_free(wtoken);
+	if (data != NULL)
+		ret = strdup(data);
+	free(copy);
 	return ret;
 }
 
@@ -953,7 +1070,7 @@ void parse_update(char* buf, size_t len)
 		}
 		safe_free(data);
 	}
-	static_sprintf(download_url_name, "download_url_%s", GetArchName(WindowsVersion.Arch));
+	static_sprintf(download_url_name, "download_url_%s", GetArchName(GetApplicationArch()));
 	safe_strtolower(download_url_name);
 	update.download_url = get_sanitized_token_data_buffer(download_url_name, 1, buf, len);
 	if (update.download_url == NULL)
@@ -967,128 +1084,54 @@ void parse_update(char* buf, size_t len)
  */
 char* insert_section_data(const char* filename, const char* section, const char* data, BOOL dos2unix)
 {
-	const wchar_t* outmode[] = { L"w", L"w, ccs=UTF-8", L"w, ccs=UTF-16LE" };
-	wchar_t *wsection = NULL, *wfilename = NULL, *wtmpname = NULL, *wdata = NULL, bom = 0;
-	wchar_t buf[1024];
-	FILE *fd_in = NULL, *fd_out = NULL;
-	size_t i, size;
-	int mode = 0;
-	char *ret = NULL, tmp[2];
+	enum text_encoding encoding;
+	char *text = NULL, *out = NULL, *ret = NULL;
+	const char* line;
+	size_t i, len, size = 0, pos = 0;
 
 	if ((filename == NULL) || (section == NULL) || (data == NULL))
 		return NULL;
 	if ((filename[0] == 0) || (section[0] == 0) || (data[0] == 0))
 		return NULL;
 
-	wfilename = utf8_to_wchar(filename);
-	if (wfilename == NULL) {
-		uprintf(conversion_error, filename);
-		goto out;
-	}
-	wsection = utf8_to_wchar(section);
-	if (wsection == NULL) {
-		uprintf(conversion_error, section);
-		goto out;
-	}
-	wdata = utf8_to_wchar(data);
-	if (wdata == NULL) {
-		uprintf(conversion_error, data);
-		goto out;
-	}
-
-	fd_in = _wfopen(wfilename, L"r, ccs=UNICODE");
-	if (fd_in == NULL) {
+	text = read_text_file(filename, &encoding);
+	if (text == NULL) {
 		uprintf("Could not open file '%s'\n", filename);
 		goto out;
 	}
-	// Check the input file's BOM and create an output file with the same
-	if (fread(&bom, sizeof(bom), 1, fd_in) != 1) {
+	if (text[0] == 0) {
 		uprintf("Could not read file '%s'\n", filename);
 		goto out;
 	}
-	switch(bom) {
-	case 0xFEFF:
-		mode = 2;	// UTF-16 (LE)
-		break;
-	case 0xBBEF:	// Yeah, the UTF-8 BOM is really 0xEF,0xBB,0xBF, but
-		mode = 1;	// find me a non UTF-8 file that actually begins with "ï»"
-		break;
-	default:
-		mode = 0;	// ANSI
-		break;
-	}
-	fseek(fd_in, 0, SEEK_SET);
-//	duprintf("'%s' was detected as %s\n", filename,
-//		(mode==0)?"ANSI/UTF8 (no BOM)":((mode==1)?"UTF8 (with BOM)":"UTF16 (with BOM"));
-
-	wtmpname = (wchar_t*)calloc(wcslen(wfilename)+2, sizeof(wchar_t));
-	if (wtmpname == NULL) {
-		uprintf("Could not allocate space for temporary output name\n");
+	if (!append_str(&out, &size, &pos, ""))
 		goto out;
-	}
-	wcscpy(wtmpname, wfilename);
-	wtmpname[wcslen(wtmpname)] = '~';
 
-	fd_out = _wfopen(wtmpname, outmode[mode]);
-	if (fd_out == NULL) {
-		uprintf("Could not open temporary output file '%s~'\n", filename);
-		goto out;
-	}
-
-	// Process individual lines. NUL is always appended.
-	while (fgetws(buf, ARRAYSIZE(buf), fd_in) != NULL) {
+	// Process individual lines
+	for (line = text; (line = next_line(line, &len)) != NULL; line += len) {
 
 		i = 0;
 
 		// Skip leading spaces
-		i += wcsspn(&buf[i], wspace);
+		i += strspn(&line[i], space);
 
-		// Our token should begin a line
-		if (_wcsnicmp(&buf[i], wsection, wcslen(wsection)) != 0) {
-			fputws(buf, fd_out);
+		// Output the line, and if it's our section, the new data after it
+		if (!append_text(&out, &size, &pos, line, len))
+			goto out;
+		if (_strnicmp(&line[i], section, strlen(section)) != 0)
 			continue;
-		}
-
-		// Section was found, output it
-		fputws(buf, fd_out);
-		// Now output the new data
-		// coverity[invalid_type]
-		fwprintf_s(fd_out, L"%s\n", wdata);
+		if (!append_str(&out, &size, &pos, data) || !append_str(&out, &size, &pos, "\n"))
+			goto out;
 		ret = (char*)data;
 	}
 
-out:
-	if (fd_in != NULL) fclose(fd_in);
-	if (fd_out != NULL) fclose(fd_out);
-
-	// If an insertion occurred, delete existing file and use the new one
-	if (ret != NULL && wtmpname != NULL && wfilename != NULL) {
-		// We're in Windows text mode => Remove CRs if requested
-		fd_in = _wfopen(wtmpname, L"rb");
-		fd_out = _wfopen(wfilename, L"wb");
-		// Don't check fds
-		if ((fd_in != NULL) && (fd_out != NULL)) {
-			size = (mode==2)?2:1;
-			while(fread(tmp, size, 1, fd_in) == 1) {
-				if ((!dos2unix) || (tmp[0] != 0x0D))
-					fwrite(tmp, size, 1, fd_out);
-			}
-			fclose(fd_in);
-			fclose(fd_out);
-		} else {
-			uprintf("Could not write '%s' - original file has been left unmodified\n", filename);
-			ret = NULL;
-			if (fd_in != NULL) fclose(fd_in);
-			if (fd_out != NULL) fclose(fd_out);
-		}
+	if ((ret != NULL) && !write_text_file(filename, out, encoding, dos2unix)) {
+		uprintf("Could not write '%s' - original file has been left unmodified\n", filename);
+		ret = NULL;
 	}
-	if (wtmpname != NULL)
-		_wunlink(wtmpname);
-	safe_free(wfilename);
-	safe_free(wtmpname);
-	safe_free(wsection);
-	safe_free(wdata);
 
+out:
+	free(text);
+	free(out);
 	return ret;
 }
 
@@ -1102,13 +1145,10 @@ out:
 #define MAX_OCCURRENCES 4
 char* replace_in_token_data(const char* filename, const char* token, const char* src, const char* rep, BOOL dos2unix)
 {
-	const wchar_t* outmode[] = { L"w", L"w, ccs=UTF-8", L"w, ccs=UTF-16LE" };
-	wchar_t *wtoken = NULL, *wfilename = NULL, *wtmpname = NULL, *wsrc = NULL, *wrep = NULL, bom = 0;
-	wchar_t buf[1024], *torep[MAX_OCCURRENCES + 1] = { NULL };
-	FILE *fd_in = NULL, *fd_out = NULL;
-	size_t i, j, p[MAX_OCCURRENCES + 1] = { 0 }, ns, size;
-	int mode = 0;
-	char *ret = NULL, tmp[2];
+	enum text_encoding encoding;
+	char *text = NULL, *out = NULL, *ret = NULL;
+	const char *line, *start, *found;
+	size_t i, j, len, ns, size = 0, pos = 0;
 
 	if ((filename == NULL) || (token == NULL) || (src == NULL) || (rep == NULL))
 		return NULL;
@@ -1117,156 +1157,71 @@ char* replace_in_token_data(const char* filename, const char* token, const char*
 	if (strcmp(src, rep) == 0)	// No need for processing is source is same as replacement
 		return NULL;
 
-	wfilename = utf8_to_wchar(filename);
-	if (wfilename == NULL) {
-		uprintf(conversion_error, filename);
-		goto out;
-	}
-	wtoken = utf8_to_wchar(token);
-	if (wtoken == NULL) {
-		uprintf(conversion_error, token);
-		goto out;
-	}
-	wsrc = utf8_to_wchar(src);
-	if (wsrc == NULL) {
-		uprintf(conversion_error, src);
-		goto out;
-	}
-	wrep = utf8_to_wchar(rep);
-	if (wrep == NULL) {
-		uprintf(conversion_error, rep);
-		goto out;
-	}
-
-	fd_in = _wfopen(wfilename, L"r, ccs=UNICODE");
-	if (fd_in == NULL) {
+	text = read_text_file(filename, &encoding);
+	if (text == NULL) {
 		uprintf("Could not open file '%s'\n", filename);
 		goto out;
 	}
-	// Check the input file's BOM and create an output file with the same
-	if (fread(&bom, sizeof(bom), 1, fd_in) != 1) {
-		if (!feof(fd_in))
-			uprintf("Could not read file '%s'\n", filename);
+	if (text[0] == 0)
 		goto out;
-	}
-	switch(bom) {
-	case 0xFEFF:
-		mode = 2;	// UTF-16 (LE)
-		break;
-	case 0xBBEF:	// Yeah, the UTF-8 BOM is really 0xEF,0xBB,0xBF, but
-		mode = 1;	// find me a non UTF-8 file that actually begins with "ï»"
-		break;
-	default:
-		mode = 0;	// ANSI
-		break;
-	}
-	fseek(fd_in, 0, SEEK_SET);
-//	duprintf("'%s' was detected as %s\n", filename,
-//		(mode==0)?"ANSI/UTF8 (no BOM)":((mode==1)?"UTF8 (with BOM)":"UTF16 (with BOM"));
-
-	wtmpname = (wchar_t*)calloc(wcslen(wfilename)+2, sizeof(wchar_t));
-	if (wtmpname == NULL) {
-		uprintf("Could not allocate space for temporary output name\n");
+	if (!append_str(&out, &size, &pos, ""))
 		goto out;
-	}
-	wcscpy(wtmpname, wfilename);
-	wtmpname[wcslen(wtmpname)] = '~';
 
-	fd_out = _wfopen(wtmpname, outmode[mode]);
-	if (fd_out == NULL) {
-		uprintf("Could not open temporary output file '%s~'\n", filename);
-		goto out;
-	}
-
-	// Process individual lines. NUL is always appended.
-	while (fgetws(buf, ARRAYSIZE(buf), fd_in) != NULL) {
+	// Process individual lines
+	for (line = text; (line = next_line(line, &len)) != NULL; line += len) {
 
 		i = 0;
 
 		// Skip leading spaces
-		i += wcsspn(&buf[i], wspace);
+		i += strspn(&line[i], space);
 
 		// Our token should begin a line
-		if (_wcsnicmp(&buf[i], wtoken, wcslen(wtoken)) != 0) {
-			fputws(buf, fd_out);
+		if (_strnicmp(&line[i], token, strlen(token)) != 0) {
+			if (!append_text(&out, &size, &pos, line, len))
+				goto out;
 			continue;
 		}
 
 		// Token was found, move past token
-		i += wcslen(wtoken);
+		i += strlen(token);
 
 		// Skip whitespaces after token (while making sure there's at least one)
-		ns = wcsspn(&buf[i], wspace);
-		if (ns == 0) {
-			fputws(buf, fd_out);
+		ns = strspn(&line[i], space);
+		if ((ns == 0) || (i + ns > len)) {
+			if (!append_text(&out, &size, &pos, line, len))
+				goto out;
 			continue;
 		}
 		i += ns;
 
-		// p[x] = starting position of the fragment with the replaceable string
-		p[0] = 0;
+		// Output the fragments before each replaceable string, followed by the replacement
+		start = line;
 		for (j = 0; j < MAX_OCCURRENCES; j++) {
-			torep[j] = wcsstr(&buf[i], wsrc);
-			if (torep[j] == NULL)
+			found = strstr(&line[i], src);
+			if ((found == NULL) || (found + strlen(src) > line + len))
 				break;
+			if (!append_text(&out, &size, &pos, start, found - start) || !append_str(&out, &size, &pos, rep))
+				goto out;
 			// Next fragment will start after current + replaced string
-			i = (torep[j] - buf) + wcslen(wsrc);
-			p[j + 1] = i;
-			// Truncate each fragment to before the replaced string
-			*torep[j] = 0;
+			i = (found - line) + strlen(src);
+			start = &line[i];
 		}
-
-		// No replaceable string found => output as is
-		if (torep[0] == NULL) {
-			fputws(buf, fd_out);
-			continue;
-		}
-
-		// Output all the truncated fragments + replaced strings
-		for (j = 0; torep[j] != NULL; j++)
-			// coverity[invalid_type]
-			fwprintf_s(fd_out, L"%s%s", &buf[p[j]], wrep);
 
 		// Output the last fragment
-		// coverity[invalid_type]
-		fwprintf_s(fd_out, L"%s", &buf[p[j]]);
+		if (!append_text(&out, &size, &pos, start, len - (start - line)))
+			goto out;
+		if (j != 0)
+			ret = (char*)rep;
+	}
 
-		ret = (char*)rep;
+	if ((ret != NULL) && !write_text_file(filename, out, encoding, dos2unix)) {
+		uprintf("Could not write '%s' - original file has been left unmodified.\n", filename);
+		ret = NULL;
 	}
 
 out:
-	if (fd_in != NULL) fclose(fd_in);
-	if (fd_out != NULL) fclose(fd_out);
-
-	// If a replacement occurred, delete existing file and use the new one
-	if (ret != NULL && wtmpname != NULL && wfilename != NULL) {
-		// We're in Windows text mode => Remove CRs if requested
-		fd_in = _wfopen(wtmpname, L"rb");
-		fd_out = _wfopen(wfilename, L"wb");
-		// Don't check fds
-		if ((fd_in != NULL) && (fd_out != NULL)) {
-			size = (mode==2)?2:1;
-			while(fread(tmp, size, 1, fd_in) == 1) {
-				if ((!dos2unix) || (tmp[0] != 0x0D))
-					fwrite(tmp, size, 1, fd_out);
-			}
-			fclose(fd_in);
-			fclose(fd_out);
-		} else {
-			uprintf("Could not write '%s' - original file has been left unmodified.\n", filename);
-			ret = NULL;
-			if (fd_in != NULL) fclose(fd_in);
-			if (fd_out != NULL) fclose(fd_out);
-		}
-	}
-	if (wtmpname != NULL)
-		_wunlink(wtmpname);
-	safe_free(wfilename);
-	safe_free(wtmpname);
-	safe_free(wtoken);
-	safe_free(wsrc);
-	safe_free(wrep);
-
+	free(text);
+	free(out);
 	return ret;
 }
 
@@ -1293,10 +1248,6 @@ char* replace_char(const char* src, const char c, const char* rep)
 			for(k=0; k<rep_len; k++)
 				res[j++] = rep[k];
 		} else {
-// Since the VS Code Analysis tool is dumb...
-#if defined(_MSC_VER)
-#pragma warning(suppress: 6386)
-#endif
 			res[j++] = src[i];
 		}
 	}
@@ -1781,8 +1732,9 @@ uint8_t* GetPeSection(uint8_t* buf, const char* name, uint32_t* len)
 	}
 	for (i = 0; i < nb_sections; i++) {
 		if (memcmp(section_header[i].Name, section_name, sizeof(section_name)) == 0) {
+			// NB: Upstream returns the size of the first section here
 			if (len != NULL)
-				*len = section_header->SizeOfRawData;
+				*len = section_header[i].SizeOfRawData;
 			return &buf[section_header[i].PointerToRawData];
 		}
 	}
@@ -1826,9 +1778,9 @@ uint8_t* RvaToPhysical(uint8_t* buf, uint32_t rva)
 // Using the MS APIs to poke the resources of the EFI bootloaders is simply TOO. DAMN. SLOW.
 // So, to QUICKLY access the resources we need, we reivent Microsoft's sub-optimal resource parser.
 static BOOL FoundResourceRva = FALSE;
-uint32_t FindResourceRva(const wchar_t* name, uint8_t* root, uint8_t* dir, uint32_t* len)
+uint32_t FindResourceRva(const uint16_t* name, uint8_t* root, uint8_t* dir, uint32_t* len)
 {
-	uint32_t i, rva;
+	uint32_t i, rva, name_len;
 	IMAGE_RESOURCE_DIRECTORY* _dir = (IMAGE_RESOURCE_DIRECTORY*)dir;
 	IMAGE_RESOURCE_DIRECTORY_ENTRY* dir_entry = (IMAGE_RESOURCE_DIRECTORY_ENTRY*)&_dir[1];
 	IMAGE_RESOURCE_DIR_STRING_U* dir_string;
@@ -1836,6 +1788,7 @@ uint32_t FindResourceRva(const wchar_t* name, uint8_t* root, uint8_t* dir, uint3
 
 	if (root == NULL || dir == NULL || name == NULL)
 		return 0;
+	for (name_len = 0; name[name_len] != 0; name_len++);
 
 	// Initial invocation should always start at the root
 	if (root == dir)
@@ -1844,8 +1797,9 @@ uint32_t FindResourceRva(const wchar_t* name, uint8_t* root, uint8_t* dir, uint3
 	for (i = 0; i < (uint32_t)_dir->NumberOfNamedEntries + _dir->NumberOfIdEntries; i++) {
 		if (!FoundResourceRva && i < _dir->NumberOfNamedEntries) {
 			dir_string = (IMAGE_RESOURCE_DIR_STRING_U*)(root + dir_entry[i].NameOffset);
-			if (dir_string->Length != wcslen(name) ||
-				memcmp(name, dir_string->NameString, wcslen(name)) != 0)
+			// NB: Upstream only compares the first half of the name (wcslen() bytes)
+			if (dir_string->Length != name_len ||
+				memcmp(name, dir_string->NameString, name_len * sizeof(uint16_t)) != 0)
 				continue;
 			FoundResourceRva = TRUE;
 		}

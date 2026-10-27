@@ -31,25 +31,15 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 #include "xml.h"
 #include "rufus.h"
-#include "msapi_utf8.h"
-
-/* Memory leaks detection - define _CRTDBG_MAP_ALLOC as preprocessor macro */
-#ifdef _CRTDBG_MAP_ALLOC
-#include <stdlib.h>
-#include <crtdbg.h>
-#endif
 
 #define EZXML_NOMMAP
 #define EZXML_WS     "\t\r\n "  // whitespace
 #define EZXML_ERRL   256        // maximum error string length
 #define EZXML_MAXEXP (8 * MB)   // max entity expansion (to prevent "billion laughs" blowup)
 
-#ifdef _MSC_VER
-#pragma warning(disable:6011)
-#pragma warning(disable:4267)
-#endif
 typedef struct ezxml_root *ezxml_root_t;
 struct ezxml_root {       // additional data for the root tag
     struct ezxml xml;     // is a super-struct built on top of ezxml struct
@@ -250,7 +240,9 @@ char *ezxml_decode(char *s, char **ent, char t)
                 if (!e) return r;
 
                 memmove(s + c, e + 1, strlen(e)); // shift rest of string
-                strncpy_s(s, c, ent[b], _TRUNCATE); // copy in replacement text
+                // NB: Upstream Rufus uses strncpy_s(s, c, ent[b], _TRUNCATE) here, which
+                // terminates the string within the replacement text, truncating the value
+                memcpy(s, ent[b], c); // copy in replacement text
             }
             else s++; // not a known entity
         }
@@ -711,7 +703,7 @@ ezxml_t ezxml_parse_fd(int fd)
     }
     else { // mmap failed, read file into memory
 #endif // EZXML_NOMMAP
-        l = (ssize_t)_read(fd, m = malloc((size_t)st.st_size), (unsigned int)st.st_size);
+        l = read(fd, m = malloc((size_t)st.st_size), (size_t)st.st_size);
         if (l < 0) { free(m); return NULL; };
         root = (ezxml_root_t)ezxml_parse_str(m, l);
         if (!root) { free(m); return NULL; };
@@ -725,10 +717,10 @@ ezxml_t ezxml_parse_fd(int fd)
 // a wrapper for ezxml_parse_fd that accepts a file name
 ezxml_t ezxml_parse_file(const char *file)
 {
-    int fd = _openU(file, O_RDONLY, 0);
+    int fd = open(file, O_RDONLY | O_CLOEXEC);
     ezxml_t xml = ezxml_parse_fd(fd);
     
-    if (fd >= 0) _close(fd);
+    if (fd >= 0) close(fd);
     return xml;
 }
 

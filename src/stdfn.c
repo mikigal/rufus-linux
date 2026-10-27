@@ -16,37 +16,27 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-#ifdef _CRTDBG_MAP_ALLOC
-#include <stdlib.h>
-#include <crtdbg.h>
-#endif
 
-#include <windows.h>
-#include <sddl.h>
-#include <gpedit.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <assert.h>
-#include <accctrl.h>
-#include <aclapi.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
+#include <spawn.h>
+#include <time.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 
 #include "rufus.h"
 #include "cregex.h"
 #include "missing.h"
 #include "resource.h"
-#include "msapi_utf8.h"
 #include "localization.h"
 
-#include "settings.h"
-
-// MinGW doesn't yet know these (from wldp.h)
-typedef enum WLDP_WINDOWS_LOCKDOWN_MODE
-{
-	WLDP_WINDOWS_LOCKDOWN_MODE_UNLOCKED = 0,
-	WLDP_WINDOWS_LOCKDOWN_MODE_TRIAL,
-	WLDP_WINDOWS_LOCKDOWN_MODE_LOCKED,
-	WLDP_WINDOWS_LOCKDOWN_MODE_MAX,
-} WLDP_WINDOWS_LOCKDOWN_MODE, * PWLDP_WINDOWS_LOCKDOWN_MODE;
-
-windows_version_t WindowsVersion = { 0 };
+extern char** environ;
 
 /*
  * Hash table functions - modified From glibc 2.3.2:
@@ -323,217 +313,6 @@ const char* GetEditionName(DWORD ProductType)
 	}
 }
 
-PF_TYPE_DECL(WINAPI, HRESULT, WldpQueryWindowsLockdownMode, (PWLDP_WINDOWS_LOCKDOWN_MODE));
-BOOL isSMode(void)
-{
-	BOOL r = FALSE;
-	WLDP_WINDOWS_LOCKDOWN_MODE mode;
-	PF_INIT_OR_OUT(WldpQueryWindowsLockdownMode, Wldp);
-
-	HRESULT hr = pfWldpQueryWindowsLockdownMode(&mode);
-	if (hr != S_OK) {
-		SetLastError((DWORD)hr);
-		uprintf("Could not detect S Mode: %s", WindowsErrorString());
-	} else {
-		r = (mode != WLDP_WINDOWS_LOCKDOWN_MODE_UNLOCKED);
-	}
-
-out:
-	return r;
-}
-
-/*
- * Modified from smartmontools' os_win32.cpp
- */
-void GetWindowsVersion(windows_version_t* windows_version)
-{
-	OSVERSIONINFOEXA vi, vi2;
-	DWORD dwProductType = 0;
-	const char* w = NULL;
-	const char* arch_name;
-	char *vptr;
-	size_t vlen;
-	DWORD major = 0, minor = 0;
-	USHORT ProcessMachine = IMAGE_FILE_MACHINE_UNKNOWN, NativeMachine = IMAGE_FILE_MACHINE_UNKNOWN;
-	ULONGLONG major_equal, minor_equal;
-	BOOL ws, is_wow64 = FALSE;
-
-	PF_TYPE_DECL(WINAPI, BOOL, IsWow64Process2, (HANDLE, USHORT*, USHORT*));
-	PF_INIT(IsWow64Process2, Kernel32);
-
-	memset(windows_version, 0, sizeof(windows_version_t));
-	static_strcpy(windows_version->VersionStr, "Windows Undefined");
-
-	memset(&vi, 0, sizeof(vi));
-	vi.dwOSVersionInfoSize = sizeof(vi);
-	if (!GetVersionExA((OSVERSIONINFOA *)&vi)) {
-		memset(&vi, 0, sizeof(vi));
-		vi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOA);
-		if (!GetVersionExA((OSVERSIONINFOA *)&vi))
-			return;
-	}
-
-	if (vi.dwPlatformId == VER_PLATFORM_WIN32_NT) {
-
-		if (vi.dwMajorVersion > 6 || (vi.dwMajorVersion == 6 && vi.dwMinorVersion >= 2)) {
-			// Starting with Windows 8.1 Preview, GetVersionEx() does no longer report the actual OS version
-			// See: http://msdn.microsoft.com/en-us/library/windows/desktop/dn302074.aspx
-			// And starting with Windows 10 Preview 2, Windows enforces the use of the application/supportedOS
-			// manifest in order for VerSetConditionMask() to report the ACTUAL OS major and minor...
-
-			major_equal = VerSetConditionMask(0, VER_MAJORVERSION, VER_EQUAL);
-			for (major = vi.dwMajorVersion; major <= 9; major++) {
-				memset(&vi2, 0, sizeof(vi2));
-				vi2.dwOSVersionInfoSize = sizeof(vi2); vi2.dwMajorVersion = major;
-				if (!VerifyVersionInfoA(&vi2, VER_MAJORVERSION, major_equal))
-					continue;
-				if (vi.dwMajorVersion < major) {
-					vi.dwMajorVersion = major; vi.dwMinorVersion = 0;
-				}
-
-				minor_equal = VerSetConditionMask(0, VER_MINORVERSION, VER_EQUAL);
-				for (minor = vi.dwMinorVersion; minor <= 9; minor++) {
-					memset(&vi2, 0, sizeof(vi2)); vi2.dwOSVersionInfoSize = sizeof(vi2);
-					vi2.dwMinorVersion = minor;
-					if (!VerifyVersionInfoA(&vi2, VER_MINORVERSION, minor_equal))
-						continue;
-					vi.dwMinorVersion = minor;
-					break;
-				}
-
-				break;
-			}
-		}
-
-		if (vi.dwMajorVersion <= 0xf && vi.dwMinorVersion <= 0xf) {
-			ws = (vi.wProductType <= VER_NT_WORKSTATION);
-			windows_version->Version = vi.dwMajorVersion << 4 | vi.dwMinorVersion;
-			switch (windows_version->Version) {
-			case WINDOWS_XP: w = "XP";
-				break;
-			case WINDOWS_2003: w = (ws ? "XP_64" : (!GetSystemMetrics(89) ? "Server 2003" : "Server 2003_R2"));
-				break;
-			case WINDOWS_VISTA: w = (ws ? "Vista" : "Server 2008");
-				break;
-			case WINDOWS_7: w = (ws ? "7" : "Server 2008_R2");
-				break;
-			case WINDOWS_8: w = (ws ? "8" : "Server 2012");
-				break;
-			case WINDOWS_8_1: w = (ws ? "8.1" : "Server 2012_R2");
-				break;
-			case WINDOWS_10_PREVIEW1: w = (ws ? "10 (Preview 1)" : "Server 10 (Preview 1)");
-				break;
-			// Starting with Windows 10 Preview 2, the major is the same as the public-facing version
-			case WINDOWS_10:
-				if (vi.dwBuildNumber < 20000) {
-					w = (ws ? "10" : ((vi.dwBuildNumber < 17763) ? "Server 2016" : "Server 2019"));
-					break;
-				}
-				windows_version->Version = WINDOWS_11;
-				major = 11;
-				// Fall through
-			case WINDOWS_11: w = (ws ? "11" : "Server 2022");
-				break;
-			default:
-				if (windows_version->Version < WINDOWS_XP)
-					windows_version->Version = WINDOWS_UNDEFINED;
-				else
-					w = "12 or later";
-				break;
-			}
-		}
-	}
-	windows_version->Major = major;
-	windows_version->Minor = minor;
-
-	if ((pfIsWow64Process2 != NULL) && pfIsWow64Process2(GetCurrentProcess(), &ProcessMachine, &NativeMachine)) {
-		windows_version->Arch = NativeMachine;
-	} else {
-		// Assume same arch as the app
-		windows_version->Arch = GetApplicationArch();
-		// Fix the Arch if we have a 32-bit app running under WOW64
-		if ((sizeof(uintptr_t) < 8) && IsWow64Process(GetCurrentProcess(), &is_wow64) && is_wow64) {
-			if (windows_version->Arch == IMAGE_FILE_MACHINE_I386)
-				windows_version->Arch = IMAGE_FILE_MACHINE_AMD64;
-			else if (windows_version->Arch == IMAGE_FILE_MACHINE_ARM)
-				windows_version->Arch = IMAGE_FILE_MACHINE_ARM64;
-			else // I sure wanna be made aware of this scenario...
-				assert(FALSE);
-		}
-		uprintf("Note: Underlying Windows architecture was guessed and may be incorrect...");
-	}
-	arch_name = GetArchName(windows_version->Arch);
-
-	GetProductInfo(vi.dwMajorVersion, vi.dwMinorVersion, vi.wServicePackMajor, vi.wServicePackMinor, &dwProductType);
-	vptr = &windows_version->VersionStr[sizeof("Windows ") - 1];
-	vlen = sizeof(windows_version->VersionStr) - sizeof("Windows ") - 1;
-	if (!w)
-		safe_sprintf(vptr, vlen, "%s %u.%u %s", (vi.dwPlatformId == VER_PLATFORM_WIN32_NT ? "NT" : "??"),
-			(unsigned)vi.dwMajorVersion, (unsigned)vi.dwMinorVersion, arch_name);
-	else if (vi.wServicePackMinor)
-		safe_sprintf(vptr, vlen, "%s SP%u.%u %s", w, vi.wServicePackMajor, vi.wServicePackMinor, arch_name);
-	else if (vi.wServicePackMajor)
-		safe_sprintf(vptr, vlen, "%s SP%u %s", w, vi.wServicePackMajor, arch_name);
-	else
-		safe_sprintf(vptr, vlen, "%s%s %s", w, GetEditionName(dwProductType), arch_name);
-
-	windows_version->Edition = dwProductType;
-
-	// Add the build number (including UBR if available)
-	windows_version->BuildNumber = vi.dwBuildNumber;
-	windows_version->Ubr = ReadRegistryKey32(REGKEY_HKLM, "Software\\Microsoft\\Windows NT\\CurrentVersion\\UBR");
-	vptr = &windows_version->VersionStr[safe_strlen(windows_version->VersionStr)];
-	vlen = sizeof(windows_version->VersionStr) - safe_strlen(windows_version->VersionStr) - 1;
-	if (windows_version->Ubr != 0)
-		safe_sprintf(vptr, vlen, " (Build %lu.%lu)", windows_version->BuildNumber, windows_version->Ubr);
-	else
-		safe_sprintf(vptr, vlen, " (Build %lu)", windows_version->BuildNumber);
-	vptr = &windows_version->VersionStr[safe_strlen(windows_version->VersionStr)];
-	vlen = sizeof(windows_version->VersionStr) - safe_strlen(windows_version->VersionStr) - 1;
-	if (isSMode())
-		safe_sprintf(vptr, vlen, " in S Mode");
-}
-
-/*
- * Why oh why does Microsoft make it so convoluted to retrieve a measly executable's version number ?
- */
-version_t* GetExecutableVersion(const char* path)
-{
-	static version_t version, *r = NULL;
-	uint8_t* buf = NULL;
-	UINT uLen;
-	DWORD dwSize, dwHandle;
-	VS_FIXEDFILEINFO* version_info;
-
-	memset(&version, 0, sizeof(version));
-
-	dwSize = GetFileVersionInfoSizeU(path, &dwHandle);
-	if (dwSize == 0)
-		goto out;
-
-	buf = malloc(dwSize);
-	if (buf == NULL)
-		goto out;;
-	if (!GetFileVersionInfoU(path, dwHandle, dwSize, buf))
-		goto out;
-
-	if (!VerQueryValueA(buf, "\\", (LPVOID*)&version_info, &uLen) || uLen == 0)
-		goto out;
-
-	if (version_info->dwSignature != 0xfeef04bd)
-		goto out;
-
-	version.Major = (version_info->dwFileVersionMS >> 16) & 0xffff;
-	version.Minor = (version_info->dwFileVersionMS >> 0) & 0xffff;
-	version.Micro = (version_info->dwFileVersionLS >> 16) & 0xffff;
-	version.Nano = (version_info->dwFileVersionLS >> 0) & 0xffff;
-	r = &version;
-
-out:
-	free(buf);
-	return r;
-}
-
 /*
  * String array manipulation
  */
@@ -605,135 +384,64 @@ void StrArrayDestroy(StrArray* arr)
 		safe_free(arr->String);
 }
 
-/*
- * Retrieve the SID of the current user. The returned PSID must be freed by the caller using LocalFree()
- */
-static PSID GetSID(void) {
-	TOKEN_USER* tu = NULL;
-	DWORD len;
-	HANDLE token;
-	PSID ret = NULL;
-	char* psid_string = NULL;
-
-	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
-		uprintf("OpenProcessToken failed: %s", WindowsErrorString());
-		return NULL;
-	}
-
-	if (!GetTokenInformation(token, TokenUser, tu, 0, &len)) {
-		if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
-			uprintf("GetTokenInformation (pre) failed: %s", WindowsErrorString());
-			return NULL;
-		}
-		tu = (TOKEN_USER*)calloc(1, len);
-	}
-	if (tu == NULL) {
-		return NULL;
-	}
-
-	if (GetTokenInformation(token, TokenUser, tu, len, &len)) {
-		/*
-		 * now of course, the interesting thing is that if you return tu->User.Sid
-		 * but free tu, the PSID pointer becomes invalid after a while.
-		 * The workaround? Convert to string then back to PSID
-		 */
-		if (!ConvertSidToStringSidA(tu->User.Sid, &psid_string)) {
-			uprintf("Unable to convert SID to string: %s", WindowsErrorString());
-			ret = NULL;
-		} else {
-			if (!ConvertStringSidToSidA(psid_string, &ret)) {
-				uprintf("Unable to convert string back to SID: %s", WindowsErrorString());
-				ret = NULL;
-			}
-			// MUST use LocalFree()
-			LocalFree(psid_string);
-		}
-	} else {
-		ret = NULL;
-		uprintf("GetTokenInformation (real) failed: %s", WindowsErrorString());
-	}
-	free(tu);
-	return ret;
-}
-
 BOOL FileIO(enum file_io_type io_type, char* path, char** buffer, DWORD* size)
 {
-	SECURITY_ATTRIBUTES s_attr, *sa = NULL;
-	SECURITY_DESCRIPTOR s_desc;
-	const LARGE_INTEGER liZero = { .QuadPart = 0ULL };
-	PSID sid = NULL;
-	HANDLE handle;
-	DWORD dwDesiredAccess = 0, dwCreationDisposition = 0;
-	BOOL r = FALSE;
+	struct stat st;
+	ssize_t r = -1;
+	int fd = -1, flags = 0;
 	BOOL ret = FALSE;
-
-	// Change the owner from admin to regular user
-	sid = GetSID();
-	if ( (sid != NULL)
-	  && InitializeSecurityDescriptor(&s_desc, SECURITY_DESCRIPTOR_REVISION)
-	  && SetSecurityDescriptorOwner(&s_desc, sid, FALSE) ) {
-		s_attr.nLength = sizeof(SECURITY_ATTRIBUTES);
-		s_attr.bInheritHandle = FALSE;
-		s_attr.lpSecurityDescriptor = &s_desc;
-		sa = &s_attr;
-	} else {
-		uprintf("Could not set security descriptor: %s", WindowsErrorString());
-	}
 
 	switch (io_type) {
 	case FILE_IO_READ:
 		*buffer = NULL;
-		dwDesiredAccess = GENERIC_READ;
-		dwCreationDisposition = OPEN_EXISTING;
+		flags = O_RDONLY;
 		break;
 	case FILE_IO_WRITE:
-		dwDesiredAccess = GENERIC_WRITE;
-		dwCreationDisposition = CREATE_ALWAYS;
+		flags = O_WRONLY | O_CREAT | O_TRUNC;
 		break;
 	case FILE_IO_APPEND:
-		dwDesiredAccess = FILE_APPEND_DATA;
-		dwCreationDisposition = OPEN_ALWAYS;
+		flags = O_WRONLY | O_CREAT | O_APPEND;
 		break;
 	default:
 		assert(FALSE);
 		break;
 	}
-	handle = CreateFileU(path, dwDesiredAccess, FILE_SHARE_READ, sa,
-		dwCreationDisposition, FILE_ATTRIBUTE_NORMAL, NULL);
+	fd = open(path, flags | O_CLOEXEC, 0644);
 
-	if (handle == INVALID_HANDLE_VALUE) {
+	if (fd < 0) {
 		uprintf("Could not open '%s': %s", path, WindowsErrorString());
 		goto out;
 	}
 
 	switch (io_type) {
 	case FILE_IO_READ:
-		*size = GetFileSize(handle, NULL);
+		if (fstat(fd, &st) != 0)
+			break;
+		*size = (DWORD)st.st_size;
 		*buffer = (char*)malloc(*size);
 		if (*buffer == NULL) {
 			uprintf("Could not allocate buffer for reading file");
 			goto out;
 		}
-		r = ReadFile(handle, *buffer, *size, size, NULL);
+		r = read(fd, *buffer, *size);
 		break;
 	case FILE_IO_APPEND:
-		SetFilePointerEx(handle, liZero, NULL, FILE_END);
-		// Fall through
 	case FILE_IO_WRITE:
-		r = WriteFile(handle, *buffer, *size, size, NULL);
+		r = write(fd, *buffer, *size);
 		break;
 	}
 
-	if (!r) {
+	if (r < 0) {
 		uprintf("I/O Error: %s", WindowsErrorString());
 		goto out;
 	}
+	*size = (DWORD)r;
 
 	PrintInfoDebug(0, (io_type == FILE_IO_READ) ? MSG_215 : MSG_216, path);
 	ret = TRUE;
 
 out:
-	CloseHandle(handle);
+	safe_close(fd);
 	if (!ret && (io_type == FILE_IO_READ)) {
 		// Only leave the buffer allocated if we were able to read data
 		safe_free(*buffer);
@@ -742,92 +450,84 @@ out:
 	return ret;
 }
 
-/*
- * Get a resource from the RC. If needed that resource can be duplicated.
- * If duplicate is true and len is non-zero, the a zeroed buffer of 'len'
- * size is allocated for the resource. Else the buffer is allocated for
- * the resource size.
- */
-uint8_t* GetResource(HMODULE module, char* name, char* type, const char* desc, DWORD* len, BOOL duplicate)
+static uint64_t monotonic_ms(void)
 {
-	HGLOBAL res_handle;
-	HRSRC res;
-	DWORD res_len;
-	uint8_t* p = NULL;
+	struct timespec ts;
 
-	res = FindResourceA(module, name, type);
-	if (res == NULL) {
-		uprintf("Could not locate resource '%s': %s", desc, WindowsErrorString());
-		goto out;
-	}
-	res_handle = LoadResource(module, res);
-	if (res_handle == NULL) {
-		uprintf("Could not load resource '%s': %s", desc, WindowsErrorString());
-		goto out;
-	}
-	res_len = SizeofResource(module, res);
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
+}
 
-	if (duplicate) {
-		if (*len == 0)
-			*len = res_len;
-		p = calloc(*len, 1);
-		if (p == NULL) {
-			uprintf("Could not allocate resource '%s'", desc);
-			goto out;
+// Wait for a process to terminate, for up to timeout ms. Returns TRUE if it did, with its exit code.
+static BOOL WaitForProcess(pid_t pid, uint64_t timeout, DWORD* exit_code)
+{
+	uint64_t start = monotonic_ms();
+	int status;
+	pid_t r;
+
+	while (1) {
+		r = waitpid(pid, &status, WNOHANG);
+		if (r == pid) {
+			*exit_code = WIFEXITED(status) ? (DWORD)WEXITSTATUS(status) : ERROR_OPERATION_ABORTED;
+			return TRUE;
 		}
-		memcpy(p, LockResource(res_handle), min(res_len, *len));
-		if (res_len > *len)
-			uprintf("WARNING: Resource '%s' was truncated by %d bytes!", desc, res_len - *len);
-	} else {
-		p = LockResource(res_handle);
+		if ((r < 0) && (errno != EINTR)) {
+			*exit_code = WindowsErrorFromErrno(errno);
+			return TRUE;
+		}
+		if (monotonic_ms() - start >= timeout)
+			return FALSE;
+		usleep(10000);
 	}
-	*len = res_len;
-
-out:
-	return p;
 }
 
-DWORD GetResourceSize(HMODULE module, char* name, char* type, const char* desc)
+// Run a command, with optional redirection of stdout and stderr to our log as well as
+// optional progress reporting if msg is not 0. 'argv' is NULL terminated and its first
+// element is looked up in PATH. Returns the exit code of the command, or a Win32 error
+// code if the command could not be run.
+// NB: Upstream takes a single command line string, which Windows splits. Taking the
+// arguments separately means that paths never need any quoting.
+DWORD RunCommandWithProgress(const char* const* argv, const char* dir, BOOL log, int msg, const char* pattern)
 {
-	DWORD len = 0;
-	return (GetResource(module, name, type, desc, &len, FALSE) == NULL)?0:len;
-}
-
-// Run a console command, with optional redirection of stdout and stderr to our log
-// as well as optional progress reporting if msg is not 0.
-DWORD RunCommandWithProgress(const char* cmd, const char* dir, BOOL log, int msg, const char* pattern)
-{
-	DWORD ret, dwRead, dwAvail, dwPipeSize = 4096;
-	STARTUPINFOA si = { 0 };
-	PROCESS_INFORMATION pi = { 0 };
-	SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
-	HANDLE hOutputRead = INVALID_HANDLE_VALUE, hOutputWrite = INVALID_HANDLE_VALUE;
-	static char *output, *p;
+	DWORD ret = ERROR_SUCCESS;
+	posix_spawn_file_actions_t actions;
+	pid_t pid;
+	int r, pipefd[2] = { -1, -1 };
+	struct pollfd pfd;
+	char output[4096], *p;
+	ssize_t len;
 	cregex_node_t* node = NULL;
 	cregex_program_t* program = NULL;
 	char* matches[REGEX_VM_MAX_MATCHES];
 
-	si.cb = sizeof(si);
+	if ((argv == NULL) || (argv[0] == NULL))
+		return ERROR_INVALID_PARAMETER;
+
+	posix_spawn_file_actions_init(&actions);
 	if (msg != 0 || log) {
-		// NB: The size of a pipe is a suggestion, NOT an absolute guarantee
-		// This means that you may get a pipe of 4K even if you requested 1K
-		if (!CreatePipe(&hOutputRead, &hOutputWrite, &sa, dwPipeSize)) {
-			ret = GetLastError();
+		if (pipe2(pipefd, O_CLOEXEC) != 0) {
+			ret = WindowsErrorFromErrno(errno);
 			uprintf("Could not set commandline pipe: %s", WindowsErrorString());
 			goto out;
 		}
-		si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES | STARTF_PREVENTPINNING | STARTF_TITLEISAPPID;
-		si.wShowWindow = SW_HIDE;
-		si.hStdOutput = hOutputWrite;
-		si.hStdError = hOutputWrite;
+		posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
+		posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDERR_FILENO);
+	} else {
+		posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+		posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
 	}
+	posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+	if (dir != NULL)
+		posix_spawn_file_actions_addchdir_np(&actions, dir);
 
-	if (!CreateProcessU(NULL, cmd, NULL, NULL, TRUE,
-		NORMAL_PRIORITY_CLASS | CREATE_NO_WINDOW, NULL, dir, &si, &pi)) {
-		ret = GetLastError();
-		uprintf("Unable to launch command '%s': %s", cmd, WindowsErrorString());
+	r = posix_spawnp(&pid, argv[0], &actions, NULL, (char* const*)argv, environ);
+	if (r != 0) {
+		errno = r;
+		ret = WindowsErrorFromErrno(r);
+		uprintf("Unable to launch command '%s': %s", argv[0], WindowsErrorString());
 		goto out;
 	}
+	safe_close(pipefd[1]);
 
 	if (msg != 0) {
 		node = cregex_parse(pattern);
@@ -839,82 +539,61 @@ DWORD RunCommandWithProgress(const char* cmd, const char* dir, BOOL log, int msg
 			uprintf("Internal error: Failed to parse '%s'", pattern);
 	}
 
-	if (program != NULL || log) {
-		if (program != NULL)
-			UpdateProgressWithInfoInit(NULL, FALSE);
-		while (1) {
-			// Check for user cancel
-			if (IS_ERROR(ErrorStatus) && (SCODE_CODE(ErrorStatus) == ERROR_CANCELLED)) {
-				if (!TerminateProcess(pi.hProcess, ERROR_CANCELLED)) {
-					uprintf("Could not terminate command: %s", WindowsErrorString());
-				} else switch (WaitForSingleObject(pi.hProcess, 5000)) {
-				case WAIT_TIMEOUT:
-					uprintf("Command did not terminate within timeout duration");
-					break;
-				case WAIT_OBJECT_0:
-					uprintf("Command was terminated by user");
-					break;
-				default:
-					uprintf("Error while waiting for command to be terminated: %s", WindowsErrorString());
-					break;
-				}
-				ret = ERROR_CANCELLED;
-				goto out;
-			}
-			// coverity[string_null]
-			if (PeekNamedPipe(hOutputRead, NULL, dwPipeSize, NULL, &dwAvail, NULL)) {
-				if (dwAvail != 0) {
-					output = malloc(dwAvail + 1);
-					if ((output != NULL) && (ReadFile(hOutputRead, output, dwAvail, &dwRead, NULL)) && (dwRead != 0)) {
-						output[dwAvail] = 0;
-						// Process a commandline progress into a percentage
-						if (program != NULL && cregex_program_run(program, output, (const char**)matches, ARRAYSIZE(matches)) > 0 &&
-							matches[2] != NULL && matches[3] != NULL) {
-							// matches[2] is for the first group
-							// matches[3] is for the end of the first group
-							matches[3][0] = '\0';
-							float f = 0.0f;
-							IGNORE_RETVAL(sscanf(matches[2], "%f", &f));
-							UpdateProgressWithInfo(OP_FORMAT, msg, (uint64_t)(f * 100.0f), 100 * 100ULL);
-						} else if (log) {
-							// output may contain a '%' so don't feed it as a naked format string
-							uprintf("%s", output);
-						} else if ((p = strstr(output, "ERROR:")) != NULL) {
-							// Mostly for oscdimg.exe errors
-							uprintf("%s", p);
-						}
-					}
-					free(output);
-				}
-			}
-			if (WaitForSingleObject(pi.hProcess, 0) == WAIT_OBJECT_0)
-				break;
-			Sleep(100);
-		};
-	} else {
-		switch (WaitForSingleObject(pi.hProcess, 1800000)) {
-		case WAIT_TIMEOUT:
-			uprintf("Command did not terminate within timeout duration");
-			break;
-		case WAIT_OBJECT_0:
-			if (IS_ERROR(ErrorStatus) && (SCODE_CODE(ErrorStatus) == ERROR_CANCELLED))
+	if (program != NULL)
+		UpdateProgressWithInfoInit(NULL, FALSE);
+	while (1) {
+		// Check for user cancel
+		if (IS_ERROR(ErrorStatus) && (SCODE_CODE(ErrorStatus) == ERROR_CANCELLED)) {
+			kill(pid, SIGTERM);
+			if (!WaitForProcess(pid, 5000, &ret)) {
+				uprintf("Command did not terminate within timeout duration");
+				kill(pid, SIGKILL);
+				WaitForProcess(pid, 5000, &ret);
+			} else {
 				uprintf("Command was terminated by user");
-			break;
-		default:
-			uprintf("Error while waiting for command to be terminated: %s", WindowsErrorString());
-			break;
+			}
+			ret = ERROR_CANCELLED;
+			goto out;
 		}
+		if (pipefd[0] >= 0) {
+			pfd.fd = pipefd[0];
+			pfd.events = POLLIN;
+			if ((poll(&pfd, 1, 100) > 0) && (pfd.revents & (POLLIN | POLLHUP))) {
+				len = read(pipefd[0], output, sizeof(output) - 1);
+				if (len > 0) {
+					output[len] = 0;
+					// Process a commandline progress into a percentage
+					if (program != NULL && cregex_program_run(program, output, (const char**)matches, ARRAYSIZE(matches)) > 0 &&
+						matches[2] != NULL && matches[3] != NULL) {
+						// matches[2] is for the first group
+						// matches[3] is for the end of the first group
+						matches[3][0] = '\0';
+						float f = 0.0f;
+						IGNORE_RETVAL(sscanf(matches[2], "%f", &f));
+						UpdateProgressWithInfo(OP_FORMAT, msg, (uint64_t)(f * 100.0f), 100 * 100ULL);
+					} else if (log) {
+						// output may contain a '%' so don't feed it as a naked format string
+						uprintfs(output);
+					} else if ((p = strstr(output, "ERROR:")) != NULL) {
+						uprintf("%s", p);
+					}
+				} else {
+					// EOF: the command closed its output
+					safe_close(pipefd[0]);
+				}
+			}
+		} else {
+			usleep(100000);
+		}
+		if (WaitForProcess(pid, 0, &ret))
+			break;
 	}
-
-	if (!GetExitCodeProcess(pi.hProcess, &ret))
-		ret = GetLastError();
-	CloseHandle(pi.hProcess);
-	CloseHandle(pi.hThread);
 
 out:
 	cregex_compile_free(program);
-	safe_closehandle(hOutputWrite);
-	safe_closehandle(hOutputRead);
+	posix_spawn_file_actions_destroy(&actions);
+	safe_close(pipefd[0]);
+	safe_close(pipefd[1]);
 	return ret;
 }
 
@@ -923,318 +602,4 @@ BOOL CompareGUID(const GUID *guid1, const GUID *guid2) {
 		return (memcmp(guid1, guid2, sizeof(GUID)) == 0);
 	}
 	return FALSE;
-}
-
-static BOOL CALLBACK EnumFontFamExProc(const LOGFONTA *lpelfe,
-	const TEXTMETRICA *lpntme, DWORD FontType, LPARAM lParam)
-{
-	return TRUE;
-}
-
-BOOL IsFontAvailable(const char* font_name)
-{
-	BOOL r;
-	LOGFONTA lf = { 0 };
-	HDC hDC = GetDC(hMainDialog);
-
-	if (font_name == NULL) {
-		safe_release_dc(hMainDialog, hDC);
-		return FALSE;
-	}
-
-	lf.lfCharSet = DEFAULT_CHARSET;
-	safe_strcpy(lf.lfFaceName, LF_FACESIZE, font_name);
-
-	r = EnumFontFamiliesExA(hDC, &lf, EnumFontFamExProc, 0, 0);
-	safe_release_dc(hMainDialog, hDC);
-	return r;
-}
-
-/*
- * Set or restore the NoDriveTypeAutorun registry key
- */
-BOOL SetNDTA(BOOL bRestore, BOOL* bExistingKey, DWORD dwValue)
-{
-	static DWORD original_val = 0;
-	LONG r;
-	DWORD disp, regtype, val = 0, val_size = sizeof(DWORD);
-	HKEY key = NULL;
-
-	r = RegCreateKeyExA(HKEY_LOCAL_MACHINE, "Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer",	0, NULL, 0,
-		KEY_SET_VALUE | KEY_QUERY_VALUE | KEY_CREATE_SUB_KEY, NULL, &key, &disp);
-	if (r != ERROR_SUCCESS) {
-		ubprintf("SetNDTA: Failed to locate path - error %lx", r);
-		return FALSE;
-	}
-
-	if (disp == REG_OPENED_EXISTING_KEY && !bRestore && !*bExistingKey) {
-		// backup existing value for restore
-		*bExistingKey = TRUE;
-		regtype = REG_DWORD;
-		r = RegQueryValueExA(key, "NoDriveTypeAutorun", NULL, &regtype, (LPBYTE)&original_val, &val_size);
-		if (r == ERROR_FILE_NOT_FOUND) {
-			// The Key exists but not its value, which is OK
-			*bExistingKey = FALSE;
-		} else if (r != ERROR_SUCCESS) {
-			ubprintf("SetNDTA: Failed to read original policy value - error %lx", r);
-		}
-	}
-
-	if (!bRestore || *bExistingKey) {
-		val = bRestore ? original_val : dwValue;
-		r = RegSetValueExA(key, "NoDriveTypeAutorun", 0, REG_DWORD, (BYTE*)&val, sizeof(val));
-	} else {
-		r = RegDeleteValueA(key, "NoDriveTypeAutorun");
-	}
-	RegCloseKey(key);
-	if (r != ERROR_SUCCESS)
-		ubprintf("SetNDTA: RegSetValueEx/RegDeleteValue failed - error %lx", r);
-	else if (!bRestore || *bExistingKey)
-		ubprintf("SetNDTA: Successfully %s NoDriveTypeAutorun to 0x%08lX", bRestore ? "restored" : "set", val);
-	else
-		ubprintf("SetNDTA: Successfully removed NoDriveTypeAutorun key");
-	return TRUE;
-}
-
-/*
- * This call tries to evenly balance the affinities for an array of
- * num_threads, according to the number of cores at our disposal...
- */
-BOOL SetThreadAffinity(DWORD_PTR* thread_affinity, size_t num_threads)
-{
-	size_t i, j, pc;
-	DWORD_PTR affinity, dummy;
-
-	memset(thread_affinity, 0, num_threads * sizeof(DWORD_PTR));
-	if (!GetProcessAffinityMask(GetCurrentProcess(), &affinity, &dummy))
-		return FALSE;
-	uuprintf("\r\nThread affinities:");
-	uuprintf("  avail:\t%s", printbitslz(affinity));
-
-	// If we don't have enough virtual cores to evenly spread our load forget it
-	pc = popcnt64(affinity);
-	if (pc < num_threads)
-		return FALSE;
-
-	// Spread the affinity as evenly as we can
-	thread_affinity[num_threads - 1] = affinity;
-	for (i = 0; i < num_threads - 1; i++) {
-		for (j = 0; j < pc / num_threads; j++) {
-			thread_affinity[i] |= affinity & (-1LL * affinity);
-			affinity ^= affinity & (-1LL * affinity);
-		}
-		uuprintf("  thr_%llu:\t%s", i, printbitslz(thread_affinity[i]));
-		thread_affinity[num_threads - 1] ^= thread_affinity[i];
-	}
-	uuprintf("  thr_%llu:\t%s", i, printbitslz(thread_affinity[i]));
-	return TRUE;
-}
-
-/*
- * Returns true if:
- * 1. The OS supports UAC, UAC is on, and the current process runs elevated, or
- * 2. The OS doesn't support UAC or UAC is off, and the process is being run by a member of the admin group
- */
-BOOL IsCurrentProcessElevated(void)
-{
-	BOOL r = FALSE;
-	DWORD size;
-	HANDLE token = INVALID_HANDLE_VALUE;
-	TOKEN_ELEVATION te;
-	SID_IDENTIFIER_AUTHORITY auth = { SECURITY_NT_AUTHORITY };
-	PSID psid;
-
-	if (ReadRegistryKey32(REGKEY_HKLM, "Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\\EnableLUA") == 1) {
-		uprintf("Note: UAC is active");
-		if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
-			uprintf("Could not get current process token: %s", WindowsErrorString());
-			goto out;
-		}
-		if (!GetTokenInformation(token, TokenElevation, &te, sizeof(te), &size)) {
-			uprintf("Could not get token information: %s", WindowsErrorString());
-			goto out;
-		}
-		r = (te.TokenIsElevated != 0);
-	} else {
-		uprintf("Note: UAC is either disabled or not available");
-		if (!AllocateAndInitializeSid(&auth, 2, SECURITY_BUILTIN_DOMAIN_RID,
-			DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &psid))
-			goto out;
-		if (!CheckTokenMembership(NULL, psid, &r))
-			r = FALSE;
-		FreeSid(psid);
-	}
-
-out:
-	safe_closehandle(token);
-	return r;
-}
-
-char* ToLocaleName(DWORD lang_id)
-{
-	static char mui_str[LOCALE_NAME_MAX_LENGTH];
-	wchar_t wmui_str[LOCALE_NAME_MAX_LENGTH];
-
-	if (LCIDToLocaleName(lang_id, wmui_str, LOCALE_NAME_MAX_LENGTH, 0) > 0) {
-		wchar_to_utf8_no_alloc(wmui_str, mui_str, LOCALE_NAME_MAX_LENGTH);
-	} else {
-		static_strcpy(mui_str, "en-US");
-	}
-	return mui_str;
-}
-
-/*
- * From: https://stackoverflow.com/a/40390858/1069307
- */
-BOOL SetPrivilege(HANDLE hToken, LPCWSTR pwzPrivilegeName, BOOL bEnable)
-{
-	TOKEN_PRIVILEGES tp;
-	LUID luid;
-
-	if (!LookupPrivilegeValue(NULL, pwzPrivilegeName, &luid)) {
-		uprintf("Could not lookup '%S' privilege: %s", pwzPrivilegeName, WindowsErrorString());
-		return FALSE;
-	}
-
-	tp.PrivilegeCount = 1;
-	tp.Privileges[0].Luid = luid;
-	tp.Privileges[0].Attributes = bEnable ? SE_PRIVILEGE_ENABLED : 0;
-
-	if (!AdjustTokenPrivileges(hToken, FALSE, &tp, sizeof(TOKEN_PRIVILEGES), NULL, NULL)) {
-		uprintf("Could not %s '%S' privilege: %s",
-			bEnable ? "enable" : "disable", pwzPrivilegeName, WindowsErrorString());
-		return FALSE;
-	}
-
-	if (GetLastError() == ERROR_NOT_ALL_ASSIGNED) {
-		uprintf("Error assigning privileges: %s", WindowsErrorString());
-		return FALSE;
-	}
-
-	return TRUE;
-}
-
-/*
- * Mount an offline registry hive located at <pszHivePath> into <key>\<pszHiveName>.
- * <key> should be HKEY_LOCAL_MACHINE or HKEY_USERS.
- */
-BOOL MountRegistryHive(const HKEY key, const char* pszHiveName, const char* pszHivePath)
-{
-	LSTATUS status;
-	HANDLE token = INVALID_HANDLE_VALUE;
-
-	if_assert_fails((key == HKEY_LOCAL_MACHINE) || (key == HKEY_USERS))
-		return FALSE;
-
-	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &token)) {
-		uprintf("Could not get current process token: %s", WindowsErrorString());
-		return FALSE;
-	}
-
-	// Ignore errors on those in case we can proceed without...
-	SetPrivilege(token, SE_RESTORE_NAME, TRUE);
-	SetPrivilege(token, SE_BACKUP_NAME, TRUE);
-
-	status = RegLoadKeyA(key, pszHiveName, pszHivePath);
-	if (status != ERROR_SUCCESS) {
-		SetLastError(status);
-		uprintf("Could not mount offline registry hive '%s': %s", pszHivePath, WindowsErrorString());
-	} else
-		uprintf("Mounted offline registry hive '%s' to '%s\\%s'",
-			pszHivePath, (key == HKEY_LOCAL_MACHINE) ? "HKLM" : "HKCU", pszHiveName);
-
-	safe_closehandle(token);
-	return (status == ERROR_SUCCESS);
-}
-
-/*
- * Unmount an offline registry hive.
- * <key> should be HKEY_LOCAL_MACHINE or HKEY_USERS.
- */
-BOOL UnmountRegistryHive(const HKEY key, const char* pszHiveName)
-{
-	LSTATUS status;
-
-	if_assert_fails((key == HKEY_LOCAL_MACHINE) || (key == HKEY_USERS))
-		return FALSE;
-
-	status = RegUnLoadKeyA(key, pszHiveName);
-	if (status != ERROR_SUCCESS) {
-		SetLastError(status);
-		uprintf("Could not unmount offline registry hive: %s", WindowsErrorString());
-	} else
-		uprintf("Unmounted offline registry hive '%s\\%s'",
-			(key == HKEY_LOCAL_MACHINE) ? "HKLM" : "HKCU", pszHiveName);
-
-	return (status == ERROR_SUCCESS);
-}
-
-/*
- * Take administrative ownership of a file or directory, and grant all access rights.
- */
-BOOL TakeOwnership(LPCSTR lpszOwnFile)
-{
-	BOOL ret = FALSE;
-	HANDLE hToken = NULL;
-	PSID pSIDAdmin = NULL;
-	PACL pOldDACL = NULL, pNewDACL = NULL;
-	PSECURITY_DESCRIPTOR pSD = NULL;
-	SID_IDENTIFIER_AUTHORITY SIDAuthNT = SECURITY_NT_AUTHORITY;
-	EXPLICIT_ACCESS ea = { 0 };
-
-	if (lpszOwnFile == NULL)
-		return FALSE;
-
-	// Create a SID for the BUILTIN\Administrators group.
-	if (!AllocateAndInitializeSid(&SIDAuthNT, 2, SECURITY_BUILTIN_DOMAIN_RID,
-		DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &pSIDAdmin))
-		goto out;
-
-	// Open a handle to the access token for the calling process.
-	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &hToken))
-		goto out;
-
-	// Enable the SE_TAKE_OWNERSHIP_NAME privilege.
-	if (!SetPrivilege(hToken, SE_TAKE_OWNERSHIP_NAME, TRUE))
-		goto out;
-
-	// Set the owner in the object's security descriptor.
-	if (SetNamedSecurityInfoU(lpszOwnFile, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION,
-		pSIDAdmin, NULL, NULL, NULL) != ERROR_SUCCESS)
-		goto out;
-
-	// Disable the SE_TAKE_OWNERSHIP_NAME privilege.
-	if (!SetPrivilege(hToken, SE_TAKE_OWNERSHIP_NAME, FALSE))
-		goto out;
-
-	// Get a pointer to the existing DACL.
-	if (GetNamedSecurityInfoU(lpszOwnFile, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-		NULL, NULL, &pOldDACL, NULL, &pSD) != ERROR_SUCCESS)
-		goto out;
-
-	// Initialize an EXPLICIT_ACCESS structure for the new ACE
-	// with full control for Administrators.
-	ea.grfAccessPermissions = GENERIC_ALL;
-	ea.grfAccessMode = GRANT_ACCESS;
-	ea.grfInheritance = SUB_CONTAINERS_AND_OBJECTS_INHERIT;
-	ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
-	ea.Trustee.TrusteeType = TRUSTEE_IS_GROUP;
-	ea.Trustee.ptstrName = (LPTSTR)pSIDAdmin;
-
-	// Create a new ACL that merges the new ACE into the existing DACL.
-	if (SetEntriesInAcl(1, &ea, pOldDACL, &pNewDACL) != ERROR_SUCCESS)
-		goto out;
-
-	// Try to modify the object's DACL.
-	if (SetNamedSecurityInfoU(lpszOwnFile, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-		NULL, NULL, pNewDACL, NULL) != ERROR_SUCCESS)
-		goto out;
-
-	ret = TRUE;
-
-out:
-	FreeSid(pSIDAdmin);
-	LocalFree(pNewDACL);
-	safe_closehandle(hToken);
-	return ret;
 }

@@ -28,12 +28,12 @@ cat > cmd.sed <<\_EOF
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.\
  */\
 \
-#include <windows.h>\
+#include "ui_iface.h"\
 #include "resource.h"\
 #include "localization.h"\
 \
 #define LOC_CTRL(x)  { #x, x }\
-#define LOC_DLG(x)   { x, NULL, {NULL, NULL} }\
+#define LOC_DLG(x)   { x, {NULL, NULL} }\
 \
 // Control IDs\
 const loc_control_id control_id[] = {\

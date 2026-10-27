@@ -684,6 +684,16 @@ Size: S / M / L / XL (relative effort). Each stage ends with a working, testable
     over 4 GB.
   - `SetProposedLabel()` compares `"NO_LABEL"` with `""` instead of with the drive label.
   - The `IDC_FILE_SYSTEM` handler never records FAT16 (index 0) as the user's choice.
+- **Utility code**, fixed in this port:
+  - `xml.c` (ezxml): entity replacement uses `strncpy_s(..., _TRUNCATE)`, which
+    terminates the string inside the replacement, so any value is cut at its first
+    `&amp;`, `&lt;`, etc.
+  - `GetPeSection()` (`parser.c`) returns the size of the first section of the PE,
+    instead of the size of the section it found.
+  - `FindResourceRva()` (`parser.c`) only compares the first half of a resource name
+    (`wcslen()` bytes rather than characters).
+  - `PrintStatusInfo()` (`localization.c`) formats its "UNTRANSLATED" debug message
+    into a buffer whose size it takes as `sizeof(char*)`.
 - **bled**:
   - zip members with `..` or absolute paths were extracted outside the target
     directory;

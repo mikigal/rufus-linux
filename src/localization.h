@@ -17,10 +17,12 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#pragma once
+
 #include <stdint.h>
 #include <stddef.h>
 
-#pragma once
+#include "rufus.h"
 
 // Number of concurrent localization messages (i.e. messages we can concurrently
 // reference at the same time). Must be a power of 2.
@@ -141,9 +143,14 @@ typedef struct loc_control_id_struct {
 
 typedef struct loc_dlg_list_struct {
 	const int dlg_id;
-	HWND hDlg;
 	struct list_head list;
 } loc_dlg_list;
+
+/*
+ * Set the text of control 'ctrl_id' (or of the dialog itself, if ctrl_id is the
+ * dialog ID) for apply_localization(). Returns FALSE if there is no such control.
+ */
+typedef BOOL (*loc_set_text_t)(void* ctx, int ctrl_id, const char* text);
 
 extern const loc_parse parse_cmd[7];
 extern struct list_head locale_list;
@@ -159,8 +166,7 @@ void _exit_localization(BOOL reinit);
 #define init_localization() _init_localization(FALSE)
 #define exit_localization() _exit_localization(FALSE)
 #define reinit_localization() do {_exit_localization(TRUE); _init_localization(TRUE);} while(0)
-void apply_localization(int dlg_id, HWND hDlg);
-void reset_localization(int dlg_id);
+void apply_localization(int dlg_id, loc_set_text_t set_text, void* ctx);
 void free_dialog_list(void);
 char* lmprintf(uint32_t msg_id, ...);
 BOOL get_supported_locales(const char* filename);
@@ -168,6 +174,6 @@ BOOL get_loc_data_file(const char* filename, loc_cmd* lcmd);
 void free_locale_list(void);
 loc_cmd* get_locale_from_lcid(int lcid, BOOL fallback);
 loc_cmd* get_locale_from_name(char* locale_name, BOOL fallback);
+loc_cmd* get_locale_from_posix_name(const char* posix_name, BOOL fallback);
 void toggle_default_locale(void);
 const char* get_name_from_id(int id);
-WORD get_language_id(loc_cmd* lcmd);

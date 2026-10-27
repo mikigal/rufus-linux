@@ -57,6 +57,8 @@
 #define IDIGNORE                    5
 #define IDYES                       6
 #define IDNO                        7
+#define IDCLOSE                     8
+#define IDHELP                      9
 
 /* To provide a "More information" button on notifications */
 typedef struct {
@@ -68,7 +70,7 @@ typedef struct {
 enum ui_event_type {
 	UM_FORMAT_COMPLETED = 1,	// param: TRUE if the operation completed (see ErrorStatus for the result)
 	UM_MEDIA_CHANGE,			// The device list needs to be refreshed
-	UM_PROGRESS_INIT,			// Reset the progress bar before an operation
+	UM_PROGRESS_INIT,			// Reset a progress bar before an operation (param: dialog handle, 0 for the main window)
 	UM_PROGRESS_EXIT,			// Restore the progress bar after an operation
 	UM_NO_UPDATE,				// The update check found nothing
 	UM_UPDATE_CSM_TOOLTIP,		// The target system changed
@@ -113,8 +115,13 @@ typedef struct {
 	 * A NULL text clears the area.
 	 */
 	void (*status)(BOOL info, unsigned int duration, const char* text);
-	/* Set the main progress bar to pos, out of MAX_PROGRESS */
-	void (*progress)(uint32_t pos);
+	/*
+	 * Set a progress bar to pos, out of MAX_PROGRESS. 'dialog' is NULL for the
+	 * main window, or the opaque handle that the front end passed to
+	 * UpdateProgressWithInfoInit() for a dialog with its own progress bar.
+	 * If 'taskbar' is set, the progress should also be reported to the desktop.
+	 */
+	void (*progress)(void* dialog, uint32_t pos, BOOL taskbar);
 	/*
 	 * Ask the user something and block until they answer. Returns an ID*
 	 * value for notifications, the selected mask for selections (or -1 if
@@ -136,7 +143,7 @@ extern void ui_set_iface(const ui_iface_t* iface);
 /* Wrappers used by the core */
 extern void ui_log(const char* text);
 extern void ui_status(BOOL info, unsigned int duration, const char* text);
-extern void ui_progress(uint32_t pos);
+extern void ui_progress(void* dialog, uint32_t pos, BOOL taskbar);
 extern int ui_ask(ui_question_t* question);
 extern void ui_event(enum ui_event_type type, intptr_t param);
 

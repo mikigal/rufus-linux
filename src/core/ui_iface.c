@@ -47,10 +47,10 @@ void ui_status(BOOL info, unsigned int duration, const char* text)
 		ui.status(info, duration, text);
 }
 
-void ui_progress(uint32_t pos)
+void ui_progress(void* dialog, uint32_t pos, BOOL taskbar)
 {
 	if (ui.progress != NULL)
-		ui.progress(min(pos, MAX_PROGRESS));
+		ui.progress(dialog, min(pos, MAX_PROGRESS), taskbar);
 }
 
 int ui_ask(ui_question_t* question)

@@ -693,6 +693,7 @@ extern StrArray modified_files;
 extern const char* GetEditionName(DWORD ProductType);
 extern int GetEditions(StrArray* version_name, StrArray* version_index);
 extern const char* WindowsErrorString(void);
+extern DWORD WindowsErrorFromErrno(int errnum);
 extern void DumpBufferHex(void *buf, size_t size);
 extern void PrintStatusInfo(BOOL info, BOOL debug, unsigned int duration, int msg_id, ...);
 #define PrintStatus(...) PrintStatusInfo(FALSE, FALSE, __VA_ARGS__)
@@ -704,6 +705,8 @@ extern void _UpdateProgressWithInfo(int op, int msg, uint64_t processed, uint64_
 #define UpdateProgressWithInfo(op, msg, processed, total) _UpdateProgressWithInfo(op, msg, processed, total, FALSE)
 #define UpdateProgressWithInfoUpTo(upto, op, msg, processed, total) _UpdateProgressWithInfo(op, msg, (processed) * (upto), (total) * 100, FALSE)
 #define UpdateProgressWithInfoForce(op, msg, processed, total) _UpdateProgressWithInfo(op, msg, processed, total, TRUE)
+// hProgressDialog is an opaque handle of the front end, for a dialog that has its own progress bar (NULL for none)
+#define UpdateProgressWithInfoInit(hProgressDialog, bNoAltMode) UpdateProgressWithInfo(OP_INIT, (int)bNoAltMode, (uint64_t)(uintptr_t)hProgressDialog, 0)
 extern const char* StrError(DWORD error_code, BOOL use_default_locale);
 extern char* GuidToString(const GUID* guid, BOOL bDecorated);
 extern GUID StringToGuid(const char* str);
@@ -719,8 +722,8 @@ extern BOOL DumpFatDir(void* iso, const char* path, int32_t cluster);
 extern uint16_t GetSyslinuxVersion(char* buf, size_t buf_size, char** ext);
 extern BOOL SetAutorun(const char* path);
 extern BOOL FileIO(enum file_io_type io_type, char* path, char** buffer, DWORD* size);
-extern DWORD RunCommandWithProgress(const char* cmdline, const char* dir, BOOL log, int msg, const char* pattern);
-#define RunCommand(cmd, dir, log) RunCommandWithProgress(cmd, dir, log, 0, NULL)
+extern DWORD RunCommandWithProgress(const char* const* argv, const char* dir, BOOL log, int msg, const char* pattern);
+#define RunCommand(argv, dir, log) RunCommandWithProgress(argv, dir, log, 0, NULL)
 extern BOOL CompareGUID(const GUID *guid1, const GUID *guid2);
 extern BOOL IsDownloadable(const char* url);
 extern uint32_t read_file(const char* path, uint8_t** buf);
@@ -764,7 +767,11 @@ extern uint16_t GetPeArch(uint8_t* buf);
 extern uint8_t* GetPeSection(uint8_t* buf, const char* name, uint32_t* len);
 extern uint8_t* GetPeSignatureData(uint8_t* buf);
 extern uint8_t* RvaToPhysical(uint8_t* buf, uint32_t rva);
+extern uint32_t FindResourceRva(const uint16_t* name, uint8_t* root, uint8_t* dir, uint32_t* len);
 extern DWORD ListDirectoryContent(StrArray* arr, char* dir, uint8_t type);
+extern BOOL WriteFileWithRetry(int fd, const void* lpBuffer, DWORD nNumberOfBytesToWrite,
+	DWORD* lpNumberOfBytesWritten, DWORD nNumRetries);
+extern int CreatePreallocatedFile(const char* path, int flags, mode_t mode, int64_t size);
 extern enum ArchType MachineToArch(WORD machine);
 
 /* Custom application errors */

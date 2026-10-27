@@ -17,10 +17,12 @@
 * along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include <windows.h>
-#include <intrin.h>
-
 #pragma once
+
+#include <stdint.h>
+#include <stdlib.h>
+
+#include "compat.h"
 
 #ifndef MIN
 #define MIN(a,b) (((a) < (b)) ? (a) : (b))
@@ -44,31 +46,12 @@
  * We account for these built-in calls doing nothing if the
  * line has already been fetched, or if the address is invalid.
  */
-#if defined(__GNUC__) || defined(__clang__)
 #define PREFETCH64(m) do { __builtin_prefetch((m), 0, 0); __builtin_prefetch((m) + 32, 0, 0); } while(0)
-#elif defined(_MSC_VER)
-#if defined(_M_IX86) || defined (_M_X64)
-#define PREFETCH64(m) do { _m_prefetch((void*)(m)); _m_prefetch((void*)((m) + 32)); } while(0)
-#else
-// _m_prefetch() doesn't seem to exist for MSVC/ARM
-#define PREFETCH64(m)
-#endif
-#endif
 
 /* Read/write with endianness swap */
-#if defined (_MSC_VER) && (_MSC_VER >= 1300)
-#include <stdlib.h>
-#pragma intrinsic(_byteswap_ushort)
-#pragma intrinsic(_byteswap_ulong)
-#pragma intrinsic(_byteswap_uint64)
-#define bswap_uint64 _byteswap_uint64
-#define bswap_uint32 _byteswap_ulong
-#define bswap_uint16 _byteswap_ushort
-#elif defined (__GNUC__) && ((__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 3)))
 #define bswap_uint64 __builtin_bswap64
 #define bswap_uint32 __builtin_bswap32
 #define bswap_uint16 __builtin_bswap16
-#endif
 #define read_swap16(p) bswap_uint16(*(const uint16_t*)(const uint8_t*)(p))
 #define read_swap32(p) bswap_uint32(*(const uint32_t*)(const uint8_t*)(p))
 #define read_swap64(p) bswap_uint64(*(const uint64_t*)(const uint8_t*)(p))
@@ -160,46 +143,3 @@ static __inline uint16_t remap16(uint16_t src, uint16_t* map, const BOOL reverse
 	}
 	return r;
 }
-
-/* Why oh why does Microsoft have to make everybody suffer with their braindead use of Unicode? */
-#define _RT_ICON			MAKEINTRESOURCEA(3)
-#define _RT_DIALOG			MAKEINTRESOURCEA(5)
-#define _RT_RCDATA			MAKEINTRESOURCEA(10)
-#define _RT_GROUP_ICON		MAKEINTRESOURCEA((ULONG_PTR)(MAKEINTRESOURCEA(3) + 11))
-
-/* MinGW doesn't know these */
-#ifndef WM_CLIENTSHUTDOWN
-#define WM_CLIENTSHUTDOWN                       0x3B
-#endif
-#ifndef WM_COPYGLOBALDATA
-#define WM_COPYGLOBALDATA                       0x49
-#endif
-#ifndef INTERNET_OPTION_ENABLE_HTTP_PROTOCOL
-#define INTERNET_OPTION_ENABLE_HTTP_PROTOCOL    148
-#endif
-#ifndef INTERNET_OPTION_HTTP_DECODING
-#define INTERNET_OPTION_HTTP_DECODING           65
-#endif
-#ifndef HTTP_PROTOCOL_FLAG_HTTP2
-#define HTTP_PROTOCOL_FLAG_HTTP2                2
-#endif
-#ifndef ERROR_OFFSET_ALIGNMENT_VIOLATION
-#define ERROR_OFFSET_ALIGNMENT_VIOLATION        327
-#endif
-
-/* RISC-V and LoongArch are still bleeding edge */
-#ifndef IMAGE_FILE_MACHINE_RISCV32
-#define IMAGE_FILE_MACHINE_RISCV32 0x5032
-#endif
-#ifndef IMAGE_FILE_MACHINE_RISCV64
-#define IMAGE_FILE_MACHINE_RISCV64 0x5064
-#endif
-#ifndef IMAGE_FILE_MACHINE_RISCV128
-#define IMAGE_FILE_MACHINE_RISCV128 0x5128
-#endif
-#ifndef IMAGE_FILE_MACHINE_LOONGARCH32
-#define IMAGE_FILE_MACHINE_LOONGARCH32 0x6232
-#endif
-#ifndef IMAGE_FILE_MACHINE_LOONGARCH64
-#define IMAGE_FILE_MACHINE_LOONGARCH64 0x6264
-#endif

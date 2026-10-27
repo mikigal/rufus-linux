@@ -247,7 +247,7 @@ static cregex_program_instr_t *compile_context(regex_compile_context *context,
 /* Compile a parsed pattern (using a previously allocated program with at least
  * estimate_instructions(root) instructions).
  */
-#if defined __GNUC__
+#if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdangling-pointer"
 #endif
@@ -290,7 +290,7 @@ static cregex_program_t *compile_node_with_program(const cregex_node_t *root,
 
     return program;
 }
-#if defined __GNUC__
+#if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic pop
 #endif
 
