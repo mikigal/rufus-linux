@@ -47,7 +47,7 @@ Wayland, and tracks the progress of the port.
 | 1. Decouple the logic from the UI | **done** |
 | 2. Linux backend, helper, CLI | **done** (the NTFS, exFAT and UDF runs need their tools on the host) |
 | 3. Qt 6 GUI | **done** |
-| 4. Advanced features | in progress |
+| 4. Advanced features | **done** (T3 under Secure Boot with UEFI:NTFS needs mkntfs or mkfs.exfat on the host) |
 | 5. Windows To Go | not started |
 | 6. Distribution | not started |
 
@@ -461,7 +461,10 @@ Done:
   in the VM, and checks it. e2e_cli also cycles a port and writes to the loop device
   of a file.
 
-**Stage 4 (in progress)**
+**Stage 4 (done)**
+
+Persistence, the bad blocks check, the UEFI media validation and MS-DOS with its locale
+came with stage 2 (and their GUI with stage 3); the rest is here.
 
 - **Downloads** (`core/download.c`, the port of `net.c` without the update check): libcurl
   with the options of the WinInet session of upstream (user agent, timeouts, no
@@ -560,6 +563,15 @@ Done:
     does the same with a server in Python (`menu`, a test hook for the menu of SELECT),
     down to the download and the scan of the ISO. The flow was also checked against
     the Microsoft site (`rufus-cli download 1 1 1 Polish` gives the x64 and ARM64 links).
+- **T3 under Secure Boot** (`tests/e2e/harness/secureboot.py`): the Secure Boot code of
+  OVMF, with a copy of its blank variable store where the harness enrolls the keys itself
+  (as virt-fw-vars does, which distributions do not all package): a PK and KEK of the
+  tests (made by openssl), and a db of the Microsoft UEFI CA 2011, taken from the
+  signature of the UEFI:NTFS that Rufus embeds. `test_media.py` writes an ISO whose boot
+  loader is the one of UEFI:NTFS (signed by Microsoft), which starts and reports that
+  Secure Boot is enabled, and the GRUB ISO, which the firmware refuses. With mkntfs (or
+  mkfs.exfat), a Windows-like ISO on NTFS goes through UEFI:NTFS and its NTFS driver,
+  which are then refused the unsigned boot loader of the media.
 
 ---
 
@@ -974,7 +986,7 @@ and without physical hardware**. The only manual steps are installing the tools 
 | T0 | unit tests: libraries, rules, layout planner, MBR/GPT writer, parsers | none | host | `ctest` |
 | T1 | component tests on **image files**: boot records, DD writes, VHD, bled, ext2fs | none | host | `ctest` |
 | T2 | **end-to-end write** to an emulated USB stick, as root | root **inside a VM** | QEMU/KVM VM booted from the host kernel (virtme-ng) | `ctest -L e2e` |
-| T3 | **boot verification** of the written stick | none | QEMU with SeaBIOS (BIOS) and OVMF (UEFI, later UEFI + Secure Boot) | `ctest -L e2e` |
+| T3 | **boot verification** of the written stick | none | QEMU with SeaBIOS (BIOS) and OVMF (UEFI, and UEFI + Secure Boot) | `ctest -L e2e` |
 | T4 | **GUI end-to-end** under a headless Wayland compositor | none (root in the VM for the full stack) | `kwin_wayland --virtual` (sway headless, optional) | `ctest -L gui` |
 | T5 | real ISOs (Ubuntu, Fedora, Debian, Arch, Windows 11, ...) | as T2/T3 | as T2/T3 | `ctest -L slow`, nightly, opt-in download |
 | T6 | real hardware with a dedicated stick, identified by USB serial | root | host | opt-in only |
@@ -1133,12 +1145,13 @@ Size: S / M / L / XL (relative effort). Each stage ends with a working, testable
   languages with RTL, and every cheat code is reachable. (sway was dropped from this:
   the port targets KDE Plasma.)
 
-### Stage 4: Advanced features (L)
+### Stage 4: Advanced features (L), done
 
-- WUE (hivex, locale/TZ/keyboard mapping), persistence, bad blocks UI, UEFI validation,
-  and Secure Boot checks (with T3 under OVMF + Secure Boot).
-- MS-DOS + DOS locale, signed syslinux/grub downloads, DBX/SBAT updates.
+- WUE (hivex, locale/TZ/keyboard mapping), and T3 under OVMF + Secure Boot.
+- Signed syslinux/grub downloads, DBX/SBAT updates.
 - VHD/VHDX, optical disc → ISO, and Fido in C with a Qt dialog.
+- (Persistence, the bad blocks check, the UEFI validation and MS-DOS with its locale came
+  with stage 2.)
 
 ### Stage 5: Windows To Go (L, optional)
 

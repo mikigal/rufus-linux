@@ -192,6 +192,23 @@ def build_windows11_iso(out_dir: str) -> str:
     return path
 
 
+def build_signed_loader_iso(out_dir: str) -> str:
+    """An ISO whose UEFI boot loader is signed by Microsoft: the loader of UEFI:NTFS, from the
+    image that Rufus embeds, for Secure Boot. It reports the Secure Boot status, then looks
+    for an NTFS or exFAT partition, which there is not."""
+    path = os.path.join(out_dir, "signed-loader.iso")
+    if os.path.exists(path):
+        return path
+    tree = os.path.join(out_dir, "signed-tree")
+    os.makedirs(os.path.join(tree, "efi", "boot"), exist_ok=True)
+    image = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "res", "uefi", "uefi-ntfs.img")
+    subprocess.run(["mcopy", "-o", "-i", image, "::/efi/boot/bootx64.efi", os.path.join(tree, "efi", "boot")],
+                   check=True, capture_output=True)
+    subprocess.run(["xorriso", "-as", "mkisofs", "-o", path, "-V", "SIGNED_LOADER", "-J", "-R", tree],
+                   check=True, capture_output=True)
+    return path
+
+
 def blank_stick(path: str, size: int = 256 * 1024 * 1024) -> str:
     with open(path, "wb") as f:
         f.truncate(size)

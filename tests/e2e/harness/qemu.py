@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 import time
 
+from . import secureboot
 from .qmp import QMP, QMPError
 
 # (code, vars) firmware pairs, as packaged by Arch, Debian/Ubuntu and Fedora
@@ -67,10 +68,14 @@ def host_kernel() -> str | None:
 class VM:
     """A QEMU instance. Use as a context manager, or call start()/stop()."""
 
-    def __init__(self, firmware: str = "bios", memory: int = 1024, workdir: str | None = None):
-        if firmware not in ("bios", "uefi"):
+    def __init__(self, firmware: str = "bios", memory: int = 1024, workdir: str | None = None,
+                 secure_boot_db: list[bytes] | None = None):
+        """firmware is "bios" (SeaBIOS), "uefi" (OVMF) or "uefi-sb" (OVMF enforcing Secure Boot, with
+        the certificates of secure_boot_db in its db, see secureboot.py)."""
+        if firmware not in ("bios", "uefi", "uefi-sb"):
             raise ValueError(f"unsupported firmware: {firmware}")
         self.firmware = firmware
+        self.secure_boot_db = secure_boot_db or []
         self.memory = memory
         self.own_workdir = workdir is None
         self.workdir = workdir or tempfile.mkdtemp(prefix="rufus-e2e-vm-")
@@ -128,7 +133,9 @@ class VM:
     # --- Lifecycle ------------------------------------------------------
 
     def command_line(self) -> list[str]:
-        cmd = [qemu_binary(), "-machine", "q35", "-m", str(self.memory),
+        # The Secure Boot code of OVMF needs SMM, with secure flash
+        machine = "q35,smm=on" if self.firmware == "uefi-sb" else "q35"
+        cmd = [qemu_binary(), "-machine", machine, "-m", str(self.memory),
                "-nodefaults", "-vga", "std", "-display", "none", "-nic", "none",
                "-no-reboot", "-serial", f"file:{self.serial_log}",
                "-qmp", f"unix:{self.qmp_path},server=on,wait=off"]
@@ -143,6 +150,15 @@ class VM:
             vars_copy = os.path.join(self.workdir, "OVMF_VARS.fd")
             shutil.copyfile(firmware[1], vars_copy)
             cmd += ["-drive", f"if=pflash,format=raw,unit=0,readonly=on,file={firmware[0]}",
+                    "-drive", f"if=pflash,format=raw,unit=1,file={vars_copy}"]
+        elif self.firmware == "uefi-sb":
+            firmware = secureboot.ovmf_secboot()
+            if firmware is None:
+                raise FileNotFoundError("OVMF Secure Boot firmware not found (set RUFUS_E2E_OVMF_SECBOOT_CODE/VARS)")
+            vars_copy = os.path.join(self.workdir, "OVMF_VARS.fd")
+            secureboot.enroll(firmware[1], vars_copy, self.secure_boot_db, self.workdir)
+            cmd += ["-global", "driver=cfi.pflash01,property=secure,value=on",
+                    "-drive", f"if=pflash,format=raw,unit=0,readonly=on,file={firmware[0]}",
                     "-drive", f"if=pflash,format=raw,unit=1,file={vars_copy}"]
         return cmd + self.args
 

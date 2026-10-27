@@ -14,16 +14,20 @@ UEFI:NTFS), FreeDOS and persistence. Run with:
 """
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import unittest
 import zipfile
 
-from harness import media, qemu, runner
+from harness import media, qemu, runner, secureboot
 from test_cli import SCRIPT
 
 CLI = os.environ.get("RUFUS_CLI")
+# The Secure Boot status of UEFI:NTFS, with the colours of the console in between
+ENABLED = r"Secure Boot status: (?:\x1b\[[0-9;]*m)*Enabled"
+UEFI_NTFS_IMG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "res", "uefi", "uefi-ntfs.img")
 HELPER = os.environ.get("RUFUS_HELPER")
 
 WORK = None
@@ -264,6 +268,54 @@ class StageTwoMedia(unittest.TestCase):
         # UEFI:NTFS loads the NTFS driver, then the boot loader of the NTFS partition
         text = self._boot(stick, "uefi")
         self.assertRegex(text, r"RUFUS-E2E-CMDLINE: .*boot=windows-like")
+
+    # T3 with Secure Boot: OVMF enforcing it, with a db of the Microsoft UEFI CA 2011, which signed
+    # UEFI:NTFS and its NTFS driver (and which signs shim)
+    def _secure_boot_vm(self) -> qemu.VM:
+        if secureboot.ovmf_secboot() is None:
+            self.skipTest("OVMF with Secure Boot is not installed")
+        loader = os.path.join(WORK, "uefi-ntfs-bootx64.efi")
+        subprocess.run(["mcopy", "-o", "-i", UEFI_NTFS_IMG, "::/efi/boot/bootx64.efi", loader], check=True)
+        db = [c for c in secureboot.pe_certificates(loader)
+              if b"Microsoft Corporation UEFI CA 2011" in c and b"Third Party Marketplace Root" in c]
+        self.assertEqual(len(db), 1, "the UEFI CA 2011 is not in the signature of UEFI:NTFS")
+        return qemu.VM("uefi-sb", secure_boot_db=db)
+
+    def _secure_boot(self, stick: str, pattern: str) -> str:
+        vm = self._secure_boot_vm()
+        vm.add_usb_stick(stick)
+        with vm:
+            text = vm.wait_for("serial", pattern, timeout=120)
+            serial = vm.serial()
+        self.assertIsNotNone(text, serial[-3000:])
+        self.assertNotIn("RUFUS-E2E-DONE", serial)
+        # Without the colours of the console of the firmware
+        return re.sub(r"\x1b\[[0-9;=]*[a-zA-Z]", "", serial)
+
+    def test_secure_boot(self):
+        self._need("mcopy", "xorriso", "grub-mkrescue", "mformat")
+        # A boot loader signed by Microsoft, written by Rufus, starts (the loader of UEFI:NTFS reports the
+        # status of Secure Boot)
+        iso = self._medium("signed_loader_iso", "xorriso")
+        stick, _ = self._write("signed-sb", f'--image "{iso}" --partition gpt --target uefi')
+        serial = self._secure_boot(stick, ENABLED)
+        self.assertIn("UEFI:NTFS v", serial)
+        # A GRUB that no one signed does not
+        iso = self._medium("grub_iso", "grub-mkrescue", "xorriso", "mformat")
+        stick, _ = self._write("grub-sb", f'--image "{iso}" --partition gpt --target uefi')
+        self._secure_boot(stick, r"Access Denied")
+
+    # UEFI:NTFS under Secure Boot: it starts, finds the NTFS (or exFAT) partition, and is then refused the
+    # boot loader of the test media, which no one signed
+    def test_secure_boot_uefi_ntfs(self):
+        fs = "NTFS" if not media.missing_tools("mkntfs") else "exFAT" if not media.missing_tools("mkfs.exfat") else None
+        if fs is None:
+            self.skipTest("missing tools: mkntfs or mkfs.exfat")
+        iso = self._medium("windows_like_iso", "grub-mkstandalone", "xorriso")
+        stick, _ = self._write("uefi-ntfs-sb", f'--image "{iso}" --partition gpt --target uefi --fs {fs}')
+        serial = self._secure_boot(stick, r"Load failure: \[\d+\] Security Violation")
+        self.assertRegex(serial, ENABLED)
+        self.assertRegex(serial, rf"Found {fs} target partition")
 
     def test_freedos(self):
         # NB: mdir does not list hidden files
