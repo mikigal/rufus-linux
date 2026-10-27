@@ -845,6 +845,13 @@ Notes:
 - **Self-update and update check**: dropped (decision of 2026-10-27). The packages of
   the distribution update Rufus, and nothing contacts `rufus.ie` to check for a new
   version.
+- **What the GUI gets when it starts**, without asking, as the AppStore version of
+  upstream does (decision of 2026-10-27): the Secure Boot revocation data
+  (`sbat_level.txt`, `sb_active.txt`, `sb_revoked.txt`) and `Fido.ver` from `rufus.ie`,
+  and whether GitHub has the script of Fido; the DBX updates of GitHub once a day
+  (downloaded only once the user agrees). The requests carry no identifier, only the
+  version of Rufus in the user agent. Upstream (outside of the AppStore) only makes
+  them when the user enabled the update check.
 - **Fido**: reimplemented in C with a Qt dialog (it does not work under `pwsh`: it has a
   WPF GUI and uses Windows named pipes). The script is still downloaded and checked, for
   its data (versions, releases, editions and the IDs of the download site), so that a
