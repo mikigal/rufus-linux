@@ -176,15 +176,26 @@ char* MountVolume(const char* devnode, const char* fs_type, BOOL read_only)
 	// The names of the files of the image are UTF-8, whatever the defaults of the kernel are
 	const char* data = (strcmp(fs_type, "vfat") == 0) ? "utf8,shortname=mixed" :
 		((strcmp(fs_type, "exfat") == 0) || (strcmp(fs_type, "ntfs3") == 0)) ? "iocharset=utf8" : NULL;
+	int i;
 
 	if ((mkdir_p(RUFUS_RUN_DIR, 0700) != 0) || (mkdtemp(dir) == NULL)) {
 		uprintf("Could not create a mount point in '%s': %s", RUFUS_RUN_DIR, WindowsErrorString());
 		return NULL;
 	}
-	if (mount(devnode, dir, fs_type, MS_NOSUID | MS_NODEV | MS_NOEXEC | (read_only ? MS_RDONLY : 0), data) != 0) {
-		uprintf("Could not mount %s (%s) on '%s': %s", devnode, fs_type, dir, WindowsErrorString());
-		rmdir(dir);
-		return NULL;
+	/*
+	 * Closing a drive that was open for writing makes udev read its partition table again
+	 * (the "watch" of 60-block.rules), which removes its partitions and adds them back:
+	 * the partition may be missing for a moment, after the udev queue was found empty.
+	 */
+	for (i = 0; mount(devnode, dir, fs_type, MS_NOSUID | MS_NODEV | MS_NOEXEC | (read_only ? MS_RDONLY : 0), data) != 0;
+		i++) {
+		if (((errno != ENOENT) && (errno != ENXIO)) || (i >= DRIVE_ACCESS_RETRIES / 10)) {
+			uprintf("Could not mount %s (%s) on '%s': %s", devnode, fs_type, dir, WindowsErrorString());
+			rmdir(dir);
+			return NULL;
+		}
+		usleep(DRIVE_ACCESS_TIMEOUT * 1000 / DRIVE_ACCESS_RETRIES);
+		WaitForUdev(DRIVE_ACCESS_TIMEOUT);
 	}
 	uuprintf("Mounted %s on '%s'", devnode, dir);
 	return strdup(dir);
