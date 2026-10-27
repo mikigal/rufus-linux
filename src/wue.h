@@ -39,5 +39,5 @@ BOOL PopulateWindowsVersion(void);
 // wue_apply.c: on the target drive, mounted at mount_point
 BOOL ApplyWindowsCustomization(const char* mount_point, int flags);
 BOOL SetupWinPE(const char* mount_point);
-// Not ported yet (stage 5)
+// Not ported (Windows To Go, see LINUX_PORT.md §5.6)
 BOOL SetupWinToGo(DWORD DriveIndex, const char* drive_name, BOOL use_esp);

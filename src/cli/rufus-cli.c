@@ -84,6 +84,7 @@ static void usage(FILE* fd)
 		"      --slow             Full format (zero the volume) rather than a quick one\n"
 		"      --no-extended-label  No autorun.inf label and icon\n"
 		"      --old-bios-fixes   Add fixes for old BIOSes\n"
+		"      --dual             Windows images boot with BIOS and UEFI (Alt-E in the GUI)\n"
 		"      --bad-blocks PASSES  Check for bad blocks first: 1, 2, slc, mlc or tlc\n"
 		"      --iso, --dd        How to write an ISOHybrid image (asked otherwise)\n"
 		"      --yes              Answer the other questions (and the confirmation) with\n"
@@ -415,6 +416,7 @@ static int cmd_write(int argc, char** argv)
 		{ "slow", no_argument, NULL, 's' },
 		{ "no-extended-label", no_argument, NULL, 'E' },
 		{ "old-bios-fixes", no_argument, NULL, 'O' },
+		{ "dual", no_argument, NULL, 'U' },
 		{ "bad-blocks", required_argument, NULL, 'B' },
 		{ "iso", no_argument, NULL, 'I' },
 		{ "dd", no_argument, NULL, 'D' },
@@ -443,7 +445,7 @@ static int cmd_write(int argc, char** argv)
 	int bb_log_fd = -1, unattend_fd = -1;
 	int option_index = 0;
 	long cluster = -1, persistence = -1;
-	BOOL slow = FALSE, no_extended_label = FALSE, old_bios_fixes = FALSE, ret = FALSE;
+	BOOL slow = FALSE, no_extended_label = FALSE, old_bios_fixes = FALSE, dual = FALSE, ret = FALSE;
 	char bb_log_path[MAX_PATH] = "", date[32], *end;
 	rufus_device_t* dev = NULL;
 	rules_drive_t drive;
@@ -488,6 +490,7 @@ static int cmd_write(int argc, char** argv)
 		case 's': slow = TRUE; break;
 		case 'E': no_extended_label = TRUE; break;
 		case 'O': old_bios_fixes = TRUE; break;
+		case 'U': dual = TRUE; break;
 		case 'B':
 			passes = find_name(optarg, passes_names, passes_values, ARRAYSIZE(passes_names));
 			if (passes < 0) goto bad_value;
@@ -525,6 +528,7 @@ static int cmd_write(int argc, char** argv)
 	rules_init(&m);
 	m.advanced_mode_device = TRUE;
 	m.advanced_mode_format = TRUE;
+	m.allow_dual_uefi_bios = dual;
 	static_strcpy(m.no_label_msg, lmprintf(MSG_207));
 	GetRulesDrive(dev, &drive);
 	rules_on_startup(&m, &drive);

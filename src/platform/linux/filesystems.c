@@ -34,6 +34,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include "rufus.h"
 #include "options.h"
@@ -41,6 +42,10 @@
 #include "partition.h"
 #include "resource.h"
 #include "localization.h"
+#include "disk.h"
+
+// How many times a mkfs tool runs, when its volume went away while it ran
+#define MKFS_RETRIES                3
 
 extern const char* FileSystemLabel[FS_MAX];
 
@@ -80,12 +85,48 @@ out:
 	return r;
 }
 
-static BOOL RunMkfs(const char* const* argv, const char* fs_name)
+/*
+ * Wait for the device of a volume to be there: udev reads the partition table of
+ * a drive that was open for writing again when it gets closed (the "watch" of
+ * 60-block.rules), which removes its partitions and adds them back, at a moment
+ * that WaitForUdev() can't tell (as for MountVolume()).
+ */
+static void WaitForVolume(const char* devnode, struct stat* st)
 {
+	int i, fd;
+
+	for (i = 0; i < DRIVE_ACCESS_RETRIES / 10; i++) {
+		fd = open(devnode, O_RDONLY | O_CLOEXEC);
+		if (fd >= 0) {
+			close(fd);
+			break;
+		}
+		if ((errno != ENOENT) && (errno != ENXIO))
+			break;
+		usleep(DRIVE_ACCESS_TIMEOUT * 1000 / DRIVE_ACCESS_RETRIES);
+		WaitForUdev(DRIVE_ACCESS_TIMEOUT);
+	}
+	if ((st != NULL) && (stat(devnode, st) != 0))
+		memset(st, 0, sizeof(*st));
+}
+
+static BOOL RunMkfs(const char* const* argv, const char* devnode, const char* fs_name)
+{
+	struct stat before, after;
 	DWORD r;
+	int i;
 
 	uprintf("Formatting to %s (using %s)", fs_name, argv[0]);
-	r = RunCommand(argv, NULL, TRUE);
+	for (i = 1; ; i++) {
+		WaitForVolume(devnode, &before);
+		r = RunCommand(argv, NULL, TRUE);
+		if ((r == 0) || (r == ERROR_CANCELLED) || IS_ERROR(ErrorStatus) || (i >= MKFS_RETRIES))
+			break;
+		// The volume went away while the tool ran (its device node got created again): try again
+		if ((stat(devnode, &after) == 0) && (after.st_ino == before.st_ino) && (after.st_ctime == before.st_ctime))
+			break;
+		uprintf("%s went away while %s ran, as udev read the partition table again: retrying", devnode, argv[0]);
+	}
 	if (r != 0) {
 		uprintf("%s failed with error %u", argv[0], r);
 		if (!IS_ERROR(ErrorStatus))
@@ -110,6 +151,7 @@ BOOL FormatPartition(const char* devnode, uint64_t offset, uint64_t size, uint32
 		return FALSE;
 	}
 	fs_name = FileSystemLabel[fs_type];
+	WaitForVolume(devnode, NULL);
 	if ((fs_type == FS_FAT32) && ((opts.disk_size > LARGE_FAT32_SIZE) || (opts.force_large_fat32) || (flags & FP_LARGE_FAT32))) {
 		fd = open(devnode, O_RDWR | O_CLOEXEC);
 		if (fd < 0) {
@@ -217,7 +259,7 @@ BOOL FormatPartition(const char* devnode, uint64_t offset, uint64_t size, uint32
 	}
 	argv[i++] = devnode;
 	argv[i] = NULL;
-	if (!RunMkfs(argv, fs_name))
+	if (!RunMkfs(argv, devnode, fs_name))
 		return FALSE;
 	uprintf("Format completed.");
 	return TRUE;

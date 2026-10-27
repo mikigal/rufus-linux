@@ -260,9 +260,10 @@ class StageTwoMedia(unittest.TestCase):
         self.assertEqual(len(saved), (len(source) + 2047) // 2048 * 2048)
         self.assertTrue(saved[:len(source)] == source, "the saved ISO differs from the disc")
 
+    # NB: As upstream, a Windows image on MBR only gets UEFI:NTFS in the dual BIOS+UEFI mode (Alt-E)
     def test_windows_like_mbr_uefi_ntfs(self):
         iso = self._medium("windows_like_iso", "grub-mkstandalone", "xorriso", "mkntfs")
-        stick, _ = self._write("windows-ntfs", f'--image "{iso}" --partition mbr --fs NTFS',
+        stick, _ = self._write("windows-ntfs", f'--image "{iso}" --partition mbr --dual --fs NTFS',
                                'blkid -p -o value -s TYPE "${dev}1" | grep -qx ntfs || exit 1\n'
                                'blkid -p -o value -s LABEL "${dev}2" | grep -qx RUFUS_BOOT || exit 1\n')
         # UEFI:NTFS loads the NTFS driver, then the boot loader of the NTFS partition

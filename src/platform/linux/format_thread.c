@@ -78,15 +78,6 @@ static const char* MountType(int fs_type)
 	}
 }
 
-// Report a step that is not ported yet as an error, rather than silently producing a drive that doesn't work
-static BOOL NotSupportedYet(const char* what, DWORD error)
-{
-	uprintf("%s is not supported on Linux yet", what);
-	if (!IS_ERROR(ErrorStatus))
-		ErrorStatus = RUFUS_ERROR(error);
-	return FALSE;
-}
-
 // The local time, in the format of the reports of upstream
 static void LocalTime(char* str, size_t len, const char* format)
 {
@@ -209,8 +200,10 @@ BOOL FormatDrive(const format_target_t* target)
 	large_drive = (opts.disk_size > (1*TB));
 	if (large_drive)
 		uprintf("Notice: Large drive detected (may produce short writes)");
+	// NB: Windows To Go is not ported (the main window does not offer it)
 	if (windows_to_go) {
-		NotSupportedYet("Windows To Go", ERROR_NOT_SUPPORTED);
+		uprintf("Windows To Go is not supported on Linux");
+		ErrorStatus = RUFUS_ERROR(ERROR_NOT_SUPPORTED);
 		goto out;
 	}
 	InitProgress((opts.boot_type == BT_IMAGE) && opts.write_as_image);

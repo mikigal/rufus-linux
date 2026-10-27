@@ -211,7 +211,7 @@ MainWindow::MainWindow(LogWindow* log, QWidget* parent) : QMainWindow(parent), l
 	m_.force_large_fat32 = force_large_fat32;
 	m_.preselected_fs = preselected_fs;
 	m_.selected_fs = preselected_fs;
-	// Windows To Go needs stage 5, and there is no mkfs for ReFS
+	// Windows To Go is not ported (see LINUX_PORT.md §5.6), and there is no mkfs for ReFS
 	m_.wintogo_available = FALSE;
 	m_.refs_available = FALSE;
 	filter_.enable_HDDs = enable_HDDs;

@@ -32,10 +32,9 @@ Wayland, and tracks the progress of the port.
   - This repository will never build for Windows.
 - **Feature parity** is achievable for almost everything.
   - Infeasible: ReFS (no `mkfs` on Linux), FFU (needs `dism`), post-write Chkdsk.
-  - Expensive:
-    - Windows To Go (needs a `bcdboot` replacement);
-    - "Download ISO" (Fido is a PowerShell script with a WPF GUI and must be
-      reimplemented).
+  - Dropped: Windows To Go (it needs a `bcdboot` replacement; decision of 2026-10-27).
+  - Expensive: "Download ISO" (Fido is a PowerShell script with a WPF GUI and must be
+    reimplemented), done in stage 4.
 
 ---
 
@@ -48,7 +47,7 @@ Wayland, and tracks the progress of the port.
 | 2. Linux backend, helper, CLI | **done** (the NTFS, exFAT and UDF runs need their tools on the host) |
 | 3. Qt 6 GUI | **done** |
 | 4. Advanced features | **done** (T3 under Secure Boot with UEFI:NTFS needs mkntfs or mkfs.exfat on the host) |
-| 5. Windows To Go | not started |
+| 5. Windows To Go | **dropped** (decision of 2026-10-27) |
 | 6. Distribution | not started |
 
 **Stage 0 (done)**
@@ -148,7 +147,7 @@ Wayland, and tracks the progress of the port.
   - The time zone and the regional options of this system get duplicated (stage 4,
     §5.6).
   - WinPE and the customization of `boot.wim` are in `wue_apply.c` (stage 4); Windows
-    To Go waits for stage 5.
+    To Go is not ported (stage 5 was dropped).
   - `tests/test_wue.c` checks them on WIMs that wimlib creates with the properties of
     Windows images, with scripted answers to the questions.
 - **Image scan** (`core/image_scan.c`): `ImageScanThread()`, with `StartImageScan()` for
@@ -294,8 +293,13 @@ Done:
   single threaded) for the ISO extraction, Grub4DOS, KolibriOS, Windows 7 EFI setup,
   `md5sum.txt`, extended label (`core/autorun.c`) and extra archive; unmount.
   `StartFormat()` runs it in a thread, which reports `UM_FORMAT_COMPLETED`.
-  - Not ported yet, and refused rather than silently skipped: Windows To Go. WinPE and
-    the Windows User Experience came with stage 4.
+  - Not ported, and refused rather than silently skipped: Windows To Go (which the GUI
+    does not offer). WinPE and the Windows User Experience came with stage 4.
+  - `FormatPartition()` waits for the device of the volume, and runs the mkfs tool again
+    if that device got created again while it ran: udev reads the partition table of a
+    drive that was open for writing again when it gets closed, at a moment that
+    `WaitForUdev()` can't tell (`mkfs.fat` once found no `/dev/loop0p1`, with all the
+    tests running at once).
   - `FormatPartition()` refuses FAT32 volumes with fewer than 65525 clusters, as
     FormatEx does: mkfs.fat creates them, and UEFI firmwares then take them for FAT16.
   - `tests/e2e/test_format.py` runs the pipeline in the VM (`tests/test_format_vm.c`),
@@ -528,6 +532,10 @@ came with stage 2 (and their GUI with stage 3); the rest is here.
     only offered for a drive with a file system.
   - Alt-O: the optical drive with a data disc, which the front end reads itself.
   - `rufus-cli save <device> <file>` and `rufus-cli save-optical <file>`.
+  - `rufus-cli write --dual` is Alt-E (the dual BIOS+UEFI mode of Windows images), which
+    the MBR media with UEFI:NTFS of `test_media.py` need, as upstream only adds UEFI:NTFS
+    to a Windows image on MBR in that mode. That test had never run (no mkntfs on the
+    development machine, and no e2e tests in the CI).
   - `tests/test_vdisk.c` reads the VHD and VHDX images of `qemu-img` (fixed, dynamic,
     small blocks) and checks the images of `VdiskSave()` with it; `tests/test_write.c`
     writes dynamic VHDs and VHDX to drives. In the VM, `test_media.py` saves a written
@@ -821,13 +829,10 @@ Notes:
   - `LANG` + XKB layout → BCP-47/KLID.
 - **TPM/Secure Boot/RAM bypass**: **hivex** replaces `RegLoadKey`. The existing unattend
   `RunSynchronous reg add` fallback stays.
-- **Windows To Go**:
-  - wimlib's NTFS-3G apply mode;
-  - ESP population;
-  - a **BCD hive built from `BCD-Template` with hivex**;
-  - `SanPolicy` set in the SYSTEM hive.
-
-  Feasible, but the hardest part of the port.
+- **Windows To Go**: dropped (decision of 2026-10-27). It would need wimlib's NTFS-3G
+  apply mode, the ESP, a BCD hive built from `BCD-Template` with hivex (for `bcdboot`),
+  and `SanPolicy` in the SYSTEM hive: the hardest part of the port, for a feature that
+  Microsoft has removed from Windows.
 
 ### 5.7 Network, signatures, updates, Fido
 
@@ -965,7 +970,7 @@ All of them are carried over (`rufus.c:3904-4280`, `cheatCode()` in
 | 38 languages, RTL, dark mode, cheat codes, drag & drop | ✅ | done (stage 3) |
 | Update check | ❌ | dropped: the packages of the distribution update Rufus |
 | Windows / UEFI Shell ISO download (Fido) | ✅ | the steps of Fido.ps1 in C (`core/fido.c`), with its signed data, and a Qt dialog |
-| Windows To Go | ⚠️ | NTFS-3G apply + BCD via hivex; high cost |
+| Windows To Go | ❌ | dropped: NTFS-3G apply + BCD via hivex, at a high cost |
 | NTFS Chkdsk after writing | ❌ | no equivalent |
 | ReFS | ❌ | no `mkfs.refs` |
 | FFU (save and write) | ❌ | needs `dism` |
@@ -1153,10 +1158,10 @@ Size: S / M / L / XL (relative effort). Each stage ends with a working, testable
 - (Persistence, the bad blocks check, the UEFI validation and MS-DOS with its locale came
   with stage 2.)
 
-### Stage 5: Windows To Go (L, optional)
+### Stage 5: Windows To Go (L, optional), dropped
 
 - NTFS-3G apply, ESP, BCD from the template via hivex, SanPolicy, and `unattend.xml` in
-  `Panther`.
+  `Panther`. Dropped on 2026-10-27 (see §5.6).
 
 ### Stage 6: Distribution (S)
 
@@ -1175,7 +1180,6 @@ Size: S / M / L / XL (relative effort). Each stage ends with a working, testable
 | Races with desktop automount (KDE Device Notifier, gvfs) | whole-disk `O_EXCL` + `UDISKS_IGNORE` rule + private mount namespace; covered by T2 |
 | NTFS: ntfs3 vs ntfs-3g, case sensitivity, file contiguity | ntfs3 by default; case-insensitive lookups in the code; T3 boot tests |
 | Fido breaks when Microsoft changes its site | follow upstream Fido; feature is optional |
-| Windows To Go: BCD format poorly documented | template from `BCD-Template` on the ISO; T3 tests; optional stage |
 | A fork called "Rufus" may confuse users and load upstream servers | clearly marked as unofficial, own update endpoint, possibly a mirror for syslinux/grub files |
 
 ---

@@ -27,7 +27,7 @@
  *
  * The registry keys of the SYSTEM hive of boot.wim get created with hivex
  * (RegLoadKey() upstream), when Rufus is built with it, or else through the
- * unattend.xml, as the fallback of upstream does. Windows To Go is stage 5.
+ * unattend.xml, as the fallback of upstream does. Windows To Go is not ported.
  */
 
 #include <assert.h>
@@ -307,8 +307,8 @@ BOOL ApplyWindowsCustomization(const char* mount_point, int flags)
 	uprintf("Applying Windows customization:");
 	PrintStatus(0, MSG_326);
 	if (flags & UNATTEND_WINDOWS_TO_GO) {
-		// TODO: Windows To Go (stage 5): copy unattend.xml to Windows\Panther
-		uprintf("Windows To Go is not supported on Linux yet");
+		// NB: Windows To Go is not ported (upstream copies unattend.xml to Windows\Panther)
+		uprintf("Windows To Go is not supported on Linux");
 		goto out;
 	}
 
