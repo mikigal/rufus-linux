@@ -246,6 +246,20 @@ Done:
     the disk of the build directory). `tests/test_disk_vm.c` runs as root in the VM
     (`tests/e2e/test_disk.py`, with a BOT and a UAS stick); it refuses to run outside of
     it, and only touches a QEMU stick.
+- **Partitioning** (`core/partition.c`):
+  - `PlanPartitions()` is the layout of `CreatePartition()`: the 1 MB (or cylinder, with
+    the old BIOS fixes) offset, the ESP and MSR first, persistence, ESP, UEFI:NTFS or BIOS
+    compatibility partitions at the end, the track and cluster alignments, and the MBR
+    types and GPT types, names and attributes. The 255 × 63 geometry that Windows gives
+    USB drives is used for the alignment, and the ESP always comes first (upstream needs
+    a fixed drive or Windows 10 1703 for that).
+  - `WritePartitionTable()` writes what `IOCTL_DISK_SET_DRIVE_LAYOUT_EX` writes: MBR
+    entries with CHS values, or a protective MBR and both GPTs (128 entries, random
+    GUIDs), after zeroing the start of each partition and writing the UEFI:NTFS image.
+    `ClearMBRGPT()` is the upstream one. Both work on any file descriptor.
+  - `tests/test_partition.c` checks the layouts against values computed separately, and
+    the tables on image files with `sfdisk` (512 and 4096 byte sectors). The VM test
+    partitions the stick, and checks what the kernel and udev see.
 
 ---
 

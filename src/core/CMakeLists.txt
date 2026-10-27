@@ -9,6 +9,7 @@ add_library(rufus_core STATIC
 	globals.c
 	hdd.c
 	image_scan.c
+	partition.c
 	options.c
 	progress.c
 	resource.c

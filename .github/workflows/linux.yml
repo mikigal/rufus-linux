@@ -56,7 +56,7 @@ jobs:
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential cmake ninja-build \
             pkg-config e2fsprogs libext2fs-dev comerr-dev dosfstools xorriso libntfs-3g-dev \
-            libssl-dev mtools qemu-utils libudev-dev
+            libssl-dev mtools qemu-utils libudev-dev fdisk
 
       - uses: actions/checkout@v5
 

@@ -43,6 +43,8 @@
 #include "ui_iface.h"
 #include "devices.h"
 #include "disk.h"
+#include "options.h"
+#include "partition.h"
 #include "test.h"
 
 #define QEMU_VID                    0x46f4
@@ -224,6 +226,8 @@ static void test_holders(void)
 	StrArray list;
 	drive_t drive;
 
+	// Closing a drive that was open for writing makes udev reread its partitions
+	WaitForUdev(5000);
 	partition(2, p2, sizeof(p2));
 	snprintf(cmd, sizeof(cmd), "echo \"0 $(blockdev --getsz %s) linear %s 0\" | dmsetup create " TEST_DM, p2, p2);
 	if (!sh(cmd)) {
@@ -356,6 +360,65 @@ static void test_private_mounts(void)
 	close(done[1]);
 }
 
+// A number from sysfs
+static uint64_t sysfs_u64(const char* path)
+{
+	unsigned long long v = 0;
+	FILE* fd = fopen(path, "r");
+
+	if (fd != NULL) {
+		if (fscanf(fd, "%llu", &v) != 1)
+			v = 0;
+		fclose(fd);
+	}
+	return v;
+}
+
+/* A layout of PlanPartitions(), as the kernel and udev see it once written */
+static void test_partitioning(void)
+{
+	partition_layout_t layout;
+	char devnode[32], path[128];
+	struct udev* udev;
+	struct udev_device* dev;
+	struct stat st;
+	drive_t drive;
+	int i;
+
+	ResetOptions(&opts);
+	opts.cluster_size = 4096;
+	opts.boot_type = BT_IMAGE;
+	opts.persistence_size = 32 * MB;
+	ErrorStatus = 0;
+	CHECK(OpenDrive(stick.devnode, stick.diskseq, DRIVE_OPEN_WRITE | DRIVE_OPEN_EXCLUSIVE, &drive));
+	CHECK(ClearMBRGPT(drive.fd, drive.size, drive.sector_size));
+	CHECK(PlanPartitions(&layout, PARTITION_STYLE_GPT, FS_FAT32, FALSE, XP_PERSISTENCE, drive.size, drive.sector_size));
+	CHECK_EQ_INT(layout.count, 2);
+	CHECK(WritePartitionTable(drive.fd, &layout));
+	CHECK(RefreshPartitions(&drive));
+	udev = udev_new();
+	for (i = 0; i < layout.count; i++) {
+		CHECK(GetPartitionDevnode(&drive, i + 1, devnode, sizeof(devnode)));
+		snprintf(path, sizeof(path), "/sys/class/block/%s/start", &devnode[5]);
+		CHECK_EQ_INT(sysfs_u64(path) * 512, layout.part[i].offset);
+		snprintf(path, sizeof(path), "/sys/class/block/%s/size", &devnode[5]);
+		CHECK_EQ_INT(sysfs_u64(path) * 512, layout.part[i].size);
+		// udev reads the GPT names back (with its escapes for the spaces)
+		CHECK(stat(devnode, &st) == 0);
+		dev = udev_device_new_from_devnum(udev, 'b', st.st_rdev);
+		CHECK(dev != NULL);
+		if (dev != NULL) {
+			char* name = replace_char(layout.part[i].name, ' ', "\\x20");
+			CHECK_EQ_STR(udev_device_get_property_value(dev, "ID_PART_ENTRY_NAME"), name);
+			free(name);
+			udev_device_unref(dev);
+		}
+	}
+	udev_unref(udev);
+	CHECK(!GetPartitionDevnode(&drive, 3, devnode, sizeof(devnode)));
+	CloseDrive(&drive);
+}
+
 int main(void)
 {
 	const ui_iface_t iface = { .log = test_log };
@@ -374,6 +437,7 @@ int main(void)
 	test_holders();
 	test_refresh();
 	test_private_mounts();
+	test_partitioning();
 	if (test_failures != 0)
 		fprintf(stderr, "Log:\n%s\n", log_buf);
 	else
