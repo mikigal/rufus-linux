@@ -14,6 +14,7 @@ qt_add_executable(rufus
 	main_window.cpp
 	progress_bar.cpp
 	taskbar.cpp
+	test_hooks.cpp
 	ui_bridge.cpp)
 target_include_directories(rufus PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 target_link_libraries(rufus PRIVATE rufus_platform Qt6::Widgets Qt6::DBus rufus_warnings)

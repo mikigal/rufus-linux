@@ -73,7 +73,13 @@ BOOL StartHelper(helper_t* h, const char* language)
 	h->pid = -1;
 	if ((helper == NULL) || (helper[0] == 0))
 		helper = RUFUS_HELPER_INSTALLED;
-	if (geteuid() == 0) {
+	// The tests of the front ends replace the helper with one that runs as the user
+	if ((getenv("RUFUS_FAKE_HELPER") != NULL) && (getenv("RUFUS_FAKE_HELPER")[0] != 0)) {
+		helper = getenv("RUFUS_FAKE_HELPER");
+		uprintf("WARNING: Using the fake helper '%s'", helper);
+		argv[0] = helper;
+		argv[1] = NULL;
+	} else if (geteuid() == 0) {
 		argv[0] = helper;
 		argv[1] = NULL;
 	} else {

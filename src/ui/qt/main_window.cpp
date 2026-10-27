@@ -55,6 +55,7 @@ extern "C" {
 #include "dialogs.h"
 #include "log_window.h"
 #include "ui_bridge.h"
+#include "test_hooks.h"
 
 extern "C" {
 extern char embedded_sl_version_str[2][12];
@@ -176,6 +177,7 @@ MainWindow::MainWindow(LogWindow* log, QWidget* parent) : QMainWindow(parent), l
 
 	// The cheat codes, ahead of the mnemonics of the widgets
 	qApp->installEventFilter(this);
+	InstallTestControl(this);
 
 	// InitDialog() + GetDevices() + EnableControls()
 	refreshDevices(true);
@@ -419,7 +421,8 @@ void MainWindow::createWidgets()
 		render();
 	});
 	connect(persistence_size_, &QLineEdit::editingFinished, this, &MainWindow::onPersistenceSizeEdited);
-	connect(label_, &QLineEdit::textEdited, this, [this](const QString& text) {
+	// Not textEdited(), so that a label set through accessibility counts too: render() blocks the signals
+	connect(label_, &QLineEdit::textChanged, this, [this](const QString& text) {
 		rules_on_label(&m_, text.toUtf8().constData());
 	});
 	auto connect_check = [this](QCheckBox* box, rules_check_t* check) {
@@ -440,14 +443,16 @@ void MainWindow::createWidgets()
 	});
 	connect(advanced_device_, &QToolButton::clicked, this, &MainWindow::toggleAdvancedDevice);
 	connect(advanced_format_, &QToolButton::clicked, this, &MainWindow::toggleAdvancedFormat);
-	connect(select_, &QToolButton::clicked, this, [this] { onSelect(); });
+	// The buttons that open a modal dialog do it once their click has returned, so that an
+	// accessibility client that pressed them (a screen reader, or the tests) gets its answer
+	connect(select_, &QToolButton::clicked, this, [this] { onSelect(); }, Qt::QueuedConnection);
 	connect(hash_, &QToolButton::clicked, this, &MainWindow::onHash);
 	connect(start_, &QPushButton::clicked, this, [this] { onStart(); });
-	connect(close_, &QPushButton::clicked, this, &MainWindow::onClose);
+	connect(close_, &QPushButton::clicked, this, &MainWindow::onClose, Qt::QueuedConnection);
 	connect(log_button_, &QToolButton::clicked, this, [this] { log_->toggle(); });
-	connect(about_, &QToolButton::clicked, this, [this] { ShowAboutDialog(this); });
-	connect(settings_, &QToolButton::clicked, this, [this] { ShowUpdatePolicyDialog(this); });
-	connect(lang_, &QToolButton::clicked, this, &MainWindow::showLanguageMenu);
+	connect(about_, &QToolButton::clicked, this, [this] { ShowAboutDialog(this); }, Qt::QueuedConnection);
+	connect(settings_, &QToolButton::clicked, this, [this] { ShowUpdatePolicyDialog(this); }, Qt::QueuedConnection);
+	connect(lang_, &QToolButton::clicked, this, &MainWindow::showLanguageMenu, Qt::QueuedConnection);
 }
 
 void MainWindow::retranslate()
@@ -678,7 +683,9 @@ void MainWindow::refreshDevices(bool startup)
 		previous_seq = dev->diskseq;
 	}
 	monitor_->refreshed();
-	nb_devs_ = GetDevices(devs_, MAX_DRIVES, &filter_);
+	nb_devs_ = GetTestDevices(devs_, MAX_DRIVES, &filter_);
+	if (nb_devs_ < 0)
+		nb_devs_ = GetDevices(devs_, MAX_DRIVES, &filter_);
 	if (nb_devs_ < 0)
 		nb_devs_ = 0;
 	device_->clear();
@@ -945,14 +952,12 @@ void MainWindow::closeEvent(QCloseEvent* event)
 	QCoreApplication::exit(0);
 }
 
-// IDC_LANG
-void MainWindow::showLanguageMenu()
+// The entries of the language menu, with the selected locale checked
+void MainWindow::fillLanguageMenu(QMenu* menu)
 {
-	QMenu menu(this);
 	loc_cmd* lcmd = nullptr;
-	QAction* chosen;
 
-	menu.setObjectName(QStringLiteral("IDC_LANG_MENU"));
+	menu->setObjectName(QStringLiteral("IDC_LANG_MENU"));
 	list_for_each_entry(lcmd, &locale_list, loc_cmd, list) {
 		QString name = QString::fromUtf8(lcmd->txt[1]);
 		// The appearance of LTR languages must be fixed for RTL menus
@@ -962,17 +967,29 @@ void MainWindow::showLanguageMenu()
 				name = QString::fromUtf8(LEFT_TO_RIGHT_EMBEDDING "%1 " POP_DIRECTIONAL_FORMATTING "%2")
 					.arg(name.mid(open), name.left(open).trimmed());
 		}
-		QAction* a = menu.addAction(name);
+		QAction* a = menu->addAction(name);
 		a->setCheckable(true);
 		a->setChecked(lcmd == selected_locale);
 		a->setData(QVariant::fromValue((void*)lcmd));
 	}
+}
+
+// IDC_LANG
+void MainWindow::showLanguageMenu()
+{
+	QMenu menu(this);
+	QAction* chosen;
+
+	fillLanguageMenu(&menu);
 	// Show the menu such that it doesn't overlap the button
 	chosen = menu.exec(lang_->mapToGlobal(QPoint(lang_->width() / 2, lang_->height())));
-	if (chosen == nullptr)
-		return;
-	lcmd = static_cast<loc_cmd*>(chosen->data().value<void*>());
-	if (lcmd == selected_locale)
+	if (chosen != nullptr)
+		selectLanguage(static_cast<loc_cmd*>(chosen->data().value<void*>()));
+}
+
+void MainWindow::selectLanguage(loc_cmd* lcmd)
+{
+	if ((lcmd == nullptr) || (lcmd == selected_locale) || m_.op_in_progress || format_running_)
 		return;
 	selected_locale = lcmd;
 	// Avoid the file system being reset on language change

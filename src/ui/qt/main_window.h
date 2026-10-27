@@ -27,6 +27,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMainWindow>
+#include <QMenu>
 #include <QPointer>
 #include <QPushButton>
 #include <QSlider>
@@ -69,6 +70,9 @@ public:
 	void selectImage(const QString& path) { onSelect(path); }
 	// The window was closed to be created again, in another language
 	bool relaunch() const { return relaunch_; }
+	// The language menu (IDC_LANG), and what choosing one of its entries does
+	void fillLanguageMenu(QMenu* menu);
+	void selectLanguage(loc_cmd* lcmd);
 
 protected:
 	bool eventFilter(QObject* watched, QEvent* event) override;

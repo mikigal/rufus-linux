@@ -26,7 +26,10 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QApplication>
 #include <QGuiApplication>
+#include <QPalette>
+#include <QStyle>
 #include <QStyleHints>
 #include <QStandardPaths>
 
@@ -197,19 +200,58 @@ BOOL ApplySelectedLocale(void)
 	return TRUE;
 }
 
+// The colours of the dark mode of the Windows version (darkmode.h)
+static QPalette DarkPalette(void)
+{
+	QPalette p;
+	const QColor window(0x20, 0x20, 0x20), base(0x2b, 0x2b, 0x2b), text(0xff, 0xff, 0xff);
+	const QColor disabled(0x80, 0x80, 0x80), button(0x33, 0x33, 0x33), highlight(0x00, 0x78, 0xd4);
+
+	p.setColor(QPalette::Window, window);
+	p.setColor(QPalette::WindowText, text);
+	p.setColor(QPalette::Base, base);
+	p.setColor(QPalette::AlternateBase, window);
+	p.setColor(QPalette::ToolTipBase, base);
+	p.setColor(QPalette::ToolTipText, text);
+	p.setColor(QPalette::PlaceholderText, disabled);
+	p.setColor(QPalette::Text, text);
+	p.setColor(QPalette::Button, button);
+	p.setColor(QPalette::ButtonText, text);
+	p.setColor(QPalette::BrightText, Qt::red);
+	p.setColor(QPalette::Light, QColor(0x4d, 0x4d, 0x4d));
+	p.setColor(QPalette::Midlight, QColor(0x40, 0x40, 0x40));
+	p.setColor(QPalette::Mid, QColor(0x3c, 0x3c, 0x3c));
+	p.setColor(QPalette::Dark, QColor(0x14, 0x14, 0x14));
+	p.setColor(QPalette::Shadow, Qt::black);
+	p.setColor(QPalette::Highlight, highlight);
+	p.setColor(QPalette::HighlightedText, text);
+	p.setColor(QPalette::Link, QColor(0x4c, 0xc2, 0xff));
+	for (QPalette::ColorRole role : { QPalette::WindowText, QPalette::Text, QPalette::ButtonText })
+		p.setColor(QPalette::Disabled, role, disabled);
+	return p;
+}
+
 void ApplyColorScheme(void)
 {
+	static const QPalette desktop_palette = QApplication::palette();
+	Qt::ColorScheme scheme;
+
 	switch (ReadSetting32(SETTING_DARK_MODE)) {
 	case 1:
-		QGuiApplication::styleHints()->setColorScheme(Qt::ColorScheme::Dark);
+		scheme = Qt::ColorScheme::Dark;
 		break;
 	case 2:
-		QGuiApplication::styleHints()->setColorScheme(Qt::ColorScheme::Light);
+		scheme = Qt::ColorScheme::Light;
 		break;
 	default:
 		QGuiApplication::styleHints()->unsetColorScheme();
-		break;
+		QApplication::setPalette(desktop_palette);
+		return;
 	}
+	QGuiApplication::styleHints()->setColorScheme(scheme);
+	// Without a platform theme that honours the request, the palette is ours
+	if (QGuiApplication::styleHints()->colorScheme() != scheme)
+		QApplication::setPalette((scheme == Qt::ColorScheme::Dark) ? DarkPalette() : QApplication::style()->standardPalette());
 }
 
 const char* selected_locale_name(void)

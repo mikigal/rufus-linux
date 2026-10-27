@@ -137,7 +137,7 @@ int RunNotification(QWidget* parent, const ui_question_t* q)
 	QCheckBox* dont_display = nullptr;
 	const int type = q->notification.flags & MB_TYPEMASK;
 	struct { QString text; int id; } spec[3];
-	int nb_buttons = 0, r;
+	int nb_buttons = 0, clicked = 0, r;
 
 	dlg.setObjectName(QStringLiteral("IDD_NOTIFICATION"));
 	dlg.setWindowTitle(QString::fromUtf8((q->title != nullptr) ? q->title : APPLICATION_NAME));
@@ -192,7 +192,7 @@ int RunNotification(QWidget* parent, const ui_question_t* q)
 				QDesktopServices::openUrl(QUrl(QString::fromUtf8(info->url)));
 			else
 				ShowLicenseDialog(&dlg);
-		});
+		}, Qt::QueuedConnection);
 		buttons->addWidget(more);
 	}
 	buttons->addStretch(1);
@@ -203,7 +203,10 @@ int RunNotification(QWidget* parent, const ui_question_t* q)
 		// The last button is the default, as on Windows (IDNO)
 		b->setDefault(i == nb_buttons - 1);
 		b->setAutoDefault(true);
-		QObject::connect(b, &QPushButton::clicked, &dlg, [&dlg, id] { dlg.done(id); });
+		QObject::connect(b, &QPushButton::clicked, &dlg, [&dlg, &clicked, id] {
+			clicked = id;
+			dlg.accept();
+		});
 		buttons->addWidget(b);
 	}
 	root->addLayout(buttons);
@@ -211,11 +214,11 @@ int RunNotification(QWidget* parent, const ui_question_t* q)
 	localize(&dlg, IDD_NOTIFICATION);
 
 	notifications.append(&dlg);
-	r = dlg.exec();
+	// NB: Not the result of exec(), as IDOK is QDialog::Accepted
+	dlg.exec();
 	notifications.removeAll(&dlg);
 	// Closing the dialog is the last button
-	if ((r <= 0) || (r == QDialog::Accepted))
-		r = spec[nb_buttons - 1].id;
+	r = (clicked != 0) ? clicked : spec[nb_buttons - 1].id;
 	if ((dont_display != nullptr) && dont_display->isChecked())
 		WriteSettingBool(q->notification.dont_display_setting, TRUE);
 	return r;
@@ -306,7 +309,8 @@ public:
 		root->setSizeConstraint(QLayout::SetFixedSize);
 		localize(this, IDD_SELECTION);
 
-		connect(ok_, &QPushButton::clicked, this, &SelectionDialogImpl::onOk);
+		// onOk() may open another selection
+		connect(ok_, &QPushButton::clicked, this, &SelectionDialogImpl::onOk, Qt::QueuedConnection);
 		connect(cancel_, &QPushButton::clicked, this, &QDialog::reject);
 		connect(&group_, &QButtonGroup::idClicked, this, &SelectionDialogImpl::onChoice);
 		if (opts_->flags & SELECTION_NEEDS_ALL_TO_PROCEED)
@@ -616,7 +620,7 @@ void ShowAboutDialog(QWidget* parent)
 	buttons->addStretch(1);
 	buttons->addWidget(ok);
 	root->addLayout(buttons);
-	QObject::connect(license, &QPushButton::clicked, &dlg, [&dlg] { ShowLicenseDialog(&dlg); });
+	QObject::connect(license, &QPushButton::clicked, &dlg, [&dlg] { ShowLicenseDialog(&dlg); }, Qt::QueuedConnection);
 	QObject::connect(ok, &QPushButton::clicked, &dlg, &QDialog::accept);
 	localize(&dlg, IDD_ABOUTBOX);
 	dlg.exec();

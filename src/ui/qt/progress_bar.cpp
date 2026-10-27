@@ -20,8 +20,6 @@
 
 #include <QPainter>
 #include <QPalette>
-#include <QStyleHints>
-#include <QGuiApplication>
 
 #include "progress_bar.h"
 
@@ -78,7 +76,8 @@ void ProgressBar::setInfo(const QString& text)
 void ProgressBar::paintEvent(QPaintEvent*)
 {
 	QPainter p(this);
-	const bool dark = (QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark);
+	// From the palette, as the colour scheme of the desktop may have been overridden (Ctrl-Alt-D)
+	const bool dark = (palette().color(QPalette::Window).lightness() < 128);
 	const QColor background = dark ? palette().color(QPalette::Base) : QColor(0xE6, 0xE6, 0xE6);
 	const QColor border = dark ? palette().color(QPalette::Mid) : QColor(0xBC, 0xBC, 0xBC);
 	const QColor text_color = dark ? Qt::white : Qt::black;
