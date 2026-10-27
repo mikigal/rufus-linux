@@ -34,6 +34,7 @@
 #include <unistd.h>
 
 #include "platform.h"
+#include "disk.h"
 
 /* How deep the device mapper and RAID layers may be stacked */
 #define MAX_STACK_DEPTH             16
@@ -249,4 +250,111 @@ void GetSystemDisks(disk_set_t* set)
 		}
 		fclose(fd);
 	}
+}
+
+// Add a device and, recursively, the devices that hold it (device mapper, RAID)
+static void AddDeviceAndHolders(disk_set_t* set, dev_t dev, int depth)
+{
+	char path[PATH_MAX];
+	DIR* dir;
+	struct dirent* entry;
+	dev_t holder;
+
+	if ((depth > MAX_STACK_DEPTH) || DiskSetContains(set, dev))
+		return;
+	DiskSetAdd(set, dev);
+	static_sprintf(path, "/sys/dev/block/%u:%u/holders", major(dev), minor(dev));
+	dir = opendir(path);
+	if (dir == NULL)
+		return;
+	while ((entry = readdir(dir)) != NULL) {
+		if (entry->d_name[0] == '.')
+			continue;
+		static_sprintf(path, "/sys/dev/block/%u:%u/holders/%s/dev", major(dev), minor(dev), entry->d_name);
+		if (ReadDevAttr(path, &holder))
+			AddDeviceAndHolders(set, holder, depth + 1);
+	}
+	closedir(dir);
+}
+
+void GetDiskDevices(dev_t disk, disk_set_t* set)
+{
+	char path[PATH_MAX], real[PATH_MAX];
+	DIR* dir;
+	struct dirent* entry;
+	dev_t part;
+
+	AddDeviceAndHolders(set, disk, 0);
+	static_sprintf(path, "/sys/dev/block/%u:%u", major(disk), minor(disk));
+	if (realpath(path, real) == NULL)
+		return;
+	dir = opendir(real);
+	if (dir == NULL)
+		return;
+	// The partitions are the subdirectories that have a 'partition' attribute
+	while ((entry = readdir(dir)) != NULL) {
+		if (entry->d_name[0] == '.')
+			continue;
+		static_sprintf(path, "%s/%s/partition", real, entry->d_name);
+		if (access(path, F_OK) != 0)
+			continue;
+		static_sprintf(path, "%s/%s/dev", real, entry->d_name);
+		if (ReadDevAttr(path, &part))
+			AddDeviceAndHolders(set, part, 0);
+	}
+	closedir(dir);
+}
+
+void GetDriveMounts(dev_t disk, StrArray* mount_points)
+{
+	disk_set_t devs = { 0 };
+	mount_entry_t m;
+	FILE* fd;
+
+	GetDiskDevices(disk, &devs);
+	fd = fopen("/proc/self/mountinfo", "r");
+	if (fd != NULL) {
+		while (NextMount(fd, &m)) {
+			if (DiskSetContains(&devs, m.dev))
+				StrArrayAdd(mount_points, m.mount_point, TRUE);
+		}
+		fclose(fd);
+	}
+	DiskSetFree(&devs);
+}
+
+void GetDriveHolders(dev_t disk, StrArray* holders)
+{
+	disk_set_t devs = { 0 };
+	char path[PATH_MAX], real[PATH_MAX], name[128], entry[256];
+	FILE* fd;
+	size_t i;
+
+	GetDiskDevices(disk, &devs);
+	for (i = 0; i < devs.count; i++) {
+		// The devices built on the disk are the ones that are not its partitions
+		static_sprintf(path, "/sys/dev/block/%u:%u/slaves", major(devs.dev[i]), minor(devs.dev[i]));
+		if (access(path, F_OK) != 0)
+			continue;
+		static_sprintf(path, "/sys/dev/block/%u:%u", major(devs.dev[i]), minor(devs.dev[i]));
+		if ((realpath(path, real) == NULL) || (strrchr(real, '/') == NULL))
+			continue;
+		if ((strncmp(&strrchr(real, '/')[1], "dm-", 3) != 0) && (strncmp(&strrchr(real, '/')[1], "md", 2) != 0))
+			continue;
+		name[0] = 0;
+		static_sprintf(path, "%s/dm/name", real);
+		fd = fopen(path, "r");
+		if (fd != NULL) {
+			if (fgets(name, sizeof(name), fd) == NULL)
+				name[0] = 0;
+			fclose(fd);
+			trim(name);
+		}
+		if (name[0] != 0)
+			static_sprintf(entry, "%s (%s)", &strrchr(real, '/')[1], name);
+		else
+			static_strcpy(entry, &strrchr(real, '/')[1]);
+		StrArrayAdd(holders, entry, TRUE);
+	}
+	DiskSetFree(&devs);
 }

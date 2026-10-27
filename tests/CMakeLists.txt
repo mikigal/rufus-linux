@@ -54,6 +54,13 @@ target_link_libraries(test_threads PRIVATE rufus_core)
 rufus_add_test(test_devices test_devices.c)
 target_link_libraries(test_devices PRIVATE rufus_platform)
 
+rufus_add_test(test_disk test_disk.c)
+target_link_libraries(test_disk PRIVATE rufus_platform)
+
+# Erases a USB stick: only run as root in the VM of tests/e2e/test_disk.py (skipped otherwise)
+rufus_add_test(test_disk_vm test_disk_vm.c)
+target_link_libraries(test_disk_vm PRIVATE rufus_platform)
+
 # The rules are checked against the original Windows functions (rules_oracle/rules_win.c)
 rufus_add_test(test_rules test_rules.c rules_oracle/rules_win.c)
 target_link_libraries(test_rules PRIVATE rufus_core)
@@ -71,4 +78,8 @@ if(RUFUS_E2E_TESTS)
 		WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/e2e")
 	set_tests_properties(e2e_devices PROPERTIES LABELS e2e TIMEOUT 1800
 		ENVIRONMENT "RUFUS_CLI=$<TARGET_FILE:rufus-cli>")
+	add_test(NAME e2e_disk COMMAND Python3::Interpreter -m unittest -v test_disk
+		WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/e2e")
+	set_tests_properties(e2e_disk PROPERTIES LABELS e2e TIMEOUT 1800
+		ENVIRONMENT "RUFUS_TEST_DISK_VM=$<TARGET_FILE:test_disk_vm>")
 endif()

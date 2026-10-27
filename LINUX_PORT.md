@@ -222,6 +222,30 @@ Done:
     that runs the tests is listed. `tests/e2e/test_devices.py` lists an emulated BOT and
     UAS stick in the VM, never a virtio disk, and no longer the stick once it is mounted
     on `/var`, used as swap or below the device mapper.
+- **Disk access** (`platform/linux/disk.c`, `automount.c`, `processes.c`):
+  - `OpenDrive()` opens a drive from its device node, then checks on the descriptor
+    that it still has the `diskseq` of the selected one, that it is not write protected
+    for writing, and gets its size and sector sizes. The exclusive open (`O_EXCL`) is
+    retried for `DRIVE_ACCESS_TIMEOUT`, as upstream retries its volume lock: the kernel
+    refuses it while a partition is mounted or held by the device mapper or RAID, and
+    it then keeps any partition from being mounted.
+  - `UnmountDrive()` unmounts the file systems of the drive, of its partitions and of the
+    devices built on them. When the drive stays busy, the mounts, holders (`dm-0
+    (luks-...)`) and processes that use it get logged.
+  - `SearchProcesses()` replaces `GetProcessSearch()` (`process.c`): the processes that
+    have a device of the drive open (with their access mode), or a file, directory,
+    executable or mapping on one of its file systems.
+  - `RefreshPartitions()` is `BLKRRPART`, retried while udev probes the partitions, then
+    a wait for udev.
+  - `SuppressAutomount()` adds a udev rule (`UDISKS_IGNORE`, `UDISKS_AUTO=0`) in
+    `/run/udev/rules.d`, which `RemoveAutomountRules()` removes, including the ones a
+    crashed instance left.
+  - `EnterPrivateMountNamespace()` and `MountVolume()`: mounts in `/run/rufus/mnt-*`,
+    which the desktop doesn't see, and which go away with the process.
+  - `tests/test_disk.c` checks what a user can (the mounts, partitions and processes of
+    the disk of the build directory). `tests/test_disk_vm.c` runs as root in the VM
+    (`tests/e2e/test_disk.py`, with a BOT and a UAS stick); it refuses to run outside of
+    it, and only touches a QEMU stick.
 
 ---
 

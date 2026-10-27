@@ -39,6 +39,12 @@ extern void DiskSetFree(disk_set_t* set);
  */
 extern void AddDisksOfDevice(disk_set_t* set, dev_t dev);
 
+/*
+ * The devices of a disk: the disk itself, its partitions, and the device mapper
+ * or RAID devices built on any of them.
+ */
+extern void GetDiskDevices(dev_t disk, disk_set_t* set);
+
 /* Add the disks that the file system holding 'path' is on */
 extern void AddDisksOfPath(disk_set_t* set, const char* path);
 
