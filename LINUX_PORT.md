@@ -890,7 +890,7 @@ Notes:
 | status bar with a `00:00:00` timer | `QStatusBar` + permanent timer widget |
 | toolbar (language/about/settings/log), save, hash | `QToolButton`s with the `res/icons` images, without settings (§5.7) |
 | `IDD_LOG` docked next to the main window | separate window (Wayland forbids positioning) or a slide-out panel |
-| `IDD_ABOUTBOX`/`IDD_LICENSE` (RichEdit RTF) | `QTextBrowser`; RTF from `license.h` and release notes converted to HTML |
+| `IDD_ABOUTBOX`/`IDD_LICENSE` (RichEdit RTF) | `QLabel` (blurb) and `QTextBrowser`; RTF from `license.h` and release notes converted to HTML; the blurb names the port, its repository and issues, and the copyrights drop what is Windows-only |
 | `IDD_NOTIFICATION` (OK/YesNo/AbortRetryIgnore, "don't show again", "more information") | custom `QDialog` |
 | `IDD_SELECTION` (≤16 radios/checkboxes, user name field, edition combo, nesting) | custom `QDialog` + `QButtonGroup` |
 | `IDD_LIST`, `IDD_HASH` | simple `QDialog`s |

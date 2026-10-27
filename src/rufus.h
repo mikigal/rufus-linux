@@ -121,6 +121,7 @@
 #else
 #define RUFUS_URL                   "https://rufus.ie"
 #endif
+#define RUFUS_LINUX_URL             "https://github.com/mikigal/rufus-linux"
 #define DOWNLOAD_URL                RUFUS_URL "/downloads"
 #define FILES_URL                   RUFUS_URL "/files"
 #define FILES_DIR                   APPLICATION_NAME

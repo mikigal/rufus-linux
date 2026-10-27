@@ -40,6 +40,7 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include <QRegularExpression>
+#include <QScreen>
 #include <QStyle>
 #include <QTextBrowser>
 #include <QUrl>
@@ -489,7 +490,8 @@ void ShowHashDialog(QWidget* parent)
 // Enough of RTF for the strings of the .loc (MSG_RTF) and of license.h: \line, \b, \b0, \fsN, \uN and \'XX
 QString RtfToHtml(const char* rtf)
 {
-	static const QRegularExpression url(QStringLiteral("((?:https?://|mailto:)[^\\s<]+)"));
+	// Not into the &gt; of the <mailto:...> of the translators
+	static const QRegularExpression url(QStringLiteral("((?:https?://|mailto:)[^\\s<&]+)"));
 	QString html, text = QString::fromUtf8(rtf);
 	bool bold = false;
 	int i = 0;
@@ -577,35 +579,38 @@ void ShowAboutDialog(QWidget* parent)
 	QVBoxLayout* root = new QVBoxLayout(&dlg);
 	QVBoxLayout* col = new QVBoxLayout;
 	QLabel* icon = new QLabel;
-	QTextBrowser* blurb = new QTextBrowser;
+	QLabel* blurb = new QLabel;
 	QTextBrowser* copyrights = new QTextBrowser;
 	QHBoxLayout* buttons = new QHBoxLayout;
 	QPushButton* license = new QPushButton;
 	QPushButton* ok = new QPushButton(QStringLiteral("OK"));
-	char about_blurb[2048];
+	char about_blurb[4 * LOC_MESSAGE_SIZE], translators[LOC_MESSAGE_SIZE] = "";
+	const char* msg_176 = lmprintf(MSG_176 | MSG_RTF);
+	QFontMetrics fm = dlg.fontMetrics();
 
 	dlg.setObjectName(QStringLiteral("IDD_ABOUTBOX"));
 	dlg.setWindowTitle(QStringLiteral("About Rufus"));
 	icon->setPixmap(QIcon(QStringLiteral(":/icons/rufus-64.png")).pixmap(64, 64));
 	icon->setAlignment(Qt::AlignTop);
 	SET_NAME(icon, IDC_ABOUT_ICON);
+	// MSG_176 is the support address of upstream in English, and the credits of the translation otherwise
+	if (strstr(msg_176, "support@akeo.ie") == NULL)
+		static_sprintf(translators, "%s\\line\n\\line\n", msg_176);
 	static_sprintf(about_blurb, about_blurb_format, lmprintf(MSG_174 | MSG_RTF),
 		lmprintf(MSG_175 | MSG_RTF, rufus_version[0], rufus_version[1], rufus_version[2]),
-		"Copyright © 2011-2026 Pete Batard\\line\nLinux port: Copyright © 2026 Rufus for Linux contributors",
-		lmprintf(MSG_176 | MSG_RTF), lmprintf(MSG_177 | MSG_RTF), lmprintf(MSG_178 | MSG_RTF));
-	for (QTextBrowser* b : { blurb, copyrights }) {
-		b->setOpenExternalLinks(true);
-		b->setFrameShape(QFrame::NoFrame);
-		b->viewport()->setAutoFillBackground(false);
-		b->setMinimumWidth(dlg.fontMetrics().averageCharWidth() * 70);
-	}
+		translators, lmprintf(MSG_177 | MSG_RTF), lmprintf(MSG_178 | MSG_RTF));
+	// A label, which takes the height of its text (the lines of the .loc are short enough not to wrap)
 	SET_NAME(blurb, IDC_ABOUT_BLURB);
-	blurb->setHtml(RtfToHtml(about_blurb));
-	blurb->setFixedHeight((int)blurb->document()->size().height() + 8);
+	blurb->setTextFormat(Qt::RichText);
+	blurb->setText(RtfToHtml(about_blurb));
+	blurb->setOpenExternalLinks(true);
+	blurb->setTextInteractionFlags(Qt::TextBrowserInteraction);
 	SET_NAME(copyrights, IDC_ABOUT_COPYRIGHTS);
+	copyrights->setOpenExternalLinks(true);
+	copyrights->viewport()->setAutoFillBackground(false);
 	copyrights->setHtml(RtfToHtml(additional_copyrights));
 	copyrights->setFrameShape(QFrame::StyledPanel);
-	copyrights->setMinimumHeight(dlg.fontMetrics().height() * 10);
+	copyrights->setMinimumSize(fm.averageCharWidth() * 80, fm.height() * 8);
 	col->addWidget(blurb);
 	col->addWidget(copyrights, 1);
 	top->addWidget(icon, 0, Qt::AlignTop);
@@ -622,5 +627,10 @@ void ShowAboutDialog(QWidget* parent)
 	QObject::connect(license, &QPushButton::clicked, &dlg, [&dlg] { ShowLicenseDialog(&dlg); }, Qt::QueuedConnection);
 	QObject::connect(ok, &QPushButton::clicked, &dlg, &QDialog::accept);
 	localize(&dlg, IDD_ABOUTBOX);
+	// Room for more of the additional copyrights than their minimum, as far as the screen allows
+	QSize size = dlg.sizeHint() + QSize(0, fm.height() * 10);
+	if (QScreen* screen = (parent != nullptr) ? parent->screen() : QGuiApplication::primaryScreen())
+		size = size.boundedTo(screen->availableGeometry().size() * 0.9);
+	dlg.resize(size.expandedTo(dlg.minimumSizeHint()));
 	dlg.exec();
 }
