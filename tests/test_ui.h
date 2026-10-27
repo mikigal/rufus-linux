@@ -51,7 +51,7 @@ static int nb_asked = 0;
 static int answers[MAX_QUESTIONS];
 static int nb_answers = 0, next_answer = 0;
 
-static int test_ask(ui_question_t* q)
+static inline int test_ask(ui_question_t* q)
 {
 	asked_t* a = &asked[nb_asked < MAX_QUESTIONS ? nb_asked++ : MAX_QUESTIONS - 1];
 	uint32_t i;
@@ -78,7 +78,7 @@ static int test_ask(ui_question_t* q)
 }
 
 // Script the answers to the next questions, and forget the previous ones
-static void answer(int n, ...)
+static inline void answer(int n, ...)
 {
 	va_list ap;
 	int i;
@@ -93,7 +93,7 @@ static void answer(int n, ...)
 }
 
 // Whether question #i has the title of message 'msg' (e.g. MSG_130)
-static BOOL asked_msg(int i, int msg)
+static inline BOOL asked_msg(int i, int msg)
 {
 	char id[16];
 

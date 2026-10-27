@@ -4,6 +4,7 @@
 add_library(rufus_core STATIC
 	analyze.c
 	globals.c
+	image_scan.c
 	options.c
 	progress.c
 	resource.c

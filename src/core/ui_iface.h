@@ -80,6 +80,7 @@ enum ui_event_type {
 	UM_TIMER_START,				// Start the elapsed time counter on the status bar
 	UM_FORMAT_START,			// param: result of the boot check (see enum bootcheck_return)
 	UM_HASH_COMPLETED,			// HashThread() succeeded: display hash_str[] (IDD_HASH)
+	UM_IMAGE_SCAN_COMPLETED,	// param: enum rules_scan_result of StartImageScan(), for rules_on_image_scan_end()
 };
 
 /* Kinds of question the core can ask */

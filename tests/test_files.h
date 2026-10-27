@@ -36,7 +36,7 @@
 static char tmp_dir[] = "/tmp/rufus-test-XXXXXX";
 static char log_buf[256 * 1024];
 
-static void test_log(const char* text)
+static inline void test_log(const char* text)
 {
 	safe_strcat(log_buf, sizeof(log_buf), text);
 }
@@ -46,7 +46,7 @@ static void test_log(const char* text)
 static void** buffers = NULL;
 static size_t nb_buffers = 0;
 
-static void* keep(void* buf)
+static inline void* keep(void* buf)
 {
 	buffers = realloc(buffers, (nb_buffers + 1) * sizeof(void*));
 	CHECK(buffers != NULL);
@@ -54,7 +54,7 @@ static void* keep(void* buf)
 	return buf;
 }
 
-static char* tmp_path(const char* name)
+static inline char* tmp_path(const char* name)
 {
 	char* p = keep(malloc(MAX_PATH));
 
@@ -64,7 +64,7 @@ static char* tmp_path(const char* name)
 }
 
 // Create a file (and its directories) in the temporary directory
-static void make_file(const char* name, const char* content)
+static inline void make_file(const char* name, const char* content)
 {
 	char path[MAX_PATH], *p;
 
@@ -77,7 +77,7 @@ static void make_file(const char* name, const char* content)
 }
 
 // The content of a file, or "" if it can't be read
-static char* file_content(const char* path)
+static inline char* file_content(const char* path)
 {
 	char* buf = NULL;
 
@@ -88,7 +88,7 @@ static char* file_content(const char* path)
 	return keep(buf);
 }
 
-static BOOL run(const char* const* argv)
+static inline BOOL run(const char* const* argv)
 {
 	DWORD r = RunCommand(argv, NULL, TRUE);
 	if (r != 0)
@@ -96,14 +96,14 @@ static BOOL run(const char* const* argv)
 	return (r == 0);
 }
 
-static BOOL have(const char* tool)
+static inline BOOL have(const char* tool)
 {
 	const char* argv[] = { "sh", "-c", "command -v \"$0\" >/dev/null", tool, NULL };
 	return (RunCommand(argv, NULL, FALSE) == 0);
 }
 
 // Returns FALSE (after printing which one) if one of the tools is missing
-static BOOL have_tools(const char* const* tools, size_t nb_tools)
+static inline BOOL have_tools(const char* const* tools, size_t nb_tools)
 {
 	size_t i;
 
@@ -116,7 +116,7 @@ static BOOL have_tools(const char* const* tools, size_t nb_tools)
 	return TRUE;
 }
 
-static BOOL test_files_init(void)
+static inline BOOL test_files_init(void)
 {
 	if (mkdtemp(tmp_dir) == NULL) {
 		perror("mkdtemp");
@@ -125,7 +125,7 @@ static BOOL test_files_init(void)
 	return TRUE;
 }
 
-static void test_files_cleanup(void)
+static inline void test_files_cleanup(void)
 {
 	char cmd[64];
 	size_t i;

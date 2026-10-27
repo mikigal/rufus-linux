@@ -154,12 +154,15 @@ Done:
     which is not built.
   - `tests/test_wue.c` checks them on WIMs that wimlib creates with the properties of
     Windows images, with scripted answers to the questions.
+- **Image scan** (`core/image_scan.c`): `ImageScanThread()`, with `StartImageScan()` for
+  the thread, which reports `UM_IMAGE_SCAN_COMPLETED`. What it did to the main window is
+  in `rules_on_image_scan_start()`/`rules_on_image_scan_end()`. Covered by
+  `tests/test_scan.c` (ISOs, ISOHybrids, Windows images and disk images).
 
 Next:
 
-1. `ImageScanThread` and `BootCheckThread` in the core, with the scan functions of
-   `wue.c`. The questions of the boot check go through `ui_ask()`, and its decisions to
-   `opts`.
+1. `BootCheckThread` in the core. Its questions go through `ui_ask()`, and its decisions
+   to `opts`.
 2. pthreads, atomic `ErrorStatus` and cooperative cancellation.
 
 ---
