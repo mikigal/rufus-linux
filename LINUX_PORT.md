@@ -798,6 +798,10 @@ Notes:
 - **NTFS**: mounted with the kernel **ntfs3** driver, which supports `fallocate` (the AMI
   contiguous file workaround). NTFS is case-sensitive on Linux, so path lookups in the
   code must ignore case.
+- **Preallocation**: `CreatePreallocatedFile()` uses `FALLOC_FL_KEEP_SIZE`, which, like
+  `FileAllocationInfo`, allocates without changing the size. Extending the file instead
+  (`posix_fallocate`, `ftruncate`) makes vfat and exFAT zero all of it in the page cache,
+  zeroes that then reach the drive ahead of the data.
 
 ### 5.5 Image writing, ISO extraction, boot loaders
 
@@ -869,6 +873,7 @@ Notes:
 | `RunCommandWithProgress` | `posix_spawn` + `poll` + `kill` |
 | `GetKeyboardLayoutName`/`GetOEMCP` (DOS locale) | XKB/`LANG` → KLID / OEM code page tables |
 | raw disk I/O (uncached) for bad blocks | **`O_DIRECT`**, otherwise fake drive detection passes from the page cache |
+| no write cache for removable drives ("quick removal") | `ThrottleWrites()` (`stdio.c`), after the writes of the ISO files, of DD images and of split WIM parts: it starts the writeback every MB and waits for the drive (`syncfs`/`fdatasync`) every 32 MB. Otherwise, with enough RAM, the progress ends minutes before the data is on the drive, and the unmount or `fsync` that follows seems to hang |
 | VirtDisk (VHD/VHDX) | `core/vdisk.c`: the VHD and VHDX formats, read and written by hand |
 
 ---
@@ -1228,6 +1233,10 @@ Size: S / M / L / XL (relative effort). Each stage ends with a working, testable
     bootloader entries near its end.
   - `FindResourceRva()` (`parser.c`) computes a pointer from a NULL directory before
     checking for it.
+- **ISO extraction** (`iso.c`), fixed in this port: `iso_extract_files()` stores the
+  results of its writes and of its subdirectories in its return code, so that a failed
+  write, or any error after a subdirectory, returns success: the extraction goes on, and
+  the drive ends up with a partial file.
 - **Image scan** (`rufus.c`), fixed in this port: for an `install.wim`/`install.esd`, the
   architecture of the EFI boot manager is stored one bit lower in `has_efi` than for an
   ISO, so that the Windows To Go `unattend.xml` of an x86_64 image is for x86_32.

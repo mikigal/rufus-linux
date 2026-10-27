@@ -703,19 +703,54 @@ BOOL WriteFileWithRetry(int fd, const void* lpBuffer, DWORD nNumberOfBytesToWrit
 	return FALSE;
 }
 
+// Writes to a drive land in the page cache, which the kernel writes back at its own pace, so
+// that with enough RAM, a progress that counts the writes reaches its end minutes before the
+// data is on the drive, and the unmount or fsync() that follows seems to hang. Windows doesn't
+// cache the writes to removable drives. So this is called after 'size' bytes were written to
+// 'fd' (a file on the drive, or the drive itself): it starts the writeback every WRITEBACK_SIZE
+// written, and waits for the drive every SYNC_SIZE, for the progress to follow the drive.
+// Returns FALSE, with errno set, if the drive reported a write error.
+#define WRITEBACK_SIZE              (1 * MB)
+#define SYNC_SIZE                   (32 * MB)
+BOOL ThrottleWrites(int fd, uint64_t size)
+{
+	static uint64_t unstarted = 0, unsynced = 0;
+	struct stat st;
+
+	unstarted += size;
+	unsynced += size;
+	if (unsynced >= SYNC_SIZE) {
+		unstarted = 0;
+		unsynced = 0;
+		if (fstat(fd, &st) != 0)
+			return FALSE;
+		// syncfs() also covers the files closed since, and the metadata, but not the
+		// page cache of a block device, which belongs to no mounted file system
+		return ((S_ISBLK(st.st_mode) ? fdatasync(fd) : syncfs(fd)) == 0);
+	}
+	if (unstarted >= WRITEBACK_SIZE) {
+		unstarted = 0;
+		// This blocks while the queue of the drive is full, which keeps up with the drive
+		IGNORE_RETVAL(sync_file_range(fd, 0, 0, SYNC_FILE_RANGE_WRITE));
+	}
+	return TRUE;
+}
+
 // Create a file with its space allocated on disk, so that it gets a single extent
 // on NTFS. Some UEFI NTFS drivers (AMI) return garbage for reads that match the
 // size of an extent exactly, which this avoids.
 // See https://github.com/pbatard/AmiNtfsBug for more details.
 // Returns a file descriptor, positioned at the start of the file, or -1 on error.
+// NB: As with the FileAllocationInfo of upstream, the size of the file doesn't change, as
+// extending it makes FAT and exFAT write zeroes over the whole file, ahead of the data.
 int CreatePreallocatedFile(const char* path, int flags, mode_t mode, int64_t size)
 {
 	int fd = open(path, flags | O_CLOEXEC, mode);
 	if (fd < 0)
 		return fd;
 	// No big deal if this fails
-	if ((size > 0) && (posix_fallocate(fd, 0, (off_t)size) != 0))
-		IGNORE_RETVAL(ftruncate(fd, (off_t)size));
+	if (size > 0)
+		IGNORE_RETVAL(fallocate(fd, FALLOC_FL_KEEP_SIZE, 0, (off_t)size));
 	return fd;
 }
 

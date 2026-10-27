@@ -823,6 +823,7 @@ extern uint32_t FindResourceRva(const uint16_t* name, uint8_t* root, uint8_t* di
 extern DWORD ListDirectoryContent(StrArray* arr, char* dir, uint8_t type);
 extern BOOL WriteFileWithRetry(int fd, const void* lpBuffer, DWORD nNumberOfBytesToWrite,
 	DWORD* lpNumberOfBytesWritten, DWORD nNumRetries);
+extern BOOL ThrottleWrites(int fd, uint64_t size);
 extern int CreatePreallocatedFile(const char* path, int flags, mode_t mode, int64_t size);
 extern enum ArchType MachineToArch(WORD machine);
 

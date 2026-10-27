@@ -351,6 +351,7 @@ static void test_files(void)
 	DWORD written = 0;
 	char path[MAX_PATH], *buf = "hello", *rbuf = NULL;
 	DWORD size = 5;
+	struct stat st;
 	int fd;
 
 	snprintf(path, sizeof(path), "%s/dir/sub", tmp_dir);
@@ -387,7 +388,9 @@ static void test_files(void)
 	CHECK_EQ_INT(written, 10);
 	CHECK(WriteFileWithRetry(fd, "abc", 3, NULL, 1));
 	CHECK_EQ_INT(lseek(fd, 0, SEEK_CUR), 13);
-	CHECK_EQ_INT(lseek(fd, 0, SEEK_END), 64 * KB);
+	// The space is allocated, without changing the size
+	CHECK_EQ_INT(lseek(fd, 0, SEEK_END), 13);
+	CHECK((fstat(fd, &st) == 0) && (st.st_blocks * 512 >= 64 * KB));
 	close(fd);
 }
 

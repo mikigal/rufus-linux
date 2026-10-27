@@ -65,7 +65,7 @@ static void update_progress(const int64_t processed_bytes)
 // Some compressed images use streams that aren't multiple of the sector
 // size and cause write failures => Use a write override that alleviates
 // the problem. See GitHub issue #1422 for details.
-static int sector_write(int fd, const void* _buf, unsigned int count)
+static int _sector_write(int fd, const void* _buf, unsigned int count)
 {
 	const uint8_t* buf = (const uint8_t*)_buf;
 	int written, fill_size = 0;
@@ -119,6 +119,18 @@ static int sector_write(int fd, const void* _buf, unsigned int count)
 	return (int)count;
 }
 
+static int sector_write(int fd, const void* buf, unsigned int count)
+{
+	int written = _sector_write(fd, buf, count);
+
+	// NB: This counts the bytes kept in the sector buffer as written, which makes no difference
+	if ((written > 0) && !ThrottleWrites(fd, (uint64_t)written)) {
+		uprintf("\nWrite error: %s", WindowsErrorString());
+		return -1;
+	}
+	return written;
+}
+
 // Write a buffer at an offset, retrying as upstream does
 static BOOL WriteWithRetries(int fd, const uint8_t* buf, uint32_t size, uint64_t offset, uint32_t sector_size)
 {
@@ -129,8 +141,13 @@ static BOOL WriteWithRetries(int fd, const uint8_t* buf, uint32_t size, uint64_t
 		if (IS_ERROR(ErrorStatus))
 			return FALSE;
 		w = pwrite(fd, buf, size, (off_t)offset);
-		if (w == (ssize_t)size)
-			return TRUE;
+		if (w == (ssize_t)size) {
+			if (ThrottleWrites(fd, size))
+				return TRUE;
+			// The write that failed may be an earlier one, which can't be retried
+			uprintf("\nWrite error: %s", WindowsErrorString());
+			break;
+		}
 		if (w >= 0)
 			uprintf("\nWrite error: Wrote %zd bytes, expected %u bytes", w, size);
 		else

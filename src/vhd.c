@@ -43,6 +43,8 @@ static const BOOL has_ffu_support = FALSE;
 static int progress_op = OP_FILE_COPY, progress_msg = MSG_267;
 static size_t split_root_len = 0;
 static struct wimlib_progress_info_split last_split_progress;
+static uint64_t split_written;
+static int split_fd = -1;
 
 /*
  * Read the first sector of the disk that a VHD or VHDX contains, along with its
@@ -263,9 +265,20 @@ static enum wimlib_progress_status WimProgressFunc(enum wimlib_progress_msg msg_
 				fprintf(fd_md5sum, "  ./%s\n", &filename[split_root_len]);
 			}
 		}
+		safe_close(split_fd);
 		break;
 	case WIMLIB_PROGRESS_MSG_WRITE_STREAMS: {
 		uint64_t completed_bytes = last_split_progress.completed_bytes + info->write_streams.completed_compressed_bytes;
+		// wimlib creates the file of a part after SPLIT_BEGIN_PART
+		if (split_fd < 0)
+			split_fd = open(last_split_progress.part_name, O_RDONLY | O_CLOEXEC);
+		if ((split_fd >= 0) && (completed_bytes > split_written) &&
+			!ThrottleWrites(split_fd, completed_bytes - split_written)) {
+			uprintf("Could not write '%s': %s", last_split_progress.part_name, WindowsErrorString());
+			ErrorStatus = RUFUS_ERROR(ERROR_WRITE_FAULT);
+			return WIMLIB_PROGRESS_STATUS_ABORT;
+		}
+		split_written = completed_bytes;
 		nb_blocks = last_nb_blocks + completed_bytes / 2048;
 		UpdateProgressWithInfo(OP_FILE_COPY, MSG_231, nb_blocks, total_blocks + extra_blocks);
 		break;
@@ -349,6 +362,7 @@ BOOL WimSplitFile(const char* src, const char* dst, size_t root_len)
 		goto out;
 
 	split_root_len = root_len;
+	split_written = 0;
 	wimlib_global_init(0);
 	wimlib_set_print_errors(true);
 	r = wimlib_open_wim(src, 0, &wim);
@@ -356,6 +370,7 @@ BOOL WimSplitFile(const char* src, const char* dst, size_t root_len)
 		wimlib_register_progress_function(wim, WimProgressFunc, NULL);
 		r = wimlib_split(wim, dst, 4094ULL * MB, WIMLIB_WRITE_FLAG_FSYNC);
 		wimlib_free(wim);
+		safe_close(split_fd);
 	}
 	wimlib_global_cleanup();
 

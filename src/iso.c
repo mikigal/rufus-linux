@@ -717,7 +717,8 @@ static int udf_extract_files(udf_t *p_udf, udf_dirent_t *p_udf_dirent, const cha
 					buf_size = (DWORD)MIN(file_length, read);
 					if (fd_md5sum != NULL)
 						hash_write[HASH_MD5](&ctx, buf, buf_size);
-					ISO_BLOCKING(r = WriteFileWithRetry(file_handle, buf, buf_size, &wr_size, WRITE_RETRIES));
+					ISO_BLOCKING(r = WriteFileWithRetry(file_handle, buf, buf_size, &wr_size, WRITE_RETRIES) &&
+						ThrottleWrites(file_handle, wr_size));
 					if (!r || (wr_size != buf_size)) {
 						if (r)
 							errno = EIO;
@@ -776,8 +777,10 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 	DWORD buf_size, wr_size;
 	EXTRACT_PROPS props;
 	HASH_CONTEXT ctx;
-	BOOL is_symlink, is_identical, create_file, free_p_statbuf = FALSE;
-	int length, r = 1;
+	BOOL is_symlink, is_identical, create_file, written, free_p_statbuf = FALSE;
+	// NB: Upstream also stores the results of the writes and of the subdirectories in r,
+	// which makes the errors that follow them return 0, so that the extraction goes on
+	int length, sub_r, r = 1;
 	char psz_fullpath[MAX_PATH], *psz_basename = NULL, *psz_sanpath = NULL;
 	char tmp[MAX_PATH], target_path[256], *last_slash;
 	const char *psz_iso_name = &psz_fullpath[strlen(psz_extract_dir)];
@@ -859,10 +862,10 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 				}
 				safe_free(psz_sanpath);
 			}
-			r = iso_extract_files(p_iso, psz_iso_name);
-			if (r > 0)
+			sub_r = iso_extract_files(p_iso, psz_iso_name);
+			if (sub_r > 0)
 				goto out;
-			if (r < 0)	// Stop processing current dir
+			if (sub_r < 0)	// Stop processing current dir
 				break;
 		} else {
 			file_length = p_statbuf->total_size;
@@ -974,9 +977,9 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 						goto out;
 				} else if (is_symlink) {
 					// Create a text file that contains the target link
-					ISO_BLOCKING(r = WriteFileWithRetry(file_handle, p_statbuf->rr.psz_symlink,
+					ISO_BLOCKING(written = WriteFileWithRetry(file_handle, p_statbuf->rr.psz_symlink,
 						(DWORD)safe_strlen(p_statbuf->rr.psz_symlink), &wr_size, WRITE_RETRIES));
-					if (!r) {
+					if (!written) {
 						uprintf("  Error writing file: %s", WindowsErrorString());
 						goto out;
 					}
@@ -996,9 +999,10 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 						buf_size = (DWORD)MIN(file_length, ISO_BUFFER_SIZE);
 						if (fd_md5sum != NULL)
 							hash_write[HASH_MD5](&ctx, buf, buf_size);
-						ISO_BLOCKING(r = WriteFileWithRetry(file_handle, buf, buf_size, &wr_size, WRITE_RETRIES));
-						if (!r || wr_size != buf_size) {
-							if (r)
+						ISO_BLOCKING(written = WriteFileWithRetry(file_handle, buf, buf_size, &wr_size, WRITE_RETRIES) &&
+							ThrottleWrites(file_handle, wr_size));
+						if (!written || wr_size != buf_size) {
+							if (written)
 								errno = EIO;
 							uprintf("  Error writing file: %s", WindowsErrorString());
 							goto out;
