@@ -4,6 +4,7 @@
 add_library(rufus_core STATIC
 	analyze.c
 	boot_check.c
+	boot_records.c
 	devices.c
 	download.c
 	globals.c
@@ -14,6 +15,7 @@ add_library(rufus_core STATIC
 	progress.c
 	resource.c
 	rules.c
+	write_drive.c
 	ui_iface.c
 	../cregex_compile.c
 	../cregex_parse.c

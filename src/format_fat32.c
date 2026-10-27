@@ -39,6 +39,7 @@
 #include "missing.h"
 #include "resource.h"
 #include "localization.h"
+#include "file.h"
 
 #define die(msg, err) do { uprintf(msg); ErrorStatus = RUFUS_ERROR(err); goto out; } while(0)
 
@@ -126,18 +127,6 @@ static DWORD GetVolumeID(void)
 
 	d = lo + (hi << 16);
 	return d;
-}
-
-static int64_t write_sectors(int fd, uint64_t SectorSize, uint64_t StartSector, uint64_t nSectors, const void* pBuf)
-{
-	ssize_t r;
-
-	do {
-		r = pwrite(fd, pBuf, (size_t)(nSectors * SectorSize), (off_t)(StartSector * SectorSize));
-	} while ((r < 0) && (errno == EINTR));
-	if (r < 0)
-		uprintf("write_sectors: Write error: %s", WindowsErrorString());
-	return (int64_t)r;
 }
 
 // What SetVolumeLabel() does on FAT: the label goes to the root directory (and the boot sector)

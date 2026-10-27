@@ -56,7 +56,7 @@ int is_rufus_mbr(FILE *fp);
 
 /* returns TRUE if the file has a Rufus GPT master boot record, otherwise
    FALSE.The file position will change when this function is called! */
-int is_rufus_gpt_mbr(FILE *fp);
+int is_rufus_msg_mbr(FILE *fp);
 
 /* returns TRUE if the file has a ReactOS master boot record, otherwise
    FALSE.The file position will change when this function is called! */

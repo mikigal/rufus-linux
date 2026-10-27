@@ -279,6 +279,15 @@ Done:
     udftools. The VM test formats and mounts the partitions of the stick.
   - `RefreshPartitions()` now waits for udev to have processed each new partition: its
     queue can still be empty right after `BLKRRPART`.
+- **Boot records and disk images** (`core/boot_records.c`, `core/write_drive.c`):
+  - `WriteMBR()`, `WriteSBR()` and `WritePBR()` are the upstream ones, through ms-sys on
+    the file descriptor of the drive; the PBR is written at the offset of its partition,
+    once the volume is unmounted (Windows writes it through the locked volume).
+  - `WriteDrive()` writes raw and compressed images (bled) and fixed VHDs from a file
+    descriptor, and zeroes drives (fast zeroing included). Dynamic VHDs, VHDX and FFU
+    wait for stage 4.
+  - `tests/test_write.c` checks them on image files, with ms-sys identifying the boot
+    records.
 
 ---
 
