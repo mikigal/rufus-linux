@@ -1,0 +1,375 @@
+name: Release
+
+# The packages of a release tag, which become the assets of its GitHub release, and the AUR
+# packages rufus and rufus-bin, once the SSH key of the AUR account is in the AUR_SSH_PRIVATE_KEY
+# secret. On the branches under ci/, the packages are only artifacts of the run, and the AUR
+# packages only get generated.
+on:
+  push:
+    tags: ['v*']
+    branches: ['ci/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  source:
+    name: Source archive
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Archive
+        run: packaging/source.sh out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-source
+          path: out/*
+
+  deb:
+    name: ${{ matrix.distro }} package
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: Debian 13
+            image: debian:13
+            id: debian13
+          - distro: Ubuntu 26.04
+            image: ubuntu:26.04
+            id: ubuntu2604
+
+    steps:
+      - name: Install the tools
+        run: |
+          apt-get update
+          apt-get install -y git devscripts equivs
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install the build dependencies
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          mk-build-deps --install --remove --tool 'apt-get -y --no-install-recommends' packaging/debian/control
+
+      - name: Build
+        run: packaging/debian/build.sh out
+
+      - name: Install
+        run: |
+          apt-get install -y ./out/*.deb
+          rufus-cli --help > /dev/null
+          rufus --help
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.id }}
+          path: out/*.deb
+
+  rpm:
+    name: ${{ matrix.distro }} package
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: Fedora
+            image: fedora:latest
+            id: fedora
+          - distro: openSUSE Tumbleweed
+            image: opensuse/tumbleweed:latest
+            id: opensuse
+
+    steps:
+      - name: Install the tools (Fedora)
+        if: matrix.id == 'fedora'
+        run: dnf install -y git rpm-build 'dnf-command(builddep)'
+
+      - name: Install the tools (openSUSE)
+        if: matrix.id == 'opensuse'
+        run: zypper -n install git rpm-build tar gzip findutils
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install the build dependencies
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          if [ "${{ matrix.id }}" = fedora ]; then
+            dnf builddep -y packaging/rpm/rufus.spec
+          else
+            rpmspec -q --buildrequires packaging/rpm/rufus.spec | tr -d ' ' | xargs zypper -n install
+          fi
+
+      - name: Build
+        run: packaging/rpm/build.sh out
+
+      - name: Install
+        run: |
+          if [ "${{ matrix.id }}" = fedora ]; then
+            dnf install -y ./out/*.rpm
+          else
+            zypper -n --no-gpg-checks install --allow-unsigned-rpm ./out/*.rpm
+          fi
+          rufus-cli --help > /dev/null
+          rufus --help
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.id }}
+          path: out/*.rpm
+
+  arch:
+    name: Arch Linux package
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+
+    steps:
+      - name: Install the tools
+        run: |
+          pacman -Syu --noconfirm --needed base-devel git cmake ninja qt6-base qt6-wayland curl openssl \
+            hivex e2fsprogs systemd polkit dosfstools ntfs-3g
+          useradd -m builder
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Build
+        run: |
+          chown -R builder "$GITHUB_WORKSPACE"
+          sudo -u builder git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          sudo -u builder packaging/arch/build.sh rufus out
+
+      - name: Install
+        run: |
+          pacman -U --noconfirm out/*.pkg.tar.zst
+          rufus-cli --help > /dev/null
+          rufus --help
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-arch
+          path: out/*.pkg.tar.zst
+
+  portable:
+    name: AppImage and portable archive
+    runs-on: ubuntu-latest
+    # The oldest base with what Rufus needs (CMake 3.25, libcurl 7.85): the AppImage runs where the
+    # glibc is the same or newer
+    container: ubuntu:24.04
+    env:
+      QT_VERSION: 6.8.3
+      # No FUSE in the container
+      APPIMAGE_EXTRACT_AND_RUN: 1
+
+    steps:
+      - name: Install the tools
+        run: |
+          apt-get update
+          apt-get install -y git build-essential cmake ninja-build pkg-config libext2fs-dev comerr-dev \
+            libssl-dev libcurl4-openssl-dev libhivex-dev libudev-dev python3-venv wget file binutils \
+            patchelf xvfb xauth libgl-dev libegl-dev libglvnd-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libwayland-client0 libwayland-cursor0 libwayland-egl1 libfontconfig1 libfreetype6 libdbus-1-3 \
+            libglib2.0-0t64 libx11-xcb1 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 \
+            libxcb-sync1 libxcb-shm0 libxcb-util1 libxrender1 libsm6 libice6
+          python3 -m venv /opt/aqt
+          /opt/aqt/bin/pip install aqtinstall
+          /opt/aqt/bin/aqt install-qt linux desktop "$QT_VERSION" linux_gcc_64 -O /opt/qt
+          ls "/opt/qt/$QT_VERSION/gcc_64/plugins/platforms"
+          mkdir /opt/linuxdeploy
+          for tool in linuxdeploy linuxdeploy-plugin-qt linuxdeploy-plugin-appimage; do
+            wget -q -O "/opt/linuxdeploy/$tool-x86_64.AppImage" \
+              "https://github.com/linuxdeploy/$tool/releases/download/continuous/$tool-x86_64.AppImage"
+            chmod +x "/opt/linuxdeploy/$tool-x86_64.AppImage"
+          done
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Build
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          qt="/opt/qt/$QT_VERSION/gcc_64"
+          export PATH="/opt/linuxdeploy:$qt/bin:$PATH" CMAKE_PREFIX_PATH="$qt" QMAKE="$qt/bin/qmake"
+          export LD_LIBRARY_PATH="$qt/lib" LINUXDEPLOY=/opt/linuxdeploy/linuxdeploy-x86_64.AppImage
+          packaging/portable/build.sh out
+
+      - name: Check
+        run: |
+          mkdir check
+          tar -xzf out/*.tar.gz -C check
+          tree=$(echo "$PWD"/check/*)
+          ls "$tree/usr/plugins/platforms" "$tree/usr/plugins/wayland-shell-integration"
+          "$tree/AppRun" --help
+          "$tree/AppRun" --cli --help > /dev/null
+          ln -s "$tree/AppRun" check/rufus-cli
+          check/rufus-cli --help > /dev/null
+          out/*.AppImage --help
+          # The window, through the X11 platform of the tree
+          RUFUS_TEST_CAPTURE="$PWD/out/window.png" RUFUS_TEST_QUIT=1 QT_QPA_PLATFORM=xcb \
+            xvfb-run -a out/*.AppImage -v
+          test -s out/window.png
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-appimage
+          path: out/*.AppImage
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-portable
+          path: out/*.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portable-window
+          path: out/window.png
+
+  # The PKGBUILD of rufus-bin, with the portable archive
+  arch-bin:
+    name: Arch Linux package (rufus-bin)
+    needs: portable
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+
+    steps:
+      - name: Install the tools
+        run: |
+          pacman -Syu --noconfirm --needed base-devel git polkit dosfstools ntfs-3g fontconfig freetype2 \
+            libglvnd libxkbcommon wayland
+          useradd -m builder
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-portable
+          path: portable
+
+      - name: Build
+        run: |
+          chown -R builder "$GITHUB_WORKSPACE"
+          sudo -u builder git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          sudo -u builder packaging/arch/build.sh rufus-bin portable/*.tar.gz out
+
+      - name: Install
+        run: |
+          pacman -U --noconfirm out/*.pkg.tar.zst
+          rufus --help
+          rufus-cli --help > /dev/null
+          grep -q '>/opt/rufus/usr/libexec/rufus-helper<' /usr/share/polkit-1/actions/ie.rufus.helper.policy
+          test -x /opt/rufus/usr/libexec/rufus-helper
+
+  release:
+    name: GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [source, deb, rpm, arch, portable, arch-bin]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: assets
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd assets
+          sha256sum * > SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --title "Rufus ${GITHUB_REF_NAME#v} for Linux" \
+            --notes "Packages for Arch Linux (also in the AUR: rufus, rufus-bin), Debian 13, Ubuntu 26.04, Fedora and openSUSE Tumbleweed, an AppImage and a portable archive (both with their own Qt). See [LINUX_PORT.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/LINUX_PORT.md) for the state of the port." \
+            *
+
+  aur:
+    name: AUR packages
+    needs: [source, portable, release]
+    # After the release of a tag, and without it on the branches
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    env:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+
+    steps:
+      - name: Install the tools
+        run: |
+          pacman -Syu --noconfirm --needed base-devel git openssh
+          useradd -m builder
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-{source,portable}
+          path: assets
+          merge-multiple: true
+
+      - name: Generate the PKGBUILDs
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          version=$(packaging/version.sh)
+          pkgver=$(echo "$version" | tr '~' '_')
+          for package in rufus rufus-bin; do
+            case $package in
+              rufus) asset="assets/rufus-linux-$version.tar.gz" ;;
+              rufus-bin) asset="assets/rufus-$version-x86_64.tar.gz" ;;
+            esac
+            sha=$(sha256sum "$asset" | cut -d ' ' -f 1)
+            mkdir -p "aur/$package"
+            sed -e "s/^pkgver=.*/pkgver=$pkgver/" -e "s/^sha256sums=.*/sha256sums=('$sha')/" \
+              "packaging/arch/$package/PKGBUILD" > "aur/$package/PKGBUILD"
+            chown -R builder aur
+            (cd "aur/$package" && sudo -u builder makepkg --printsrcinfo > .SRCINFO)
+            cat "aur/$package/PKGBUILD" "aur/$package/.SRCINFO"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aur
+          path: aur
+
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/v') && env.AUR_SSH_PRIVATE_KEY != ''
+        run: |
+          install -d -m 700 ~/.ssh
+          echo "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur"
+          for package in rufus rufus-bin; do
+            git clone "ssh://aur@aur.archlinux.org/$package.git" "repo-$package"
+            cp "aur/$package/PKGBUILD" "aur/$package/.SRCINFO" "repo-$package/"
+            cd "repo-$package"
+            git add PKGBUILD .SRCINFO
+            if ! git diff --cached --quiet; then
+              git -c user.name=mikigal -c user.email=mikigal.priv@gmail.com commit -m "Update to ${GITHUB_REF_NAME#v}"
+              git push origin HEAD:master
+            fi
+            cd ..
+          done

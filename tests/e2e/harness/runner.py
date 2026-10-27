@@ -38,18 +38,22 @@ def virtio_disk_qemu_opts(image: str, name: str = "vdisk") -> str:
 
 def run_in_vm(script: str, stick: str | None = None, uas: bool = False,
               rw_dirs: tuple[str, ...] = (), memory: str = "2G", timeout: float = 600,
-              extra_qemu_opts: str = "") -> subprocess.CompletedProcess:
+              extra_qemu_opts: str = "", network: bool = False) -> subprocess.CompletedProcess:
     """Run the shell 'script' as root in a VM booted from the host kernel, and
     return its exit status and output. 'rw_dirs' are host directories the
     script may write to (the rest of the host file system is read-only in the
-    guest), and 'extra_qemu_opts' other devices for the VM."""
+    guest), 'extra_qemu_opts' other devices for the VM, and 'network' gives it
+    the user mode network of QEMU (for the downloads of Rufus)."""
     if vng_binary() is None:
         raise RuntimeError("virtme-ng (vng) is not installed")
-    # The default "microvm" machine has no PCI bus, hence no USB controller
-    args = ["vng", "--run", "--disable-microvm", "--user", "root",
-            "--memory", memory, "--cpus", "2"]
+    # The default "microvm" machine has no PCI bus, hence no USB controller. The kernel is the running
+    # one, or $RUFUS_E2E_KERNEL (with its modules in /lib/modules)
+    args = ["vng", "--run"] + ([os.environ["RUFUS_E2E_KERNEL"]] if os.environ.get("RUFUS_E2E_KERNEL") else [])
+    args += ["--disable-microvm", "--user", "root", "--memory", memory, "--cpus", "2"]
     for d in rw_dirs:
         args.append(f"--rwdir={d}")
+    if network:
+        args += ["--network", "user"]
     qemu_opts = extra_qemu_opts
     if stick is not None:
         qemu_opts = usb_stick_qemu_opts(os.path.abspath(stick), uas) + " " + qemu_opts

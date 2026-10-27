@@ -1,14 +1,17 @@
 name: Linux build
 
+# On release tags, and on the branches under ci/ (to try changes of CI without a release)
 on:
   push:
     tags: ['v*']
+    branches: ['ci/**']
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  # The build and the unit tests (T0, T1), on each distribution that gets a package
   build:
     name: ${{ matrix.distro }} (${{ matrix.cc }})
     runs-on: ubuntu-latest
@@ -30,35 +33,51 @@ jobs:
             image: fedora:latest
             cc: gcc
             cxx: g++
-          - distro: Ubuntu 24.04 (no GUI, Qt is too old)
-            image: ubuntu:24.04
+          - distro: openSUSE Tumbleweed
+            image: opensuse/tumbleweed:latest
             cc: gcc
             cxx: g++
-            cmake_flags: -DRUFUS_BUILD_GUI=OFF
+          - distro: Debian 13
+            image: debian:13
+            cc: gcc
+            cxx: g++
+          - distro: Ubuntu 26.04
+            image: ubuntu:26.04
+            cc: gcc
+            cxx: g++
 
     steps:
       - name: Install dependencies (Arch Linux)
         if: startsWith(matrix.image, 'archlinux')
         run: |
           pacman -Syu --noconfirm --needed base-devel git cmake ninja clang qt6-base \
-            e2fsprogs dosfstools libisoburn libntfs-3g openssl curl hivex mtools qemu-img \
+            e2fsprogs dosfstools libisoburn openssl curl hivex mtools qemu-img \
             ntfs-3g exfatprogs udftools
 
       - name: Install dependencies (Fedora)
         if: startsWith(matrix.image, 'fedora')
         run: |
           dnf install -y git gcc gcc-c++ clang cmake ninja-build pkgconf-pkg-config \
-            qt6-qtbase-devel e2fsprogs e2fsprogs-devel libcom_err-devel util-linux \
-            dosfstools xorriso ntfs-3g-devel openssl-devel libcurl-devel hivex-devel mtools qemu-img systemd-devel \
+            'cmake(Qt6Widgets)' 'cmake(Qt6DBus)' e2fsprogs e2fsprogs-devel libcom_err-devel util-linux \
+            dosfstools xorriso openssl-devel libcurl-devel hivex-devel mtools qemu-img systemd-devel \
             ntfsprogs exfatprogs udftools
 
-      - name: Install dependencies (Ubuntu)
-        if: startsWith(matrix.image, 'ubuntu')
+      - name: Install dependencies (openSUSE)
+        if: startsWith(matrix.image, 'opensuse')
+        run: |
+          zypper -n install git gcc gcc-c++ clang cmake ninja pkgconf \
+            'cmake(Qt6Widgets)' 'cmake(Qt6DBus)' e2fsprogs 'pkgconfig(ext2fs)' 'pkgconfig(com_err)' util-linux \
+            dosfstools xorriso 'pkgconfig(openssl)' 'pkgconfig(libcurl)' 'pkgconfig(hivex)' mtools qemu-img \
+            'pkgconfig(libudev)' ntfsprogs exfatprogs udftools gawk
+
+      - name: Install dependencies (Debian, Ubuntu)
+        if: startsWith(matrix.image, 'debian') || startsWith(matrix.image, 'ubuntu')
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential cmake ninja-build \
-            pkg-config e2fsprogs libext2fs-dev comerr-dev dosfstools xorriso libntfs-3g-dev \
-            libssl-dev libcurl4-openssl-dev libhivex-dev mtools qemu-utils libudev-dev fdisk ntfs-3g exfatprogs udftools
+          DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential clang cmake ninja-build \
+            pkg-config qt6-base-dev e2fsprogs libext2fs-dev comerr-dev dosfstools xorriso \
+            libssl-dev libcurl4-openssl-dev libhivex-dev mtools qemu-utils libudev-dev fdisk ntfs-3g \
+            exfatprogs udftools
 
       - uses: actions/checkout@v5
 
@@ -66,10 +85,79 @@ jobs:
         env:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}
-        run: cmake -S . -B build -G Ninja -DRUFUS_WERROR=ON ${{ matrix.cmake_flags }}
+        run: cmake -S . -B build -G Ninja -DRUFUS_WERROR=ON
 
       - name: Build
         run: cmake --build build
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  # The GUI tests (T4), under headless compositors, with the fake helper
+  gui:
+    name: GUI tests
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+
+    steps:
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm --needed base-devel git cmake ninja qt6-base qt6-wayland \
+            e2fsprogs dosfstools openssl curl hivex python python-gobject at-spi2-core dbus \
+            kwin sway ttf-dejavu mesa
+          useradd -m tester
+
+      - uses: actions/checkout@v5
+
+      - name: Build
+        run: |
+          chown -R tester "$GITHUB_WORKSPACE"
+          sudo -u tester cmake -S . -B build -G Ninja -DRUFUS_GUI_TESTS=ON
+          sudo -u tester cmake --build build
+
+      # As a user: the compositors and Rufus do not expect root
+      - name: Test
+        run: |
+          sudo -u tester mkdir -p gui-captures
+          sudo -u tester RUFUS_GUI_ARTIFACTS="$PWD/gui-captures" ctest --test-dir build -L gui --output-on-failure
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gui-captures
+          path: gui-captures
+          if-no-files-found: ignore
+
+  # The end-to-end tests (T2, T3): writes as root in a VM, to an emulated USB stick, and the boot of
+  # the media in QEMU. They need KVM, hence the runner itself rather than a container, and a kernel
+  # that the VM can boot with the root file system of the runner (the generic one of Ubuntu).
+  e2e:
+    name: End-to-end tests
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential cmake ninja-build \
+            pkg-config e2fsprogs libext2fs-dev comerr-dev dosfstools xorriso libssl-dev \
+            libcurl4-openssl-dev libhivex-dev mtools qemu-utils libudev-dev fdisk ntfs-3g exfatprogs \
+            udftools qemu-system-x86 ovmf grub-common grub-pc-bin grub-efi-amd64-bin \
+            tesseract-ocr virtme-ng linux-image-generic busybox-static
+          # KVM and the kernel for the user
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          kernel=$(ls -v /boot/vmlinuz-*-generic | tail -n 1)
+          sudo chmod a+r "$kernel"
+          echo "RUFUS_E2E_KERNEL=$kernel" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v5
+
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DRUFUS_BUILD_GUI=OFF -DRUFUS_E2E_TESTS=ON
+          cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build -L e2e --output-on-failure
