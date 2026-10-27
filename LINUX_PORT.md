@@ -326,6 +326,49 @@ Done:
     devices with failing sectors and a fake drive (its second half mapped onto the
     first). The VM boots Syslinux 4 to its prompt and FreeDOS to `C:\>` with a Polish
     keyboard, and runs the pipeline with a bad blocks check.
+- **`rufus-helper` and `rufus-cli write`** (`src/helper/`, `platform/linux/ipc.c`,
+  `helper_client.c`, `res/linux/ie.rufus.helper.policy.in`):
+  - The protocol (`ipc.h`): typed messages on a `SOCK_SEQPACKET` socket, the standard
+    input of the helper, with descriptors (`SCM_RIGHTS`). `IPC_HELLO` checks the version
+    and `sizeof(rufus_options_t)`, as both ends come from the same build; then
+    `IPC_FILE`, `IPC_FORMAT` (options, drive, image, archive and bad blocks report),
+    `IPC_ANSWER` and `IPC_CANCEL` one way, `IPC_LOG`, `IPC_STATUS`, `IPC_PROGRESS`,
+    `IPC_EVENT`, `IPC_ASK` and `IPC_DONE` the other. The end of the socket cancels.
+  - The helper checks what it gets: options in range (`CheckOptions()`), a drive that
+    `GetDevices()` lists with its most permissive filters (so never a system disk), with
+    the `diskseq` and size the front end saw, an image that it scans again and that is
+    not on the drive, and only the boot files that the options use (`GetBootFiles()`),
+    which it copies into an `app_data_dir` of its own in `/run/rufus` before
+    `LoadBootFiles()` sets up what the boot check does. The image gets scanned through
+    a link with its name in that directory, as Rufus tells how an image is compressed
+    from its extension.
+  - Each format runs in a child process, in a mount namespace of its own. The questions
+    go to the front end (notifications and lists: the format asks no selection), and a
+    cancellation reaches it as `SIGUSR1`. The helper reports `IPC_DONE` once the child
+    is gone, so that the next request can't arrive before, and removes the udev rule
+    of a child that crashed.
+  - The front end side: `StartHelper()` (through pkexec unless already root, or
+    `$RUFUS_HELPER` for development), `HelperFormat()`, which runs in the calling thread,
+    forwards the messages to the `ui_iface` of the process and the cancellation of
+    `ErrorStatus` to the helper, and `StopHelper()`.
+  - The polkit action `ie.rufus.helper` allows the installed helper with
+    `auth_admin_keep` in the active session: a single prompt, as with UAC.
+  - `rufus-cli write <device>` sets the options through the rules of the main window,
+    runs the boot check (questions on the terminal, or `--iso`/`--dd` and `--yes`) and
+    asks for the confirmation of upstream (MSG_003), then writes through the helper.
+    SIGINT cancels, and `--archive` adds a zip archive. Downloads are not there yet
+    (`download.c` is a stub), so the boot files must already be in `app_data_dir`.
+  - Cleaning up no longer depends on the operation: `udevadm` runs after a
+    cancellation (`RunCommand()` refuses to), and the drive gets a change event once its
+    rule is gone, or udisks would keep ignoring it.
+  - `tests/test_ipc.c` checks the messages (descriptors, malformed and oversized ones),
+    `CheckOptions()`, the front end side against a fake helper, and that the helper
+    refuses to run without root or its socket. `tests/test_bootcheck.c` checks the boot
+    files. In the VM, `tests/test_helper_vm.c` checks the requests that the helper
+    refuses, the boot files, and a cancellation and a disconnection during a bad blocks
+    check, after which nothing is left; `tests/e2e/test_cli.py` writes a non-bootable
+    drive, the GRUB ISO in ISO mode (booted with UEFI) and in DD mode (booted with
+    BIOS), and interrupts a write.
 
 ---
 

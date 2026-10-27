@@ -52,3 +52,15 @@ extern BOOL StartBootCheck(const bootcheck_drive_t* drive);
 
 /* Whether image_path is stored on the drive (block device) 'target' */
 extern BOOL IsSourceImageLocatedOnTargetDrive(const char* target);
+
+/*
+ * The files of app_data_dir/FILES_DIR that the format of opts and img_report
+ * uses, as the boot check reuses or downloads them (GRUB's core.img, Syslinux
+ * files, grldr, diskcopy.dll), relative to app_data_dir/FILES_DIR. With
+ * existing_only, only the ones that are there. Returns how many there are.
+ */
+#define MAX_BOOT_FILES              8
+extern int GetBootFiles(char names[MAX_BOOT_FILES][MAX_PATH], BOOL existing_only);
+
+/* Set up what BootCheck() sets up from these files (grub2_buf, syslinux_ldlinux_len), without asking anything */
+extern void LoadBootFiles(void);

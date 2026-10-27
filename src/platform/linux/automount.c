@@ -31,12 +31,15 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <sched.h>
+#include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -47,11 +50,33 @@
 #define RULE_PREFIX                 "90-rufus-"
 #define RUFUS_RUN_DIR               "/run/rufus"
 
+extern char** environ;
+
+// Run udevadm, even once the operation is cancelled (unlike RunCommand()), as cleaning up depends on it
+static BOOL Udevadm(const char* const* argv)
+{
+	posix_spawn_file_actions_t actions;
+	int r, status = 0;
+	pid_t pid;
+
+	posix_spawn_file_actions_init(&actions);
+	posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+	posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+	if (!usb_debug)
+		posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+	r = posix_spawnp(&pid, argv[0], &actions, NULL, (char* const*)argv, environ);
+	posix_spawn_file_actions_destroy(&actions);
+	if (r != 0)
+		return FALSE;
+	while ((waitpid(pid, &status, 0) < 0) && (errno == EINTR));
+	return WIFEXITED(status) && (WEXITSTATUS(status) == 0);
+}
+
 static BOOL ReloadUdevRules(void)
 {
 	const char* argv[] = { "udevadm", "control", "--reload", NULL };
 
-	return (RunCommand(argv, NULL, usb_debug) == 0);
+	return Udevadm(argv);
 }
 
 void GetAutomountRule(const char* syspath, char* rule, size_t size)
@@ -95,23 +120,40 @@ BOOL SuppressAutomount(const char* syspath)
 
 void RemoveAutomountRules(void)
 {
-	char path[PATH_MAX];
+	char path[PATH_MAX], devices[MAX_DRIVES][64], parent[96];
+	const char* trigger[] = { "udevadm", "trigger", "--settle", "--action=change", parent, NULL };
 	struct dirent* entry;
 	DIR* dir = opendir(UDEV_RULES_DIR);
-	int removed = 0;
+	size_t len;
+	int i, removed = 0;
 
 	if (dir == NULL)
 		return;
 	while ((entry = readdir(dir)) != NULL) {
-		if (strncmp(entry->d_name, RULE_PREFIX, strlen(RULE_PREFIX)) != 0)
+		len = strlen(entry->d_name);
+		if ((strncmp(entry->d_name, RULE_PREFIX, strlen(RULE_PREFIX)) != 0) || (len < strlen(RULE_PREFIX) + 7) ||
+			(strcmp(&entry->d_name[len - 6], ".rules") != 0))
 			continue;
 		static_sprintf(path, "%s/%s", UDEV_RULES_DIR, entry->d_name);
-		if (unlink(path) == 0)
-			removed++;
+		if ((unlink(path) == 0) && (removed < MAX_DRIVES)) {
+			// The name of the drive, from "90-rufus-<name>.rules"
+			len -= strlen(RULE_PREFIX) + 6;
+			if (len < sizeof(devices[0])) {
+				memcpy(devices[removed], &entry->d_name[strlen(RULE_PREFIX)], len);
+				devices[removed++][len] = 0;
+			}
+		}
 	}
 	closedir(dir);
-	if (removed != 0)
-		ReloadUdevRules();
+	if (removed == 0)
+		return;
+	ReloadUdevRules();
+	// Without a new event, udisks would still ignore the drive and its partitions
+	for (i = 0; i < removed; i++) {
+		static_sprintf(parent, "--parent-match=/sys/class/block/%s", devices[i]);
+		if (!Udevadm(trigger))
+			uprintf("Could not refresh the udev properties of %s", devices[i]);
+	}
 }
 
 BOOL EnterPrivateMountNamespace(void)

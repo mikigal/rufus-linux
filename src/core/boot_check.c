@@ -120,6 +120,76 @@ static void ReadGrub2Buf(const char* path, const char* name, const char* err)
 		fclose(fd);
 }
 
+int GetBootFiles(char names[MAX_BOOT_FILES][MAX_PATH], BOOL existing_only)
+{
+	char path[2 * MAX_PATH];
+	int i, n = 0, j;
+
+	if ((opts.boot_type == BT_IMAGE) && (opts.target_type == TT_BIOS) && (opts.partition_type == PARTITION_STYLE_MBR)) {
+		if (img_report.has_grub2 && (img_report.grub2_version[0] != 0) &&
+			(strcmp(img_report.grub2_version, GRUB2_PACKAGE_VERSION) != 0))
+			static_sprintf(names[n++], "grub-%s/core.img", img_report.grub2_version);
+		if (HAS_SYSLINUX(img_report)) {
+			if (SL_MAJOR(img_report.sl_version) < 5) {
+				for (i = 0; (i < NB_OLD_C32) && (n < MAX_BOOT_FILES); i++) {
+					if (img_report.has_old_c32[i] && opts.use_own_c32[i])
+						static_sprintf(names[n++], "syslinux-%s/%s", embedded_sl_version_str[0], old_c32_name[i]);
+				}
+			} else if ((img_report.sl_version != embedded_sl_version[1]) ||
+				(safe_strcmp(img_report.sl_version_ext, embedded_sl_version_ext[1]) != 0)) {
+				for (i = 0; (i < 2) && (n < MAX_BOOT_FILES); i++)
+					static_sprintf(names[n++], "syslinux-%s%s/ldlinux.%s", img_report.sl_version_str,
+						img_report.sl_version_ext, (i == 0) ? "sys" : "bss");
+			}
+		}
+	} else if (opts.boot_type == BT_SYSLINUX_V6) {
+		static_sprintf(names[n++], "syslinux-%s/ldlinux.c32", embedded_sl_version_str[1]);
+	} else if (opts.boot_type == BT_MSDOS) {
+		static_strcpy(names[n++], "diskcopy.dll");
+	} else if (opts.boot_type == BT_GRUB4DOS) {
+		static_strcpy(names[n++], "grub4dos-" GRUB4DOS_VERSION "/grldr");
+	}
+	if (!existing_only)
+		return n;
+	for (i = 0, j = 0; i < n; i++) {
+		static_sprintf(path, "%s/%s/%s", app_data_dir, FILES_DIR, names[i]);
+		if (access(path, R_OK) == 0) {
+			if (j != i)
+				static_strcpy(names[j], names[i]);
+			j++;
+		}
+	}
+	return j;
+}
+
+void LoadBootFiles(void)
+{
+	char names[MAX_BOOT_FILES][MAX_PATH], path[2 * MAX_PATH];
+	struct stat st;
+	int i, n = GetBootFiles(names, TRUE);
+
+	syslinux_ldlinux_len[0] = 0; syslinux_ldlinux_len[1] = 0;
+	safe_free(grub2_buf);
+	for (i = 0; i < n; i++) {
+		static_sprintf(path, "%s/%s/%s", app_data_dir, FILES_DIR, names[i]);
+		if (strncmp(names[i], "grub-", 5) == 0) {
+			uprintf("Will reuse '%s' for Grub 2.x installation", path);
+			ReadGrub2Buf(path, "core.img", "existing ");
+		} else if ((strncmp(names[i], "syslinux-", 9) == 0) && (strstr(names[i], "/ldlinux.") != NULL) &&
+			(strcmp(&names[i][strlen(names[i]) - 4], ".c32") != 0) && (stat(path, &st) == 0)) {
+			syslinux_ldlinux_len[(strcmp(&names[i][strlen(names[i]) - 4], ".sys") == 0) ? 0 : 1] = (DWORD)st.st_size;
+		}
+	}
+	// Both are needed, or the embedded ones get used
+	if ((syslinux_ldlinux_len[0] == 0) || (syslinux_ldlinux_len[1] == 0)) {
+		syslinux_ldlinux_len[0] = 0;
+		syslinux_ldlinux_len[1] = 0;
+	} else {
+		uprintf("Will reuse the Syslinux %s%s files for Syslinux installation", img_report.sl_version_str,
+			img_report.sl_version_ext);
+	}
+}
+
 enum bootcheck_return BootCheck(const bootcheck_drive_t* drive)
 {
 	int i, r;

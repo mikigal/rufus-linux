@@ -198,6 +198,8 @@ extern void rules_on_target_system(rules_state_t* m, int index);
 extern void rules_on_file_system(rules_state_t* m, int index);
 extern void rules_on_cluster_size(rules_state_t* m, int index);
 extern void rules_on_nb_passes(rules_state_t* m, int index);
+// A persistence size typed in (in bytes), once the size field loses the focus
+extern void rules_on_persistence_size(rules_state_t* m, uint64_t size);
 extern void rules_on_label(rules_state_t* m, const char* label);
 // A check box was clicked: 'check' is one of the rules_check_t of the state
 extern void rules_on_check(rules_state_t* m, rules_check_t* check);

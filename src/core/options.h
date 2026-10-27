@@ -91,3 +91,9 @@ extern rufus_options_t opts;
 
 /* Set the defaults of a freshly started Rufus */
 extern void ResetOptions(rufus_options_t* o);
+
+/*
+ * Check options that come from another process (the helper gets them from the
+ * front end): values in range, and terminated strings.
+ */
+extern BOOL CheckOptions(const rufus_options_t* o);

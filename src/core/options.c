@@ -45,3 +45,29 @@ void ResetOptions(rufus_options_t* o)
 		}
 	}
 }
+
+BOOL CheckOptions(const rufus_options_t* o)
+{
+	int i;
+
+	if ((memchr(o->label, 0, sizeof(o->label)) == NULL) || (memchr(o->locale, 0, sizeof(o->locale)) == NULL))
+		return FALSE;
+	if ((o->boot_type < 0) || (o->boot_type >= BT_MAX) ||
+		(o->partition_type < PARTITION_STYLE_MBR) || (o->partition_type > PARTITION_STYLE_SFD) ||
+		(o->target_type < 0) || (o->target_type >= TT_MAX) ||
+		(o->fs_type < FS_UNKNOWN) || (o->fs_type >= FS_MAX))
+		return FALSE;
+	// The default, or a power of 2 of up to 32 MB (the largest exFAT clusters)
+	if ((o->cluster_size != 0) && (o->cluster_size != SINGLE_CLUSTERSIZE_DEFAULT) &&
+		(((o->cluster_size & (o->cluster_size - 1)) != 0) || (o->cluster_size < 512) || (o->cluster_size > 32 * MB)))
+		return FALSE;
+	if ((o->nb_passes_sel < 0) || (o->nb_passes_sel > 4) ||
+		(o->image_option < -1) || (o->image_option > IMOP_WIN_TO_GO) ||
+		(o->persistence_size > o->disk_size))
+		return FALSE;
+	for (i = 0; i < NB_OLD_C32; i++) {
+		if ((o->use_own_c32[i] != FALSE) && (o->use_own_c32[i] != TRUE))
+			return FALSE;
+	}
+	return TRUE;
+}

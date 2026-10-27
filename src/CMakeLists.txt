@@ -7,6 +7,7 @@ add_subdirectory(wimlib)
 add_subdirectory(core)
 add_subdirectory(platform)
 add_subdirectory(cli)
+add_subdirectory(helper)
 
 if(RUFUS_BUILD_GUI)
 	add_subdirectory(ui/qt)

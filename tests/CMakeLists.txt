@@ -69,6 +69,10 @@ target_link_libraries(test_filesystems PRIVATE rufus_platform)
 rufus_add_test(test_badblocks test_badblocks.c)
 target_link_libraries(test_badblocks PRIVATE rufus_platform)
 
+rufus_add_test(test_ipc test_ipc.c)
+target_link_libraries(test_ipc PRIVATE rufus_platform)
+set_property(TEST test_ipc APPEND PROPERTY ENVIRONMENT "RUFUS_TEST_HELPER=$<TARGET_FILE:rufus-helper>")
+
 rufus_add_test(test_disk test_disk.c)
 target_link_libraries(test_disk PRIVATE rufus_platform)
 
@@ -77,6 +81,8 @@ rufus_add_test(test_disk_vm test_disk_vm.c)
 target_link_libraries(test_disk_vm PRIVATE rufus_platform)
 rufus_add_test(test_format_vm test_format_vm.c)
 target_link_libraries(test_format_vm PRIVATE rufus_platform)
+rufus_add_test(test_helper_vm test_helper_vm.c)
+target_link_libraries(test_helper_vm PRIVATE rufus_platform)
 
 # The rules are checked against the original Windows functions (rules_oracle/rules_win.c)
 rufus_add_test(test_rules test_rules.c rules_oracle/rules_win.c)
@@ -103,4 +109,8 @@ if(RUFUS_E2E_TESTS)
 		WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/e2e")
 	set_tests_properties(e2e_format PROPERTIES LABELS e2e TIMEOUT 3600
 		ENVIRONMENT "RUFUS_TEST_FORMAT_VM=$<TARGET_FILE:test_format_vm>")
+	add_test(NAME e2e_cli COMMAND Python3::Interpreter -m unittest -v test_cli
+		WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/e2e")
+	set_tests_properties(e2e_cli PROPERTIES LABELS e2e TIMEOUT 3600
+		ENVIRONMENT "RUFUS_CLI=$<TARGET_FILE:rufus-cli>;RUFUS_HELPER=$<TARGET_FILE:rufus-helper>;RUFUS_TEST_HELPER_VM=$<TARGET_FILE:test_helper_vm>")
 endif()

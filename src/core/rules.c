@@ -1036,6 +1036,27 @@ void rules_on_label(rules_state_t* m, const char* label)
 	m->user_changed_label = TRUE;
 }
 
+/*
+ * IDC_PERSISTENCE_SIZE (EN_CHANGE, then EN_KILLFOCUS): the size is capped to what
+ * the image leaves on the drive, and raised to MIN_EXT_SIZE (0 disables it)
+ */
+void rules_on_persistence_size(rules_state_t* m, uint64_t size)
+{
+	uint64_t max;
+
+	if (!m->has_device || !(m->image_options & IMOP_PERSISTENCE))
+		return;
+	max = m->drive.disk_size - PERCENTAGE(PROJECTED_SIZE_RATIO, m->img.projected_size);
+	m->persistence_size = min(size, max);
+	if ((m->persistence_size != 0) && (m->persistence_size < MIN_EXT_SIZE))
+		m->persistence_size = MIN_EXT_SIZE;
+	// TogglePersistenceControls()
+	m->persistence_units_visible = (m->persistence_size != 0);
+	m->persistence_size_enabled = m->persistence_units_visible;
+	m->persistence_units_enabled = m->persistence_units_visible;
+	SetPersistenceSize(m);
+}
+
 void rules_on_check(rules_state_t* m, rules_check_t* check)
 {
 	if (!check->enabled)

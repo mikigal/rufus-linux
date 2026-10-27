@@ -474,6 +474,84 @@ static void test_bootloader_files(void)
 	CHECK_BOOTCHECK(BOOTCHECK_PROCEED);
 }
 
+/* The files that the helper gets from the front end, and what it loads from them */
+static void test_shared_boot_files(void)
+{
+	char names[MAX_BOOT_FILES][MAX_PATH], name[MAX_PATH];
+
+	// GRUB
+	reset(BT_IMAGE);
+	linux_iso();
+	img_report.sl_version = 0;
+	img_report.has_grub2 = 1;
+	static_strcpy(img_report.grub2_version, "2.06");
+	CHECK_EQ_INT(GetBootFiles(names, FALSE), 1);
+	CHECK_EQ_STR(names[0], "grub-2.06/core.img");
+	CHECK_EQ_INT(GetBootFiles(names, TRUE), 0);
+	cache_file("grub-2.06/core.img", "GRUB 2.06 core.img");
+	answer(0);
+	CHECK_BOOTCHECK(BOOTCHECK_PROCEED);
+	CHECK_EQ_INT(GetBootFiles(names, TRUE), 1);
+	safe_free(grub2_buf);
+	LoadBootFiles();
+	CHECK_EQ_INT(grub2_len, 18);
+	CHECK(grub2_buf != NULL && memcmp(grub2_buf, "GRUB 2.06 core.img", 18) == 0);
+	opts.partition_type = PARTITION_STYLE_GPT;
+	CHECK_EQ_INT(GetBootFiles(names, FALSE), 0);
+	LoadBootFiles();
+	CHECK(grub2_buf == NULL);
+	uncache();
+
+	// Syslinux v5+, which needs both files
+	reset(BT_IMAGE);
+	linux_iso();
+	img_report.sl_version = 0x0603;
+	static_strcpy(img_report.sl_version_str, "6.03");
+	static_strcpy(img_report.sl_version_ext, "/2014-10-06");
+	CHECK_EQ_INT(GetBootFiles(names, FALSE), 2);
+	CHECK_EQ_STR(names[0], "syslinux-6.03/2014-10-06/ldlinux.sys");
+	CHECK_EQ_STR(names[1], "syslinux-6.03/2014-10-06/ldlinux.bss");
+	cache_file("syslinux-6.03/2014-10-06/ldlinux.sys", "ldlinux.sys");
+	LoadBootFiles();
+	CHECK(syslinux_ldlinux_len[0] == 0 && syslinux_ldlinux_len[1] == 0);
+	cache_file("syslinux-6.03/2014-10-06/ldlinux.bss", "ldlinux.bss!");
+	CHECK_EQ_INT(GetBootFiles(names, TRUE), 2);
+	LoadBootFiles();
+	CHECK_EQ_INT(syslinux_ldlinux_len[0], 11);
+	CHECK_EQ_INT(syslinux_ldlinux_len[1], 12);
+	// None for UEFI
+	opts.target_type = TT_UEFI;
+	CHECK_EQ_INT(GetBootFiles(names, FALSE), 0);
+	LoadBootFiles();
+	CHECK(syslinux_ldlinux_len[0] == 0);
+	uncache();
+
+	// Syslinux v4: the .c32 files that replace the ones of the ISO
+	reset(BT_IMAGE);
+	linux_iso();
+	img_report.sl_version = 0x0403;
+	img_report.has_old_c32[1] = TRUE;
+	CHECK_EQ_INT(GetBootFiles(names, FALSE), 0);
+	opts.use_own_c32[1] = TRUE;
+	CHECK_EQ_INT(GetBootFiles(names, FALSE), 1);
+	snprintf(name, sizeof(name), "syslinux-%s/vesamenu.c32", embedded_sl_version_str[0]);
+	CHECK_EQ_STR(names[0], name);
+
+	// The other boot selections
+	reset(BT_SYSLINUX_V6);
+	CHECK_EQ_INT(GetBootFiles(names, FALSE), 1);
+	snprintf(name, sizeof(name), "syslinux-%s/ldlinux.c32", embedded_sl_version_str[1]);
+	CHECK_EQ_STR(names[0], name);
+	reset(BT_MSDOS);
+	CHECK_EQ_INT(GetBootFiles(names, FALSE), 1);
+	CHECK_EQ_STR(names[0], "diskcopy.dll");
+	reset(BT_GRUB4DOS);
+	CHECK_EQ_INT(GetBootFiles(names, FALSE), 1);
+	CHECK_EQ_STR(names[0], "grub4dos-" GRUB4DOS_VERSION "/grldr");
+	reset(BT_FREEDOS);
+	CHECK_EQ_INT(GetBootFiles(names, FALSE), 0);
+}
+
 /* The files of the other boot selections */
 static void test_boot_selections(void)
 {
@@ -623,6 +701,7 @@ int main(void)
 	test_windows_user_experience();
 	test_windows_to_go();
 	test_bootloader_files();
+	test_shared_boot_files();
 	test_boot_selections();
 	test_source_on_target();
 	test_thread();
