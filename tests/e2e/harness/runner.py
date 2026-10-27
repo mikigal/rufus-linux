@@ -12,7 +12,9 @@ as with a physical stick. No root access to the host is needed."""
 
 import os
 import shutil
+import signal
 import subprocess
+import tempfile
 
 
 def vng_binary() -> str | None:
@@ -29,12 +31,18 @@ def usb_stick_qemu_opts(image: str, uas: bool = False, name: str = "stick") -> s
     return opts
 
 
+def virtio_disk_qemu_opts(image: str, name: str = "vdisk") -> str:
+    """A non-USB disk, which Rufus must never list."""
+    return f"-drive if=none,id={name},format=raw,file={image} -device virtio-blk-pci,drive={name} "
+
+
 def run_in_vm(script: str, stick: str | None = None, uas: bool = False,
-              rw_dirs: tuple[str, ...] = (), memory: str = "2G", timeout: float = 600) -> subprocess.CompletedProcess:
+              rw_dirs: tuple[str, ...] = (), memory: str = "2G", timeout: float = 600,
+              extra_qemu_opts: str = "") -> subprocess.CompletedProcess:
     """Run the shell 'script' as root in a VM booted from the host kernel, and
     return its exit status and output. 'rw_dirs' are host directories the
     script may write to (the rest of the host file system is read-only in the
-    guest)."""
+    guest), and 'extra_qemu_opts' other devices for the VM."""
     if vng_binary() is None:
         raise RuntimeError("virtme-ng (vng) is not installed")
     # The default "microvm" machine has no PCI bus, hence no USB controller
@@ -42,8 +50,26 @@ def run_in_vm(script: str, stick: str | None = None, uas: bool = False,
             "--memory", memory, "--cpus", "2"]
     for d in rw_dirs:
         args.append(f"--rwdir={d}")
+    qemu_opts = extra_qemu_opts
     if stick is not None:
+        qemu_opts = usb_stick_qemu_opts(os.path.abspath(stick), uas) + " " + qemu_opts
+    if qemu_opts.strip():
         # The "=" form is needed as the value starts with a dash
-        args.append("--qemu-opts=" + usb_stick_qemu_opts(os.path.abspath(stick), uas))
-    args += ["--exec", script]
-    return subprocess.run(args, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        args.append("--qemu-opts=" + qemu_opts.strip())
+    # The command goes to the guest through the kernel command line, which is
+    # limited to 2 KB, so the script is given as a file of a read-only share
+    with tempfile.TemporaryDirectory(prefix="rufus-e2e-script-") as script_dir:
+        path = os.path.join(script_dir, "script.sh")
+        with open(path, "w") as f:
+            f.write(script)
+        args += [f"--rodir={script_dir}", "--exec", f"sh {path}"]
+        # vng leaves QEMU running if it gets killed, so kill the whole process group on timeout
+        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                stdin=subprocess.DEVNULL, start_new_session=True)
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.communicate()
+            raise
+    return subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)

@@ -51,6 +51,9 @@ target_link_libraries(test_bootcheck PRIVATE rufus_core)
 rufus_add_test(test_threads test_threads.c)
 target_link_libraries(test_threads PRIVATE rufus_core)
 
+rufus_add_test(test_devices test_devices.c)
+target_link_libraries(test_devices PRIVATE rufus_platform)
+
 # The rules are checked against the original Windows functions (rules_oracle/rules_win.c)
 rufus_add_test(test_rules test_rules.c rules_oracle/rules_win.c)
 target_link_libraries(test_rules PRIVATE rufus_core)
@@ -64,4 +67,8 @@ if(RUFUS_E2E_TESTS)
 		WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/e2e")
 	set_tests_properties(e2e_harness PROPERTIES LABELS e2e TIMEOUT 3600
 		ENVIRONMENT "RUFUS_BUILD_DIR=${PROJECT_BINARY_DIR}")
+	add_test(NAME e2e_devices COMMAND Python3::Interpreter -m unittest -v test_devices
+		WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/e2e")
+	set_tests_properties(e2e_devices PROPERTIES LABELS e2e TIMEOUT 1800
+		ENVIRONMENT "RUFUS_CLI=$<TARGET_FILE:rufus-cli>")
 endif()

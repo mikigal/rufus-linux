@@ -5,6 +5,8 @@ add_subdirectory(syslinux)
 add_subdirectory(libcdio)
 add_subdirectory(wimlib)
 add_subdirectory(core)
+add_subdirectory(platform)
+add_subdirectory(cli)
 
 if(RUFUS_BUILD_GUI)
 	add_subdirectory(ui/qt)

@@ -4,8 +4,10 @@
 add_library(rufus_core STATIC
 	analyze.c
 	boot_check.c
+	devices.c
 	download.c
 	globals.c
+	hdd.c
 	image_scan.c
 	options.c
 	progress.c

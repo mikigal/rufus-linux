@@ -45,7 +45,7 @@ Wayland, and tracks the progress of the port.
 |---|---|
 | 0. Foundation (build system, compat layer, libraries, CI, test harness) | **done** |
 | 1. Decouple the logic from the UI | **done** |
-| 2. Linux backend, helper, CLI | next |
+| 2. Linux backend, helper, CLI | in progress |
 | 3. Qt 6 GUI | not started |
 | 4. Advanced features | not started |
 | 5. Windows To Go | not started |
@@ -184,7 +184,44 @@ Wayland, and tracks the progress of the port.
   - `tests/test_threads.c` cancels operations from another thread in the middle of their
     work, and formats strings from several threads; it runs clean under ThreadSanitizer.
 
-Next: stage 2.
+**Stage 2 (in progress)**
+
+Steps, each with its tests (unit tests on image files where root is not needed, T2/T3
+in the VM otherwise):
+
+1. Devices: enumeration, filters and system disks, `rufus-cli list`.
+2. Disk access: the identity check (`diskseq`), unmounting, whole-disk `O_EXCL` opens,
+   `BLKRRPART`, automount suppression and the private mount namespace.
+3. Partitioning: `plan_partitions()` from `CreatePartition()`, and the MBR/GPT writer.
+4. File systems: the `mkfs.*` tools, ext through libext2fs, large FAT32 through
+   `format_fat32.c`.
+5. The format pipeline (`format.c`): MBR/PBR, Syslinux, GRUB, ISO extraction, DD images,
+   zeroing, bad blocks, persistence, UEFI:NTFS, FreeDOS.
+6. `rufus-helper`, its IPC protocol and polkit action, and `rufus-cli` writing through it.
+7. The T2/T3 scenarios of "Done when" (§9).
+
+Done:
+
+- **Devices** (`core/devices.c`, `platform/linux/devices.c`, `mounts.c`):
+  - The filter chain of `GetDevices()` is `ShouldListDevice()`, in its order and with its
+    log messages, on a `rufus_device_t` that the platform code fills from sysfs (USB
+    device, SCSI INQUIRY data, size) and the udev database (partition table, file
+    systems, labels). Nothing needs root, and no device gets opened.
+  - Names are the ones Windows gives ("<vendor> <model> USB Device", or "UAS Device"),
+    which `IsHDD()` (now in `core/hdd.c`) relies on. The display name shows the device
+    name (`sdb`) where Windows shows drive letters or a disk number.
+  - Card readers are MMC devices, or USB readers that udev identifies as such. Loop, RAM,
+    zram, device mapper, RAID, NBD, optical and floppy devices are not listed.
+  - A disk that holds a system mount (`/`, `/boot`, `/boot/efi`, `/efi`, `/usr`, `/var`,
+    `/home`), a swap area or `app_dir` is never listed, whatever the options. Mounts are
+    traced back to their disks through partitions and the slaves of device mapper and
+    RAID devices; btrfs mounts through their source device.
+  - `GetRulesDrive()` gives the main window rules what they need about the drive.
+  - `rufus-cli list [--hdd] [--non-usb] [--json]`.
+  - `tests/test_devices.c` checks the filters and names, and that no disk of the machine
+    that runs the tests is listed. `tests/e2e/test_devices.py` lists an emulated BOT and
+    UAS stick in the VM, never a virtio disk, and no longer the stick once it is mounted
+    on `/var`, used as swap or below the device mapper.
 
 ---
 
@@ -351,13 +388,13 @@ Other dependencies:
 | SetupAPI/`CM_*` over USBSTOR, UASPSTOR, ... | `udev_enumerate` (`block`/`disk`), skipping loop/ram/zram/dm/md |
 | VID/PID/bcdUSB/speed via hub IOCTLs | parent `usb/usb_device` in sysfs: `idVendor`, `idProduct`, `bcdUSB`, `speed`, `rx_lanes` |
 | UASP detection by driver name | `ID_USB_DRIVER` = `uas` vs `usb-storage` |
-| `SPDRP_REMOVAL_POLICY` | `ID_BUS=usb` + UDisks `Drive.Removable` (sysfs `removable` alone is unreliable) |
-| system disk filter | mountinfo (`/`, `/boot`, `/boot/efi`, `/usr`, `/home`), `/proc/swaps`, `holders/`, UDisks `HintSystem` |
+| `SPDRP_REMOVAL_POLICY` | sysfs `removable` (the SCSI RMB bit, which also gives Windows its media type); MMC cards count as removable |
+| system disk filter | mountinfo (`/`, `/boot`, `/boot/efi`, `/efi`, `/usr`, `/var`, `/home`), `/proc/swaps`, traced through the `slaves/` of dm/md devices |
 | "X USB Device" names | sysfs `vendor` + `model` + " USB Device"/" UAS Device" suffix, so the `IsHDD` tables keep working |
 | `WM_DEVICECHANGE` + 1 s debounce | `udev_monitor` (QSocketNotifier) + the same debounce |
 | `0x80+N` drive index | table index + devnode + `diskseq`, re-checked before every open |
 
-The filter chain (`dev.c:944-1157`) becomes a pure `should_list(props, opts)`.
+The filter chain (`dev.c:944-1157`) becomes a pure `ShouldListDevice()` (done, see §2).
 
 ### 5.2 Disk access and locking (`drive.c`)
 

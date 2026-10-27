@@ -781,7 +781,8 @@ extern char* remove_substr(const char* src, const char* sub);
 extern void parse_update(char* buf, size_t len);
 extern void* get_data_from_asn1(const uint8_t* buf, size_t buf_len, const char* oid_str, uint8_t asn1_type, size_t* data_len);
 extern int sanitize_label(char* label);
-extern int IsHDD(DWORD DriveIndex, uint16_t vid, uint16_t pid, const char* strid);
+// Positive if the drive seems to be a USB HDD rather than a flash drive (is_fixed: not reported as removable)
+extern int IsHDD(BOOL is_fixed, uint64_t drive_size, uint16_t vid, uint16_t pid, const char* strid);
 // Returns TRUE if the drive or image seems bootable, FALSE otherwise
 extern BOOL AnalyzeMBR(int fd, uint32_t SectorSize, const char* TargetName, BOOL bSilent);
 extern BOOL AnalyzePBR(int fd, uint64_t PartitionOffset, uint32_t SectorSize);
