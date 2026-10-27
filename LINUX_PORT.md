@@ -400,8 +400,11 @@ Done:
     `rules_on_persistence_size()` now follows `EN_CHANGE`/`EN_KILLFOCUS` exactly; the
     differential test covers all three.
   - The drive list follows udev (`DeviceMonitor`, a refresh a second after the first
-    event of a burst, queued during an operation), and the progress bar draws its
-    text over the bar, with the paused and error colours and the marquee.
+    event of a burst, queued during an operation). The progress bar is drawn by the
+    Qt style: its text goes where the style puts it (beside the bar with Breeze, on it
+    with Fusion), the paused and error colours of upstream become its highlight and
+    accent colours, and the marquee is the busy indicator of the style (Breeze shows
+    no text then; the marquee only runs during the image scan).
 - **The core in C++**: the core headers compile as C++23 (`std::atomic` for `_Atomic`,
   `min`/`max` as templates), and the `libintl.h` stub of ms-sys, which hid glibc's from
   libstdc++, is gone. The callbacks of `ui_iface_t` get marshalled to the GUI thread
@@ -886,7 +889,7 @@ Notes:
 |---|---|
 | `IDD_DIALOG`: 3 sections, collapsible "advanced" areas, hand-computed pixel layout | layouts; section = header + line; collapse with an arrow `QToolButton` + `adjustSize()` |
 | `IDC_SELECT` split button | `QToolButton` (`MenuButtonPopup`) with a SELECT/DOWNLOAD menu; Ctrl+click = extra .zip |
-| `IDC_PROGRESS` with text, states, marquee | `QProgressBar` subclass with its own `paintEvent` |
+| `IDC_PROGRESS` with text, states, marquee | `QProgressBar` drawn by the style: states as highlight/accent colours, marquee as busy indicator |
 | status bar with a `00:00:00` timer | `QStatusBar` + permanent timer widget |
 | toolbar (language/about/settings/log), save, hash | `QToolButton`s with the `res/icons` images, without settings (§5.7) |
 | `IDD_LOG` docked next to the main window | separate window (Wayland forbids positioning) or a slide-out panel |

@@ -20,12 +20,12 @@
 #pragma once
 
 #include <QProgressBar>
-#include <QTimer>
 
 /*
- * The progress bar of ui.c (ProgressCallback()): the status text is drawn over
- * the bar, inverted where the bar is filled, and the bar turns yellow when an
- * operation is cancelled and red when it fails.
+ * The progress bar of ui.c (ProgressCallback()), drawn by the Qt style: the
+ * status text is the text of the bar (where the style puts it), the marquee is
+ * the busy indicator of the style, and the bar turns yellow when an operation
+ * is cancelled and red when it fails.
  */
 class ProgressBar : public QProgressBar
 {
@@ -40,18 +40,15 @@ public:
 	State state() const { return state_; }
 	void setMarquee(bool marquee);
 	bool isMarquee() const { return marquee_; }
-	// The text displayed over the bar
+	// The text displayed with the bar
 	void setInfo(const QString& text);
 	QString info() const { return info_; }
 	QString text() const override { return info_; }
 
-protected:
-	void paintEvent(QPaintEvent* event) override;
-
 private:
 	State state_ = State::Normal;
 	bool marquee_ = false;
-	int marquee_pos_ = 0;
-	QTimer marquee_timer_;
+	// The range and value to restore at the end of the marquee
+	int saved_minimum_ = 0, saved_maximum_ = 100, saved_value_ = 0;
 	QString info_;
 };

@@ -439,7 +439,6 @@ void MainWindow::createWidgets()
 	SET_NAME(progress_, IDC_PROGRESS);
 	progress_->setRange(0, MAX_PROGRESS);
 	progress_->setValue(0);
-	progress_->setMinimumHeight(fontMetrics().height() + 8);
 	root->addWidget(progress_);
 
 	row = new QHBoxLayout;
