@@ -98,7 +98,8 @@ static void reset(int boot_type)
 
 static BOOL format(const char* devnode, uint64_t diskseq)
 {
-	helper_job_t job = { .devnode = devnode, .diskseq = diskseq, .image_fd = -1, .archive_fd = -1, .bb_log_fd = -1 };
+	helper_job_t job = { .devnode = devnode, .diskseq = diskseq, .image_fd = -1, .archive_fd = -1, .bb_log_fd = -1,
+		.unattend_fd = -1 };
 
 	return HelperFormat(&helper, &job);
 }

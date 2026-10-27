@@ -476,21 +476,21 @@ static const struct {
 };
 
 // The entry of locale_list for a locale such as "pl_PL.UTF-8" or "sr_RS@latin", or -1 (US)
-static int get_locale(void)
+static int get_locale_entry(const char* locale)
 {
 	char lang[32], territory[8] = "";
-	const char* modifier = strchr(opts.locale, '@');
-	size_t len = strcspn(opts.locale, "_.@");
+	const char* modifier = strchr(locale, '@');
+	size_t len = strcspn(locale, "_.@");
 	int i;
 
 	if ((len == 0) || (len >= 16))
 		return -1;
-	memcpy(lang, opts.locale, len);
+	memcpy(lang, locale, len);
 	lang[len] = 0;
-	if (opts.locale[len] == '_') {
-		len = strcspn(&opts.locale[len + 1], ".@");
+	if (locale[len] == '_') {
+		len = strcspn(&locale[len + 1], ".@");
 		if (len < sizeof(territory)) {
-			memcpy(territory, strchr(opts.locale, '_') + 1, len);
+			memcpy(territory, strchr(locale, '_') + 1, len);
 			territory[len] = 0;
 		}
 	}
@@ -510,6 +510,19 @@ static int get_locale(void)
 		}
 	}
 	return -1;
+}
+
+static int get_locale(void)
+{
+	return get_locale_entry(opts.locale);
+}
+
+// The Windows language ID of a locale such as "pl_PL.UTF-8", or 0 if unknown
+uint16_t GetLocaleLangId(const char* locale)
+{
+	int i = (locale == NULL) ? -1 : get_locale_entry(locale);
+
+	return (i < 0) ? 0 : locale_list[i].langid;
 }
 
 // DOS wants CRLF line endings

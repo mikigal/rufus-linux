@@ -14,6 +14,7 @@ add_library(rufus_core STATIC
 	partition.c
 	options.c
 	progress.c
+	regional.c
 	resource.c
 	rules.c
 	rules_text.c
@@ -33,11 +34,17 @@ add_library(rufus_core STATIC
 	../stdio.c
 	../vhd.c
 	../wue.c
+	../wue_apply.c
 	../xml.c)
 target_compile_definitions(rufus_core PRIVATE
 	RUFUS_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
 	RUFUS_VERSION_MINOR=${PROJECT_VERSION_MINOR}
 	RUFUS_VERSION_PATCH=${PROJECT_VERSION_PATCH})
+# The registry hives of boot.wim get edited with hivex, if available (else through unattend.xml)
+if(HIVEX_FOUND)
+	target_compile_definitions(rufus_core PRIVATE RUFUS_HAVE_HIVEX)
+	target_link_libraries(rufus_core PRIVATE PkgConfig::HIVEX)
+endif()
 target_include_directories(rufus_core PUBLIC
 	"${CMAKE_CURRENT_SOURCE_DIR}"
 	"${PROJECT_SOURCE_DIR}/src")

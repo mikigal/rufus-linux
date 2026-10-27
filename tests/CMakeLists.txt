@@ -42,6 +42,10 @@ target_link_libraries(test_iso PRIVATE rufus_core)
 
 rufus_add_test(test_wue test_wue.c)
 target_link_libraries(test_wue PRIVATE rufus_core)
+if(HIVEX_FOUND)
+	target_compile_definitions(test_wue PRIVATE RUFUS_HAVE_HIVEX)
+	target_link_libraries(test_wue PRIVATE PkgConfig::HIVEX)
+endif()
 
 rufus_add_test(test_scan test_scan.c)
 target_link_libraries(test_scan PRIVATE rufus_core)
@@ -88,6 +92,15 @@ target_link_libraries(test_format_vm PRIVATE rufus_platform)
 rufus_add_test(test_helper_vm test_helper_vm.c)
 target_link_libraries(test_helper_vm PRIVATE rufus_platform)
 
+# The Windows images of the end-to-end tests (harness/media.py)
+add_executable(rufus-test-mkwim mkwim.c)
+target_include_directories(rufus-test-mkwim PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(rufus-test-mkwim PRIVATE rufus_core rufus_warnings)
+if(HIVEX_FOUND)
+	target_compile_definitions(rufus-test-mkwim PRIVATE RUFUS_HAVE_HIVEX)
+	target_link_libraries(rufus-test-mkwim PRIVATE PkgConfig::HIVEX)
+endif()
+
 # A fake rufus-helper, for the tests of the front ends (RUFUS_FAKE_HELPER)
 add_executable(rufus-fake-helper fake_helper.c)
 target_link_libraries(rufus-fake-helper PRIVATE rufus_platform rufus_warnings)
@@ -124,7 +137,7 @@ if(RUFUS_E2E_TESTS)
 	add_test(NAME e2e_media COMMAND Python3::Interpreter -m unittest -v test_media
 		WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/e2e")
 	set_tests_properties(e2e_media PROPERTIES LABELS e2e TIMEOUT 5400
-		ENVIRONMENT "RUFUS_CLI=$<TARGET_FILE:rufus-cli>;RUFUS_HELPER=$<TARGET_FILE:rufus-helper>")
+		ENVIRONMENT "RUFUS_CLI=$<TARGET_FILE:rufus-cli>;RUFUS_HELPER=$<TARGET_FILE:rufus-helper>;RUFUS_TEST_MKWIM=$<TARGET_FILE:rufus-test-mkwim>")
 	# The GUI with the real helper and drive (tests/gui/vm_write.py)
 	if(RUFUS_BUILD_GUI)
 		add_test(NAME e2e_gui COMMAND Python3::Interpreter -m unittest -v test_gui_vm

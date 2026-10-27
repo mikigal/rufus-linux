@@ -33,6 +33,7 @@
  *   IPC_FILE     str name (relative to FILES_DIR, see GetBootFiles()), fd
  *   IPC_FORMAT   bytes opts, str devnode, u64 diskseq, u32 fd_flags (IPC_FD_*),
  *                str image name, str bad blocks report path, then the fds of fd_flags in order
+ *                (image, archive, bad blocks report, unattend.xml)
  *   IPC_ANSWER   i32 answer (to IPC_ASK)
  *   IPC_CANCEL
  *   IPC_PROGRESS_TYPE u32 type (UPT_*): what the progress text displays, at any time
@@ -50,7 +51,7 @@
  *   IPC_DONE     u32 ret, u32 ErrorStatus (the end of IPC_FORMAT or IPC_CYCLE_PORT)
  */
 
-#define IPC_VERSION                 2
+#define IPC_VERSION                 3
 #define IPC_MAX_MESSAGE             (64 * 1024)
 #define IPC_MAX_FDS                 4
 #define IPC_MAX_LIST_ITEMS          64
@@ -75,6 +76,7 @@ enum ipc_type {
 #define IPC_FD_IMAGE                0x01	// The image (ISO mode or DD mode)
 #define IPC_FD_ARCHIVE              0x02	// The archive to extract to the drive (archive_path)
 #define IPC_FD_BB_LOG               0x04	// The report of the bad blocks check
+#define IPC_FD_UNATTEND             0x08	// The unattend.xml of the Windows User Experience (unattend_xml_path)
 
 typedef struct {
 	uint32_t type;

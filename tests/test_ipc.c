@@ -339,7 +339,7 @@ static void run_client(BOOL cancel)
 {
 	const ui_iface_t iface = { .log = client_log, .progress = client_progress, .ask = client_ask };
 	char dir[] = "/tmp/rufus-test-XXXXXX", path[MAX_PATH];
-	helper_job_t job = { .devnode = "/dev/sdz", .diskseq = 42, .image_name = "image.iso", .archive_fd = -1,
+	helper_job_t job = { .devnode = "/dev/sdz", .diskseq = 42, .image_name = "image.iso", .archive_fd = -1, .unattend_fd = -1,
 		.bb_log_path = "/home/user/rufus.log" };
 	helper_t h;
 	int sv[2], status;

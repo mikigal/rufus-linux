@@ -427,7 +427,7 @@ static int cmd_write(int argc, char** argv)
 	device_filter_t filter = { .enable_VHDs = TRUE };
 	const char *image = NULL, *archive = NULL, *label = NULL, *home;
 	int c, i, n, boot = -1, partition = -1, target = -1, fs = -1, passes = -1, image_fd = -1, archive_fd = -1;
-	int bb_log_fd = -1;
+	int bb_log_fd = -1, unattend_fd = -1;
 	int option_index = 0;
 	long cluster = -1, persistence = -1;
 	BOOL slow = FALSE, no_extended_label = FALSE, old_bios_fixes = FALSE, ret = FALSE;
@@ -631,6 +631,12 @@ static int cmd_write(int argc, char** argv)
 	job.archive_fd = archive_fd;
 	job.bb_log_fd = bb_log_fd;
 	job.bb_log_path = bb_log_path;
+	if (unattend_xml_path != NULL) {
+		unattend_fd = open(unattend_xml_path, O_RDONLY | O_CLOEXEC);
+		if (unattend_fd < 0)
+			fprintf(stderr, "Could not open '%s': %s\n", unattend_xml_path, strerror(errno));
+	}
+	job.unattend_fd = unattend_fd;
 	ret = HelperFormat(&helper, &job);
 	StopHelper(&helper);
 	signal(SIGINT, SIG_DFL);
@@ -653,6 +659,13 @@ out:
 		close(image_fd);
 	if (archive_fd >= 0)
 		close(archive_fd);
+	if (unattend_fd >= 0)
+		close(unattend_fd);
+	// NB: The static buffer of CreateUnattendXml()
+	if (unattend_xml_path != NULL) {
+		unlink(unattend_xml_path);
+		unattend_xml_path = NULL;
+	}
 	safe_free(image_path);
 	return ret ? 0 : 1;
 

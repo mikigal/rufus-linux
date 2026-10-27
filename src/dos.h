@@ -138,3 +138,5 @@ typedef struct _LONG_FILE_NAME_ENTRY {
                                           FAT_DIRENT_ATTR_VOLUME_ID)
 
 extern BOOL SetDOSLocale(const char* path, BOOL bFreeDOS);
+// The Windows language ID of a locale such as "pl_PL.UTF-8", or 0 if unknown
+extern uint16_t GetLocaleLangId(const char* locale);

@@ -177,6 +177,21 @@ def build_windows_like_iso(out_dir: str) -> str:
     return path
 
 
+def build_windows11_iso(out_dir: str) -> str:
+    """The Windows-like ISO, with the boot.wim and install.wim of a Windows 11
+    24H2 media (from rufus-test-mkwim, $RUFUS_TEST_MKWIM), for the Windows User
+    Experience."""
+    path = os.path.join(out_dir, "windows11-like.iso")
+    if os.path.exists(path):
+        return path
+    build_windows_like_iso(out_dir)
+    tree = os.path.join(out_dir, "windows-tree")
+    subprocess.run([os.environ["RUFUS_TEST_MKWIM"], tree], check=True, capture_output=True)
+    subprocess.run(["xorriso", "-as", "mkisofs", "-o", path, "-V", "CCCOMA_X64FRE_EN-US_DV9", "-J", "-R", tree],
+                   check=True, capture_output=True)
+    return path
+
+
 def blank_stick(path: str, size: int = 256 * 1024 * 1024) -> str:
     with open(path, "wb") as f:
         f.truncate(size)

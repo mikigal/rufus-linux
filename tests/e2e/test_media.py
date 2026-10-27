@@ -172,6 +172,38 @@ class StageTwoMedia(unittest.TestCase):
         text = self._boot(stick, "uefi")
         self.assertRegex(text, r"RUFUS-E2E-CMDLINE: .*boot=windows-like")
 
+    # A Windows 11 like ISO, with the default options of the Windows User Experience: the TPM, Secure
+    # Boot and RAM checks are bypassed in the SYSTEM hive of boot.wim (or through Autounattend.xml,
+    # without hivex), and unattend.xml is in \sources\$OEM$\$$\Panther
+    def test_windows_user_experience(self):
+        mkwim = os.environ.get("RUFUS_TEST_MKWIM")
+        if mkwim is None or not os.access(mkwim, os.X_OK):
+            self.skipTest("RUFUS_TEST_MKWIM does not point to an executable")
+        iso = self._medium("windows11_iso", "grub-mkstandalone", "xorriso")
+        boot_wim = os.path.join(WORK, "wue-boot.wim")
+        stick, output = self._write("windows-wue", f'--image "{iso}" --partition gpt --target uefi',
+                                    'mcopy -o -i "${dev}1" ::/sources/boot.wim ' + f'"{boot_wim}" || exit 1\n'
+                                    'mdir -i "${dev}1" ::/sources/appraiserres.bak || exit 1\n'
+                                    'mtype -i "${dev}1" ::/sources/appraiserres.dll | wc -c | grep -qx 0 || exit 1\n'
+                                    "mtype -i \"${dev}1\" '::/sources/$OEM$/$$/Panther/unattend.xml' > "
+                                    f'"{WORK}/wue-unattend.xml" || true\n')
+        self.assertIn("Applying Windows customization:", output)
+        check = subprocess.run([os.path.abspath(mkwim), "--check", boot_wim], capture_output=True, text=True, check=True)
+        if "No hivex" in check.stdout:
+            self.assertIn("Autounattend.xml=yes", check.stdout)
+        else:
+            self.assertIn("BypassTPMCheck=1", check.stdout)
+            self.assertIn("BypassSecureBootCheck=1", check.stdout)
+            self.assertIn("BypassRAMCheck=1", check.stdout)
+            self.assertIn("Autounattend.xml=no", check.stdout)
+            with open(os.path.join(WORK, "wue-unattend.xml")) as f:
+                unattend = f.read()
+            self.assertIn('<settings pass="disabled">', unattend)
+            self.assertIn("/v BypassNRO /t REG_DWORD /d 1 /f", unattend)
+        # The media still boots
+        text = self._boot(stick, "uefi")
+        self.assertRegex(text, r"RUFUS-E2E-CMDLINE: .*boot=windows-like")
+
     def test_windows_like_mbr_uefi_ntfs(self):
         iso = self._medium("windows_like_iso", "grub-mkstandalone", "xorriso", "mkntfs")
         stick, _ = self._write("windows-ntfs", f'--image "{iso}" --partition mbr --fs NTFS',

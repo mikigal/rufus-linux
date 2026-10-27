@@ -61,6 +61,7 @@
 
 #define SOCK                        STDIN_FILENO
 #define MAX_BOOT_FILE_SIZE          (32 * MB)
+#define MAX_UNATTEND_SIZE           (1 * MB)
 
 // The boot files that the front end sent for the next format
 static struct {
@@ -74,7 +75,7 @@ typedef struct {
 	char devnode[64];
 	uint64_t diskseq;
 	char syspath[MAX_PATH];
-	int image_fd, archive_fd, bb_log_fd;
+	int image_fd, archive_fd, bb_log_fd, unattend_fd;
 	char image_name[MAX_PATH];
 	char bb_log_path[MAX_PATH];
 } job_t;
@@ -208,6 +209,29 @@ static char* LinkImage(const char* dir, const job_t* job)
 	return strdup(path);
 }
 
+// A copy of the unattend.xml of the front end in the directory of the worker, or NULL
+static char* CopyUnattendXml(const char* dir, int fd)
+{
+	char path[MAX_PATH], buf[64 * KB];
+	struct stat st;
+	ssize_t r;
+	int out_fd;
+	BOOL ret;
+
+	if ((fstat(fd, &st) != 0) || !S_ISREG(st.st_mode) || (st.st_size == 0) || (st.st_size > MAX_UNATTEND_SIZE))
+		return NULL;
+	static_sprintf(path, "%s/unattend.xml", dir);
+	out_fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+	if (out_fd < 0)
+		return NULL;
+	ret = (lseek(fd, 0, SEEK_SET) == 0);
+	while (ret && ((r = read(fd, buf, sizeof(buf))) != 0))
+		ret = (r > 0) && (write(out_fd, buf, (size_t)r) == r);
+	if (close(out_fd) != 0)
+		ret = FALSE;
+	return ret ? strdup(path) : NULL;
+}
+
 // Copy the boot files into the directory of the worker
 static BOOL SetupBootFiles(const char* dir)
 {
@@ -285,6 +309,17 @@ static BOOL Work(const job_t* job)
 	if (job->archive_fd >= 0) {
 		static_sprintf(path, "/proc/self/fd/%d", job->archive_fd);
 		archive_path = strdup(path);
+	}
+	// The temporary files of the format (the registry hive of boot.wim...) go there too
+	static_strcpy(temp_dir, data_dir);
+	// unattend.xml gets modified, so the worker uses a copy of its own
+	if (job->unattend_fd >= 0) {
+		unattend_xml_path = CopyUnattendXml(data_dir, job->unattend_fd);
+		if (unattend_xml_path == NULL) {
+			uprintf("Invalid unattend.xml");
+			ErrorStatus = RUFUS_ERROR(ERROR_INVALID_PARAMETER);
+			goto out;
+		}
 	}
 
 	// Only the boot files that this format uses
@@ -401,7 +436,7 @@ static BOOL ParseFormat(ipc_msg_t* m, job_t* job)
 	int fd_index = 0;
 
 	memset(job, 0, sizeof(*job));
-	job->image_fd = job->archive_fd = job->bb_log_fd = -1;
+	job->image_fd = job->archive_fd = job->bb_log_fd = job->unattend_fd = -1;
 	if ((opts_size != sizeof(opts)) || !ipc_get_bytes(m, &opts, sizeof(opts)) || !CheckOptions(&opts))
 		return FALSE;
 	if ((ipc_get_str(m, job->devnode, sizeof(job->devnode)) == NULL) ||
@@ -414,7 +449,7 @@ static BOOL ParseFormat(ipc_msg_t* m, job_t* job)
 		job->image_name[0] = 0;
 	if (ipc_get_str(m, job->bb_log_path, sizeof(job->bb_log_path)) == NULL)
 		job->bb_log_path[0] = 0;
-	if (!ipc_end(m) || (fd_flags & ~(IPC_FD_IMAGE | IPC_FD_ARCHIVE | IPC_FD_BB_LOG)))
+	if (!ipc_end(m) || (fd_flags & ~(IPC_FD_IMAGE | IPC_FD_ARCHIVE | IPC_FD_BB_LOG | IPC_FD_UNATTEND)))
 		return FALSE;
 	if (fd_flags & IPC_FD_IMAGE)
 		job->image_fd = ipc_take_fd(m, fd_index++);
@@ -422,8 +457,11 @@ static BOOL ParseFormat(ipc_msg_t* m, job_t* job)
 		job->archive_fd = ipc_take_fd(m, fd_index++);
 	if (fd_flags & IPC_FD_BB_LOG)
 		job->bb_log_fd = ipc_take_fd(m, fd_index++);
+	if (fd_flags & IPC_FD_UNATTEND)
+		job->unattend_fd = ipc_take_fd(m, fd_index++);
 	return (fd_index == m->nfds) && ((fd_flags & IPC_FD_IMAGE) == 0 || job->image_fd >= 0) &&
-		((fd_flags & IPC_FD_ARCHIVE) == 0 || job->archive_fd >= 0) && ((fd_flags & IPC_FD_BB_LOG) == 0 || job->bb_log_fd >= 0);
+		((fd_flags & IPC_FD_ARCHIVE) == 0 || job->archive_fd >= 0) && ((fd_flags & IPC_FD_BB_LOG) == 0 || job->bb_log_fd >= 0) &&
+		((fd_flags & IPC_FD_UNATTEND) == 0 || job->unattend_fd >= 0);
 }
 
 /*
@@ -638,6 +676,8 @@ int main(int argc, char** argv)
 				close(job.archive_fd);
 			if (job.bb_log_fd >= 0)
 				close(job.bb_log_fd);
+			if (job.unattend_fd >= 0)
+				close(job.unattend_fd);
 			ClearFiles();
 			ResetOptions(&opts);
 			break;

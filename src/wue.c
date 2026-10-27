@@ -38,6 +38,7 @@
 #include "missing.h"
 #include "resource.h"
 #include "localization.h"
+#include "regional.h"
 
 const char* bypass_name[] = { "BypassTPMCheck", "BypassSecureBootCheck", "BypassRAMCheck" };
 
@@ -107,6 +108,8 @@ char* CreateUnattendXml(int arch, int flags)
 		"Guest", "DefaultAccount", "WDAGUtilityAccount", "HelpAssistant", "KRBTGT", "Local", "NONE", "SYSTEM"
 	};
 	static char path[MAX_PATH], tmp[MAX_PATH];
+	char iana_tz[64], locale_name[64];
+	const char* tzstr;
 	FILE* fd;
 	int i, order, fdesc;
 	opts.unattend_xml_flags = flags;
@@ -330,8 +333,14 @@ char* CreateUnattendXml(int arch, int flags)
 				fprintf(fd, "      </OOBE>\n");
 			}
 			if (flags & UNATTEND_DUPLICATE_LOCALE) {
-				// TODO: Map the IANA time zone of this system to its Windows name (stage 4, see LINUX_PORT.md §5.6)
-				uprintf("WARNING: Could not retrieve current timezone: %s", "Not supported yet");
+				// NB: Upstream uses the TimeZoneKeyName of the system. Here, it's the Windows name of its IANA zone.
+				if (!GetSystemTimeZone(iana_tz, sizeof(iana_tz))) {
+					uprintf("WARNING: Could not retrieve current timezone: %s", "No time zone is set");
+				} else if ((tzstr = IanaToWindowsTimeZone(iana_tz)) == NULL) {
+					uprintf("WARNING: Could not retrieve current timezone: '%s' has no Windows equivalent", iana_tz);
+				} else {
+					fprintf(fd, "      <TimeZone>%s</TimeZone>\n", tzstr);
+				}
 			}
 			if (flags & UNATTEND_SET_USER) {
 				// Remove leading and trailing whitespaces (https://github.com/pbatard/rufus/issues/2950)
@@ -461,9 +470,23 @@ char* CreateUnattendXml(int arch, int flags)
 			StrArrayClear(&commands);
 		}
 		if (flags & UNATTEND_OOBE_INTERNATIONAL_MASK) {
-			// TODO: Map the locale and the keyboard layout of this system to their Windows names (InputLocale,
-			// SystemLocale, UserLocale, UILanguage and UILanguageFallback) in stage 4, see LINUX_PORT.md §5.6.
-			uprintf("WARNING: Duplicating the regional options of this system is not supported yet - Option ignored");
+			uprintf("• Use the same regional options as this user's");
+			fprintf(fd, "    <component name=\"Microsoft-Windows-International-Core\" processorArchitecture=\"%s\" language=\"neutral\" "
+				"xmlns:wcm=\"http://schemas.microsoft.com/WMIConfig/2002/State\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" "
+				"publicKeyToken=\"31bf3856ad364e35\" versionScope=\"nonSxS\">\n", xml_arch_names[arch]);
+			// NB: Upstream gets these from the registry and the locale APIs. Here, the keyboard is the
+			// first XKB layout of the user, and the locales are the POSIX ones, as BCP-47 names.
+			if (GetInputLocale(locale_name, sizeof(locale_name)))
+				fprintf(fd, "      <InputLocale>%s</InputLocale>\n", locale_name);
+			if (LocaleToBcp47(GetLocaleCategory("LC_CTYPE"), locale_name, sizeof(locale_name)))
+				fprintf(fd, "      <SystemLocale>%s</SystemLocale>\n", locale_name);
+			if (LocaleToBcp47(GetLocaleCategory("LC_TIME"), locale_name, sizeof(locale_name)))
+				fprintf(fd, "      <UserLocale>%s</UserLocale>\n", locale_name);
+			if (LocaleToBcp47(GetLocaleCategory("LC_MESSAGES"), locale_name, sizeof(locale_name)))
+				fprintf(fd, "      <UILanguage>%s</UILanguage>\n", locale_name);
+			// The language that Windows falls back to (InstallLanguageFallback upstream)
+			fprintf(fd, "      <UILanguageFallback>en-US</UILanguageFallback>\n");
+			fprintf(fd, "    </component>\n");
 		}
 		if (flags & UNATTEND_DISABLE_BITLOCKER) {
 			uprintf("• Disable BitLocker");

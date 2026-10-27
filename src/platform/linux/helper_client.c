@@ -217,6 +217,7 @@ BOOL HelperFormat(helper_t* h, const helper_job_t* job)
 	fd_flags |= (job->image_fd >= 0) ? IPC_FD_IMAGE : 0;
 	fd_flags |= (job->archive_fd >= 0) ? IPC_FD_ARCHIVE : 0;
 	fd_flags |= (job->bb_log_fd >= 0) ? IPC_FD_BB_LOG : 0;
+	fd_flags |= (job->unattend_fd >= 0) ? IPC_FD_UNATTEND : 0;
 	ipc_put_u32(&out, fd_flags);
 	ipc_put_str(&out, job->image_name);
 	ipc_put_str(&out, job->bb_log_path);
@@ -226,6 +227,8 @@ BOOL HelperFormat(helper_t* h, const helper_job_t* job)
 		ipc_put_fd(&out, job->archive_fd);
 	if (job->bb_log_fd >= 0)
 		ipc_put_fd(&out, job->bb_log_fd);
+	if (job->unattend_fd >= 0)
+		ipc_put_fd(&out, job->unattend_fd);
 	if (!ipc_send(h->sock, &out))
 		goto disconnected;
 

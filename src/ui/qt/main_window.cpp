@@ -1119,8 +1119,9 @@ aborted_start:
 		PrintStatus(0, (nb_devs_ == 1) ? MSG_208 : MSG_209, nb_devs_);
 		PrintStatus(5000, MSG_041);
 		if (unattend_xml_path != nullptr) {
+			// NB: The static buffer of CreateUnattendXml()
 			unlink(unattend_xml_path);
-			safe_free(unattend_xml_path);
+			unattend_xml_path = nullptr;
 		}
 		rules_on_operation_end(&m_);
 		render();
@@ -1139,7 +1140,7 @@ bool MainWindow::startFormatThread()
 	struct Job {
 		std::string devnode, image_name, bb_log_path;
 		uint64_t diskseq;
-		int image_fd = -1, archive_fd = -1, bb_log_fd = -1;
+		int image_fd = -1, archive_fd = -1, bb_log_fd = -1, unattend_fd = -1;
 	};
 	auto job = std::make_shared<Job>();
 	char date[32], path[MAX_PATH];
@@ -1161,6 +1162,11 @@ bool MainWindow::startFormatThread()
 		job->archive_fd = open(archive_path, O_RDONLY | O_CLOEXEC);
 		if (job->archive_fd < 0)
 			uprintf("Could not open '%s': %s", archive_path, strerror(errno));
+	}
+	if (unattend_xml_path != nullptr) {
+		job->unattend_fd = open(unattend_xml_path, O_RDONLY | O_CLOEXEC);
+		if (job->unattend_fd < 0)
+			uprintf("Could not open '%s': %s", unattend_xml_path, strerror(errno));
 	}
 	if (opts.bad_blocks && !opts.zero_drive) {
 		// The report of the check goes to the home directory, as upstream does with %USERPROFILE%
@@ -1193,6 +1199,7 @@ bool MainWindow::startFormatThread()
 			hj.archive_fd = job->archive_fd;
 			hj.bb_log_fd = job->bb_log_fd;
 			hj.bb_log_path = job->bb_log_path.c_str();
+			hj.unattend_fd = job->unattend_fd;
 			HelperFormat(&session_helper, &hj);
 		}
 		if (job->bb_log_fd >= 0) {
@@ -1205,6 +1212,8 @@ bool MainWindow::startFormatThread()
 			::close(job->image_fd);
 		if (job->archive_fd >= 0)
 			::close(job->archive_fd);
+		if (job->unattend_fd >= 0)
+			::close(job->unattend_fd);
 		ui_event(UM_FORMAT_COMPLETED, TRUE);
 	}).detach();
 	return true;
@@ -1219,8 +1228,9 @@ void MainWindow::onFormatCompleted(bool written)
 	zero_drive_ = false;
 	format_running_ = false;
 	if (unattend_xml_path != nullptr) {
+		// NB: The static buffer of CreateUnattendXml()
 		unlink(unattend_xml_path);
-		safe_free(unattend_xml_path);
+		unattend_xml_path = nullptr;
 	}
 	clock_.stop();
 	// Close the cancel confirmation, if it is displayed

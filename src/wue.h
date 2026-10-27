@@ -36,7 +36,8 @@ int GetEditions(StrArray* version_name, StrArray* version_index);
 int SetWinToGoIndex(BOOL is_fixed);
 BOOL PopulateWindowsVersion(void);
 
-// Not ported yet (wue_apply.c)
-BOOL ApplyWindowsCustomization(char drive_letter, int flags);
-BOOL SetupWinPE(char drive_letter);
+// wue_apply.c: on the target drive, mounted at mount_point
+BOOL ApplyWindowsCustomization(const char* mount_point, int flags);
+BOOL SetupWinPE(const char* mount_point);
+// Not ported yet (stage 5)
 BOOL SetupWinToGo(DWORD DriveIndex, const char* drive_name, BOOL use_esp);

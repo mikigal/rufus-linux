@@ -36,6 +36,7 @@ typedef struct {
 	const char* image_name;			// Its name, for the log
 	int archive_fd;					// The archive to extract (archive_path), or -1
 	int bb_log_fd;					// The report of the bad blocks check (see format_target_t), or -1
+	int unattend_fd;				// The unattend.xml of the Windows User Experience (unattend_xml_path), or -1
 	const char* bb_log_path;		// Its path, to show to the user
 } helper_job_t;
 

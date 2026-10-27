@@ -54,6 +54,7 @@
 #include "filesystems.h"
 #include "disk.h"
 #include "vhd.h"
+#include "wue.h"
 #include "badblocks.h"
 #include "resource.h"
 #include "localization.h"
@@ -485,10 +486,15 @@ BOOL FormatDrive(const format_target_t* target)
 					}
 				}
 			}
-			if ((opts.target_type == TT_BIOS) && HAS_WINPE(img_report))
-				NotSupportedYet("The WinPE setup", APPERR(ERROR_CANT_PATCH));
-			if (unattend_xml_path != NULL)
-				NotSupportedYet("The Windows User Experience", APPERR(ERROR_CANT_PATCH));
+			if ((opts.target_type == TT_BIOS) && HAS_WINPE(img_report)) {
+				// Apply WinPE fixup
+				if (!SetupWinPE(mount_point))
+					ErrorStatus = RUFUS_ERROR(APPERR(ERROR_CANT_PATCH));
+			}
+			if (unattend_xml_path != NULL) {
+				if (!ApplyWindowsCustomization(mount_point, opts.unattend_xml_flags))
+					ErrorStatus = RUFUS_ERROR(APPERR(ERROR_CANT_PATCH));
+			}
 		}
 
 		UpdateProgress(OP_FINALIZE, -1.0f);

@@ -2404,6 +2404,8 @@ void UpdateMD5Sum(const char* dest_dir, const char* md5sum_name)
 		// Only lowercase the part that is relative to the destination
 		if (strlen(modified_files.String[i]) <= dest_len)
 			continue;
+		// NB: The file gets hashed with the case it has, as NTFS is case sensitive on Linux
+		static_strcpy(path1, modified_files.String[i]);
 		for (j = (uint32_t)dest_len; j < (uint32_t)strlen(modified_files.String[i]); j++)
 			modified_files.String[i][j] = (char)tolower(modified_files.String[i][j]);
 		str_pos = strstr(md5_data, &modified_files.String[i][dest_len]);
@@ -2416,7 +2418,7 @@ void UpdateMD5Sum(const char* dest_dir, const char* md5sum_name)
 		}
 		uprintf("● %s", &modified_files.String[i][dest_len]);
 		pos = str_pos - md5_data;
-		HashFile(HASH_MD5, modified_files.String[i], sum);
+		HashFile(HASH_MD5, path1, sum);
 		while ((pos > 0) && (md5_data[pos - 1] != '\n'))
 			pos--;
 		assert(IS_HEXASCII(md5_data[pos]));
