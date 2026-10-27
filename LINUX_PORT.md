@@ -44,7 +44,7 @@ Wayland, and tracks the progress of the port.
 | Stage | Status |
 |---|---|
 | 0. Foundation (build system, compat layer, libraries, CI, test harness) | **done** |
-| 1. Decouple the logic from the UI | not started |
+| 1. Decouple the logic from the UI | in progress |
 | 2. Linux backend, helper, CLI | not started |
 | 3. Qt 6 GUI | not started |
 | 4. Advanced features | not started |
@@ -84,7 +84,42 @@ Wayland, and tracks the progress of the port.
 **Follow-up**: run `ctest -L e2e` in GitHub Actions once the repository is pushed
 (hosted runners expose KVM).
 
-**Next: stage 1.**
+**Stage 1 (in progress)**
+
+Done:
+
+- **`librufus-core`** (`src/core`, plus the ported upstream files, which stay in
+  `src/`): built without any Windows header.
+  - `rufus.h` no longer includes `windows.h`; it keeps the portable declarations, and
+    the Win32/GUI ones come back with POSIX types as their files get ported.
+  - `ui_iface.h`: log, status, progress, blocking questions (`Notification()`,
+    `SelectionDialog()`, `ListDialog()`) and events (`UM_*`). The headless defaults
+    never imply consent.
+- **Main window rules** (`core/rules.c`): the partition scheme, target system, file
+  system, cluster size, label and option rules of `rufus.c`/`ui.c`, as events on a plain
+  `rules_state_t`. `tests/test_rules.c` checks scenarios, and replays random user
+  sequences on both the rules and the **original Windows functions** (copied verbatim
+  into `tests/rules_oracle`, run against mock controls), comparing the whole window after
+  every step: 3000 sequences of 60 steps on every run.
+- **Utility layer**: `stdio.c`, `stdfn.c`, `localization.c`, `parser.c`, `xml.c`, cregex
+  and the progress computations (`core/progress.c`), covered by `tests/test_core.c`
+  (also clean under ASan/UBSan).
+  - `WindowsErrorString()` describes `errno`; `WindowsErrorFromErrno()` maps it to the
+    `ERROR_*` codes of the status.
+  - `RunCommandWithProgress()` takes an argument vector (`posix_spawn`), not a command
+    line.
+  - The configuration file functions work on UTF-8 with explicit BOM/UTF-16LE handling
+    and Windows text mode line endings, so patched files match the Windows output.
+  - `.loc` strings use LF line breaks.
+
+Next:
+
+1. `rufus_options_t`: the option snapshot taken on START, `InitProgress()`, and the
+   ~40 widget reads of `format.c`, `dos.c`, `wue.c`...
+2. Image analysis in the core: `iso.c` (path refactor), `hash.c`, `syslinux.c`, the image
+   detection of `vhd.c`, Secure Boot checks (OpenSSL), then `ImageScanThread` and
+   `BootCheckThread` with their questions through `ui_ask()`.
+3. pthreads, atomic `ErrorStatus` and cooperative cancellation.
 
 ---
 
