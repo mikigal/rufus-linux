@@ -2,17 +2,8 @@ name: Linux build
 
 on:
   push:
-    branches: [master]
-    paths-ignore:
-      - '.github/ISSUE_TEMPLATE/**'
-      - '**.md'
-      - 'res/loc/**'
-  pull_request:
-    branches: [master]
-    paths-ignore:
-      - '.github/ISSUE_TEMPLATE/**'
-      - '**.md'
-      - 'res/loc/**'
+    tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: read

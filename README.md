@@ -6,7 +6,7 @@ Rufus: The Reliable USB Formatting Utility (Linux port)
 > affiliated with or supported by the upstream Rufus project. See
 > [LINUX_PORT.md](LINUX_PORT.md) for the porting plan and its current status.**
 
-[![Linux Build Status](https://img.shields.io/github/actions/workflow/status/mikigal/rufus-linux/linux.yml?branch=master&style=flat-square&label=Linux%20Build)](https://github.com/mikigal/rufus-linux/actions/workflows/linux.yml)
+[![Linux Build Status](https://img.shields.io/github/actions/workflow/status/mikigal/rufus-linux/linux.yml?style=flat-square&label=Linux%20Build)](https://github.com/mikigal/rufus-linux/actions/workflows/linux.yml)
 [![Latest Release](https://img.shields.io/github/release-pre/pbatard/rufus.svg?style=flat-square&label=Latest%20Release)](https://github.com/pbatard/rufus/releases)
 [![Licence](https://img.shields.io/badge/license-GPLv3-blue.svg?style=flat-square&label=License)](https://www.gnu.org/licenses/gpl-3.0.en.html)
 [![Download Stats](https://img.shields.io/github/downloads/pbatard/rufus/total.svg?label=Downloads&style=flat-square)](https://github.com/pbatard/rufus/releases)
