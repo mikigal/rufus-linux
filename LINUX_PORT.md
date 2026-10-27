@@ -1075,7 +1075,11 @@ Setup screen.
   compositor this port targets; its scale comes from its output configuration, as its
   virtual backend ignores `--scale`), or optionally sway (the wlroots headless backend,
   skipped when it is not installed), with a session bus and an accessibility bus of the tests, and the
-  AT-SPI registry, so that nothing depends on systemd or on the desktop of the user.
+  AT-SPI registry, so that nothing depends on systemd or on the desktop of the user. KWin gets a
+  `rufus.desktop` of its own, without startup notification, ahead of the one of an installed Rufus:
+  its virtual backend may not composite (no QPainter in KWin 6.8, and no OpenGL on the NVIDIA
+  driver), and it then crashes when it announces the startup of an activation token, which Qt asks
+  for when a dialog opens.
 - **Driver**: AT-SPI (`python-gobject`), finding widgets by their `IDC_*` object
   names, which Qt exposes as accessible ids:
   - select the device, choose options, press START, answer dialogs;

@@ -185,7 +185,6 @@ class Base:
         self.addCleanup(compositor.close)
         rufus = gui.Rufus(compositor, **kwargs)
         self.addCleanup(rufus.close)
-        rufus.compositor = compositor
         return rufus
 
     def stop(self, r: gui.Rufus):

@@ -159,9 +159,20 @@ class Compositor:
                         "enabled": True, "outputIndex": 0, "position": {"x": 0, "y": 0}, "priority": 0,
                         "replicationSource": ""}]}]},
                 ], f)
+            # The virtual backend may not composite at all (KWin 6.8 has no QPainter for it, and its
+            # OpenGL fails on the NVIDIA driver), and KWin then has no effects. But when Qt asks for an
+            # activation token (for a dialog), KWin announces a startup to its effects if the desktop
+            # file of the app_id asks for it, as the one of an installed Rufus does, and crashes. This
+            # desktop file comes before the installed ones, and asks for none.
+            data_home = os.path.join(d.dir, f"{self.socket}.data")
+            os.makedirs(os.path.join(data_home, "applications"))
+            with open(os.path.join(data_home, "applications", "rufus.desktop"), "w") as f:
+                f.write("[Desktop Entry]\nType=Application\nName=Rufus\nExec=rufus\nX-KDE-StartupNotify=false\n")
             cmd = ["kwin_wayland", "--virtual", "--no-lockscreen", "--socket", self.socket,
                    "--width", str(width), "--height", str(height), "--scale", str(scale)]
-            env = d.full_env({"KWIN_COMPOSE": "Q", "XDG_CONFIG_HOME": config_home})
+            # Its messages in its log, rather than in the journal
+            env = d.full_env({"KWIN_COMPOSE": "Q", "XDG_CONFIG_HOME": config_home, "XDG_DATA_HOME": data_home,
+                              "QT_FORCE_STDERR_LOGGING": "1"})
         else:
             config = os.path.join(d.dir, f"{self.socket}.sway")
             with open(config, "w") as f:
@@ -221,6 +232,7 @@ class Rufus:
                  env: dict | None = None, settings: str | None = None):
         d = desktop()
         self.Atspi = d.atspi
+        self.compositor = compositor
         self.dir = tempfile.mkdtemp(prefix="rufus-run-", dir=d.dir)
         binary = os.environ.get("RUFUS_GUI", "rufus")
         self.helper_log = os.path.join(self.dir, "helper.jsonl")
@@ -273,7 +285,7 @@ class Rufus:
                     return line
             left = end - time.time()
             if left <= 0 or self.proc.poll() is not None:
-                raise TimeoutError(f"no '{prefix}' from Rufus (log: {self.log()[-3000:]})")
+                raise TimeoutError(f"no '{prefix}' from Rufus{self.gone()} (log: {self.log()[-3000:]})")
             r, _, _ = select.select([self.proc.stdout], [], [], left)
             if r:
                 chunk = os.read(self.proc.stdout.fileno(), 4096)
@@ -293,6 +305,15 @@ class Rufus:
         _, dpr, size = self.command(f"capture {path}").split()
         w, h = size.split("x")
         return float(dpr), int(w), int(h)
+
+    def gone(self) -> str:
+        """Why Rufus can't answer, when the compositor or Rufus exited"""
+        c = self.compositor
+        if c.proc.poll() is not None:
+            return f" ({c.kind} exited with {c.proc.returncode}, see {c.log.name})"
+        if self.proc.poll() is not None:
+            return f" (Rufus exited with {self.proc.returncode})"
+        return ""
 
     def log(self) -> str:
         self.stderr.flush()
@@ -335,8 +356,9 @@ class Rufus:
                 r = None
             if r:
                 return r
-            if time.time() > end:
-                raise TimeoutError(f"timed out waiting for {what}")
+            # Nothing comes any more without the compositor
+            if time.time() > end or self.compositor.proc.poll() is not None:
+                raise TimeoutError(f"timed out waiting for {what}{self.gone()}")
             time.sleep(0.05)
 
     def _find_app(self):
