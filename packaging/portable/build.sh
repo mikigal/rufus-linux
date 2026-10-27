@@ -25,7 +25,7 @@ DESTDIR="$work/AppDir" cmake --install "$work/build"
 export QMAKE="${QMAKE:-qmake}"
 export EXTRA_PLATFORM_PLUGINS="libqwayland-generic.so;libqwayland-egl.so"
 export EXTRA_QT_PLUGINS="platformthemes;wayland-shell-integration;wayland-decoration-client;wayland-graphics-integration-client"
-export LDAI_OUTPUT="$out/$name.AppImage" LDAI_UPDATE_INFORMATION=""
+export LDAI_OUTPUT="$out/$name.AppImage"
 mkdir -p "$out"
 "$LINUXDEPLOY" --appdir "$work/AppDir" \
 	--executable "$work/AppDir/usr/bin/rufus" \

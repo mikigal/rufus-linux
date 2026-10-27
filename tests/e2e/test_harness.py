@@ -61,7 +61,10 @@ class ObservationChannels(unittest.TestCase):
             self.skipTest("OVMF is not installed")
         stick = media.blank_stick(os.path.join(WORK, "blank-uefi.img"), 16 * 1024 * 1024)
         with qemu.VM("uefi").add_usb_stick(stick) as vm:
-            text = vm.wait_for("ocr", r"(?i)(shell>|no bootable|boot manager)", timeout=90, interval=3)
+            # Without a bootable medium, OVMF goes to its boot manager, or to the UEFI Shell (Ubuntu's); OCR
+            # may read "Shell>" as "Shel I>"
+            text = vm.wait_for("ocr", r"(?i)(interactive shell|shel\s*[il1|]?>|no bootable|boot manager)", timeout=90,
+                               interval=3)
             self.assertIsNotNone(text, vm.ocr())
 
     def test_wait_for_times_out(self):
@@ -135,7 +138,7 @@ class RootVM(unittest.TestCase):
         # disk itself to show up rather than just for udev to settle.
         script = (
             "set -e; dev=; "
-            "for i in $(seq 100); do udevadm settle; "
+            "for i in $(seq 300); do udevadm settle; "
             "  for d in /sys/block/sd*; do [ -e \"$d\" ] || continue; "
             "    if udevadm info -q property -n /dev/${d##*/} | grep -qx ID_BUS=usb; then dev=/dev/${d##*/}; fi; done; "
             "  [ -n \"$dev\" ] && break; sleep 0.2; done; "

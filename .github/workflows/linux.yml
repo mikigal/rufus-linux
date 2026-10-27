@@ -67,7 +67,7 @@ jobs:
         run: |
           zypper -n install git gcc gcc-c++ clang cmake ninja pkgconf \
             'cmake(Qt6Widgets)' 'cmake(Qt6DBus)' e2fsprogs 'pkgconfig(ext2fs)' 'pkgconfig(com_err)' util-linux \
-            dosfstools xorriso 'pkgconfig(openssl)>=3.0' 'pkgconfig(libcurl)' 'pkgconfig(hivex)' mtools qemu-img \
+            dosfstools xorriso libopenssl-devel 'pkgconfig(libcurl)' 'pkgconfig(hivex)' mtools qemu-img \
             'pkgconfig(libudev)' ntfsprogs exfatprogs udftools gawk
 
       - name: Install dependencies (Debian, Ubuntu)
@@ -107,6 +107,7 @@ jobs:
             kwin sway ttf-dejavu mesa libcap
           # The capabilities of kwin_wayland are not for a container, which then can't run it
           setcap -r /usr/bin/kwin_wayland
+          setcap -r /usr/bin/sway || true
           useradd -m tester
 
       - uses: actions/checkout@v5

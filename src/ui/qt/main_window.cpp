@@ -1520,7 +1520,7 @@ bool MainWindow::startFormatThread()
 
 	format_running_ = true;
 	render();
-	std::thread([this, job] {
+	std::thread([job] {
 		helper_job_t hj = {};
 		struct stat st;
 
