@@ -38,6 +38,9 @@
 class DeviceMonitor;
 class LogWindow;
 
+/* rufus-helper, which stays for the session once started (a single polkit prompt) */
+extern void StopSessionHelper();
+
 /*
  * The main window holds a rules_state_t, which describes what the Windows
  * dialog displays: each user action goes to the rules (rules_on_*()), and the
@@ -62,6 +65,8 @@ public:
 	rules_state_t& rules() { return m_; }
 	// An image given on the command line
 	void selectImage(const QString& path) { onSelect(path); }
+	// The window was closed to be created again, in another language
+	bool relaunch() const { return relaunch_; }
 
 protected:
 	void closeEvent(QCloseEvent* event) override;
@@ -93,6 +98,7 @@ private:
 	void onHash();
 	void onStart(bool zero_drive = false);
 	void onClose();
+	void showLanguageMenu();
 	void PrintStatusTimeout(const char* str, BOOL val);
 
 	/* The format operation */
@@ -115,8 +121,8 @@ private:
 	bool no_confirmation_on_cancel_ = false;
 	bool keep_image_name_ = false;
 	rufus_device_t start_device_ = {};	// The drive of the operation
-	helper_t helper_ = { -1, 0 };
 	QString last_image_dir_;
+	bool relaunch_ = false;
 
 	/* Status bar */
 	QLabel* status_ = nullptr;

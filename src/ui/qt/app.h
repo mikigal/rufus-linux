@@ -44,6 +44,8 @@ extern char loc_file[MAX_PATH];
 extern void InitDirectories(const char* argv0);
 /* Read the settings of rufus.ini into the globals above (and the core ones) */
 extern void LoadSettings(void);
+/* SETTING_DARK_MODE: 0 follows the desktop, 1 forces dark and 2 light (Ctrl-Alt-D) */
+extern void ApplyColorScheme(void);
 /* The settings and cheat modes that an operation depends on */
 extern void SetOptionsFromSettings(rufus_options_t* o);
 /*
@@ -56,5 +58,7 @@ extern BOOL InitLocalization(void);
  * messages. Returns FALSE if no locale could be loaded.
  */
 extern BOOL SelectLocale(const char* name);
+/* Load the messages of selected_locale again (after it changed) */
+extern BOOL ApplySelectedLocale(void);
 /* The name of the selected locale, e.g. "en-US" */
 extern const char* selected_locale_name(void);

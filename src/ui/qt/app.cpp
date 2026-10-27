@@ -25,6 +25,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QGuiApplication>
+#include <QStyleHints>
 #include <QStandardPaths>
 
 #include <cdio/logging.h>
@@ -173,11 +175,36 @@ BOOL SelectLocale(const char* name)
 	}
 	if (lcmd == NULL)
 		lcmd = get_locale_from_name((char*)"en-US", TRUE);
-	if ((lcmd == NULL) || !get_loc_data_file(loc_file, lcmd))
+	if (lcmd == NULL)
 		return FALSE;
 	selected_locale = lcmd;
+	return ApplySelectedLocale();
+}
+
+BOOL ApplySelectedLocale(void)
+{
+	if ((selected_locale == NULL) || !get_loc_data_file(loc_file, selected_locale))
+		return FALSE;
 	right_to_left_mode = (selected_locale->ctrl_id & LOC_RIGHT_TO_LEFT) ? TRUE : FALSE;
+	QGuiApplication::setLayoutDirection(right_to_left_mode ? Qt::RightToLeft : Qt::LeftToRight);
+	WriteSettingStr(SETTING_LOCALE, selected_locale->txt[0]);
+	ubprintf("Localization set to '%s'", selected_locale->txt[0]);
 	return TRUE;
+}
+
+void ApplyColorScheme(void)
+{
+	switch (ReadSetting32(SETTING_DARK_MODE)) {
+	case 1:
+		QGuiApplication::styleHints()->setColorScheme(Qt::ColorScheme::Dark);
+		break;
+	case 2:
+		QGuiApplication::styleHints()->setColorScheme(Qt::ColorScheme::Light);
+		break;
+	default:
+		QGuiApplication::styleHints()->unsetColorScheme();
+		break;
+	}
 }
 
 const char* selected_locale_name(void)

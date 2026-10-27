@@ -35,6 +35,7 @@
 #include <QGridLayout>
 #include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QMenu>
 #include <QMimeData>
 #include <QRegularExpressionValidator>
 #include <QSignalBlocker>
@@ -58,6 +59,13 @@ extern char embedded_sl_version_str[2][12];
 
 // The width of the window, in average characters (232 dialog units on Windows)
 static constexpr int window_chars = 58;
+
+static helper_t session_helper = { -1, 0 };
+
+void StopSessionHelper()
+{
+	StopHelper(&session_helper);
+}
 
 #define SET_NAME(widget, id) (widget)->setObjectName(QStringLiteral(#id))
 
@@ -170,7 +178,7 @@ MainWindow::MainWindow(LogWindow* log, QWidget* parent) : QMainWindow(parent), l
 
 MainWindow::~MainWindow()
 {
-	StopHelper(&helper_);
+	SetBridgeWindow(nullptr);
 }
 
 void MainWindow::createWidgets()
@@ -427,6 +435,8 @@ void MainWindow::createWidgets()
 	connect(close_, &QPushButton::clicked, this, &MainWindow::onClose);
 	connect(log_button_, &QToolButton::clicked, this, [this] { log_->toggle(); });
 	connect(about_, &QToolButton::clicked, this, [this] { ShowAboutDialog(this); });
+	connect(settings_, &QToolButton::clicked, this, [this] { ShowUpdatePolicyDialog(this); });
+	connect(lang_, &QToolButton::clicked, this, &MainWindow::showLanguageMenu);
 }
 
 void MainWindow::retranslate()
@@ -916,9 +926,48 @@ void MainWindow::closeEvent(QCloseEvent* event)
 		event->ignore();
 		return;
 	}
-	log_->saveToStateDir();
-	log_->close();
+	if (!relaunch_) {
+		log_->saveToStateDir();
+		log_->close();
+	}
 	event->accept();
+	QCoreApplication::exit(0);
+}
+
+// IDC_LANG
+void MainWindow::showLanguageMenu()
+{
+	QMenu menu(this);
+	loc_cmd* lcmd = nullptr;
+	QAction* chosen;
+
+	menu.setObjectName(QStringLiteral("IDC_LANG_MENU"));
+	list_for_each_entry(lcmd, &locale_list, loc_cmd, list) {
+		QString name = QString::fromUtf8(lcmd->txt[1]);
+		// The appearance of LTR languages must be fixed for RTL menus
+		if (right_to_left_mode && !(lcmd->ctrl_id & LOC_RIGHT_TO_LEFT)) {
+			int open = (int)name.indexOf(QLatin1Char('('));
+			if (open > 0)
+				name = QString::fromUtf8(LEFT_TO_RIGHT_EMBEDDING "%1 " POP_DIRECTIONAL_FORMATTING "%2")
+					.arg(name.mid(open), name.left(open).trimmed());
+		}
+		QAction* a = menu.addAction(name);
+		a->setCheckable(true);
+		a->setChecked(lcmd == selected_locale);
+		a->setData(QVariant::fromValue((void*)lcmd));
+	}
+	// Show the menu such that it doesn't overlap the button
+	chosen = menu.exec(lang_->mapToGlobal(QPoint(lang_->width() / 2, lang_->height())));
+	if (chosen == nullptr)
+		return;
+	lcmd = static_cast<loc_cmd*>(chosen->data().value<void*>());
+	if (lcmd == selected_locale)
+		return;
+	selected_locale = lcmd;
+	// Avoid the file system being reset on language change
+	preselected_fs = rules_combo_data(&m_.fs);
+	relaunch_ = true;
+	close();
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent* event)
@@ -1080,7 +1129,7 @@ bool MainWindow::startFormatThread()
 		helper_job_t hj = {};
 		struct stat st;
 
-		if ((helper_.sock < 0) && !StartHelper(&helper_, selected_locale_name())) {
+		if ((session_helper.sock < 0) && !StartHelper(&session_helper, selected_locale_name())) {
 			uprintf("Could not start the helper");
 			if (!IS_ERROR(ErrorStatus))
 				ErrorStatus = RUFUS_ERROR(ERROR_ACCESS_DENIED);
@@ -1092,7 +1141,7 @@ bool MainWindow::startFormatThread()
 			hj.archive_fd = job->archive_fd;
 			hj.bb_log_fd = job->bb_log_fd;
 			hj.bb_log_path = job->bb_log_path.c_str();
-			HelperFormat(&helper_, &hj);
+			HelperFormat(&session_helper, &hj);
 		}
 		if (job->bb_log_fd >= 0) {
 			// No bad blocks: no report

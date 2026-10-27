@@ -49,5 +49,8 @@ void ShowHashDialog(QWidget* parent);
 void ShowAboutDialog(QWidget* parent);
 void ShowLicenseDialog(QWidget* parent);
 
+/* IDD_UPDATE_POLICY: the update policy and settings */
+void ShowUpdatePolicyDialog(QWidget* parent);
+
 /* The simple RTF of the .loc and license.h, as HTML */
 QString RtfToHtml(const char* rtf);

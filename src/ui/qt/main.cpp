@@ -24,6 +24,8 @@
 
 #include <QApplication>
 #include <QFileInfo>
+#include <QLockFile>
+#include <QStandardPaths>
 #include <QMessageBox>
 #include <QTimer>
 
@@ -136,9 +138,6 @@ int main(int argc, char* argv[])
 			QStringLiteral("The locale data is missing or invalid. This application will now exit."));
 		return 1;
 	}
-	ubprintf("Localization set to '%s'", selected_locale->txt[0]);
-	WriteSettingStr(SETTING_LOCALE, selected_locale->txt[0]);
-	QGuiApplication::setLayoutDirection(right_to_left_mode ? Qt::RightToLeft : Qt::LeftToRight);
 	log.retranslate();
 
 	uprintf(APPLICATION_NAME " v%d.%d.%d (Linux)", rufus_version[0], rufus_version[1], rufus_version[2]);
@@ -153,24 +152,44 @@ int main(int argc, char* argv[])
 		uprintf("If you think you can help update this translation, please e-mail the author of this application");
 	}
 
-	MainWindow window(&log);
-	window.show();
-	// Process the image of the command line, once the window is up
-	if (!provided_image.isEmpty())
-		QTimer::singleShot(0, &window, [&window, provided_image] { window.selectImage(provided_image); });
-
-	// Test hook: a capture of the main window, after it settles (RUFUS_TEST_CAPTURE=file.png)
-	if (const char* capture = getenv("RUFUS_TEST_CAPTURE")) {
-		QString path = QString::fromUtf8(capture);
-		QTimer::singleShot(1000, &window, [&window, path] {
-			window.grab().save(path);
-			if (getenv("RUFUS_TEST_QUIT") != nullptr)
-				QApplication::quit();
-		});
+	// Prevent 2 applications from running at the same time
+	QLockFile lock(QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation) + QStringLiteral("/rufus.lock"));
+	if (!lock.tryLock(0)) {
+		QMessageBox::critical(nullptr, lmstr(MSG_001), lmstr(MSG_002));
+		return 1;
 	}
+	ApplyColorScheme();
+	// The main window closes itself (also to be created again in another language)
+	app.setQuitOnLastWindowClosed(false);
 
-	int r = app.exec();
-	SetBridgeWindow(nullptr);
+	int r;
+	for (;;) {
+		MainWindow window(&log);
+		window.show();
+		// Process the image of the command line, or the one of the window before a relaunch
+		if (!provided_image.isEmpty() || (image_path != nullptr)) {
+			QString image = provided_image.isEmpty() ? QString::fromUtf8(image_path) : provided_image;
+			QTimer::singleShot(0, &window, [&window, image] { window.selectImage(image); });
+			provided_image.clear();
+		}
+		// Test hook: a capture of the main window, after it settles (RUFUS_TEST_CAPTURE=file.png)
+		if (const char* capture = getenv("RUFUS_TEST_CAPTURE")) {
+			QString path = QString::fromUtf8(capture);
+			QTimer::singleShot(1000, &window, [&window, path] {
+				window.grab().save(path);
+				if (getenv("RUFUS_TEST_QUIT") != nullptr)
+					window.close();
+			});
+		}
+		r = app.exec();
+		if (!window.relaunch())
+			break;
+		reinit_localization();
+		if (!ApplySelectedLocale())
+			break;
+		log.retranslate();
+	}
+	StopSessionHelper();
 	uprintf("*** " APPLICATION_NAME " exit ***");
 	exit_localization();
 	safe_free(image_path);
