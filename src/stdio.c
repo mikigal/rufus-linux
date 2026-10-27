@@ -135,6 +135,166 @@ uint32_t write_file(const char* path, const uint8_t* buf, const uint32_t size)
 	return written;
 }
 
+// Copy a file, optionally failing if the destination exists (as CopyFile() does)
+BOOL copy_file(const char* src, const char* dst, BOOL fail_if_exists)
+{
+	uint8_t buf[64 * KB];
+	ssize_t r, w;
+	int fd_src, fd_dst;
+	struct stat st;
+	BOOL ret = FALSE;
+
+	fd_src = open(src, O_RDONLY | O_CLOEXEC);
+	if (fd_src < 0)
+		return FALSE;
+	if (fstat(fd_src, &st) != 0) {
+		close(fd_src);
+		return FALSE;
+	}
+	fd_dst = open(dst, O_WRONLY | O_CREAT | O_CLOEXEC | (fail_if_exists ? O_EXCL : O_TRUNC), st.st_mode & 0777);
+	if (fd_dst < 0) {
+		close(fd_src);
+		return FALSE;
+	}
+	while ((r = read(fd_src, buf, sizeof(buf))) != 0) {
+		if (r < 0) {
+			if (errno == EINTR)
+				continue;
+			goto out;
+		}
+		for (w = 0; w < r; ) {
+			ssize_t n = write(fd_dst, &buf[w], r - w);
+			if (n < 0) {
+				if (errno == EINTR)
+					continue;
+				goto out;
+			}
+			w += n;
+		}
+	}
+	ret = TRUE;
+out:
+	close(fd_src);
+	if (close(fd_dst) != 0)
+		ret = FALSE;
+	return ret;
+}
+
+// Create a directory and its parents (as SHCreateDirectoryEx() does)
+int mkdir_p(const char* path, mode_t mode)
+{
+	char tmp[MAX_PATH], *p;
+
+	if (safe_strlen(path) >= sizeof(tmp)) {
+		errno = ENAMETOOLONG;
+		return -1;
+	}
+	static_strcpy(tmp, path);
+	for (p = &tmp[1]; *p != 0; p++) {
+		if (*p != '/')
+			continue;
+		*p = 0;
+		if ((mkdir(tmp, mode) != 0) && (errno != EEXIST))
+			return -1;
+		*p = '/';
+	}
+	if ((mkdir(tmp, mode) != 0) && (errno != EEXIST))
+		return -1;
+	return 0;
+}
+
+// Return TRUE if a path exists, matching its components without regard to case,
+// in which case 'path' is updated with the actual case of each component.
+BOOL PathFileExistsNoCase(char* path)
+{
+	char *start, *end, saved;
+	struct dirent* entry;
+	struct stat st;
+	DIR* dir;
+	BOOL found;
+
+	if ((path == NULL) || (path[0] == 0))
+		return FALSE;
+	if (stat(path, &st) == 0)
+		return TRUE;
+	// Walk the components, from the first one that is missing
+	for (start = path; *start == '/'; start++);
+	while (*start != 0) {
+		for (end = start; (*end != 0) && (*end != '/'); end++);
+		saved = *end;
+		*end = 0;
+		if (stat(path, &st) != 0) {
+			// Look for a case insensitive match in the parent directory
+			start[-1] = 0;
+			dir = opendir((start - 1 == path) ? "/" : path);
+			start[-1] = '/';
+			if (start == path) {
+				// Relative path
+				if (dir != NULL)
+					closedir(dir);
+				dir = opendir(".");
+			}
+			found = FALSE;
+			while ((dir != NULL) && ((entry = readdir(dir)) != NULL)) {
+				if ((strlen(entry->d_name) == strlen(start)) && (_stricmp(entry->d_name, start) == 0)) {
+					memcpy(start, entry->d_name, strlen(start));
+					found = TRUE;
+					break;
+				}
+			}
+			if (dir != NULL)
+				closedir(dir);
+			if (!found) {
+				*end = saved;
+				return FALSE;
+			}
+		}
+		*end = saved;
+		for (start = end; *start == '/'; start++);
+	}
+	return TRUE;
+}
+
+// Convert a wide string, which can be UTF-16 (with surrogates) or UTF-32, to UTF-8
+char* wchar_to_utf8(const wchar_t* wstr)
+{
+	size_t i, j, len;
+	uint32_t c;
+	char* str;
+
+	if (wstr == NULL)
+		return NULL;
+	for (len = 0; wstr[len] != 0; len++);
+	str = malloc(4 * len + 1);
+	if (str == NULL)
+		return NULL;
+	for (i = 0, j = 0; i < len; i++) {
+		c = (uint32_t)wstr[i];
+		if ((c >= 0xD800) && (c < 0xDC00) && (i + 1 < len) &&
+			((uint32_t)wstr[i + 1] >= 0xDC00) && ((uint32_t)wstr[i + 1] < 0xE000)) {
+			c = 0x10000 + ((c - 0xD800) << 10) + ((uint32_t)wstr[i + 1] - 0xDC00);
+			i++;
+		}
+		if (c < 0x80) {
+			str[j++] = (char)c;
+		} else if (c < 0x800) {
+			str[j++] = (char)(0xC0 | (c >> 6));
+			str[j++] = (char)(0x80 | (c & 0x3F));
+		} else if (c < 0x10000) {
+			str[j++] = (char)(0xE0 | (c >> 12));
+			str[j++] = (char)(0x80 | ((c >> 6) & 0x3F));
+			str[j++] = (char)(0x80 | (c & 0x3F));
+		} else {
+			str[j++] = (char)(0xF0 | ((c >> 18) & 0x07));
+			str[j++] = (char)(0x80 | ((c >> 12) & 0x3F));
+			str[j++] = (char)(0x80 | ((c >> 6) & 0x3F));
+			str[j++] = (char)(0x80 | (c & 0x3F));
+		}
+	}
+	str[j] = 0;
+	return str;
+}
+
 // Prints a bitstring of a number of any size, with or without leading zeroes.
 // See also the printbits() and printbitslz() helper macros in rufus.h
 char *_printbits(size_t const size, void const * const ptr, int leading_zeroes)
@@ -336,6 +496,18 @@ char* SizeToHumanReadable(uint64_t size, BOOL copy_to_log, BOOL fake_units)
 	uint16_t i_size;
 	char **_msg_table = copy_to_log ? default_msg_table : msg_table;
 	const double divider = fake_units ? 1000.0 : 1024.0;
+	// NB: Used until a localization file has been loaded
+	static char* default_units[MSG_MAX - MSG_000] = { NULL };
+
+	if ((msg_table == NULL) || (_msg_table[MSG_020 - MSG_000] == NULL)) {
+		default_units[MSG_020 - MSG_000] = "bytes";
+		default_units[MSG_021 - MSG_000] = "KB";
+		default_units[MSG_022 - MSG_000] = "MB";
+		default_units[MSG_023 - MSG_000] = "GB";
+		default_units[MSG_024 - MSG_000] = "TB";
+		default_units[MSG_025 - MSG_000] = "PB";
+		_msg_table = default_units;
+	}
 
 	for (suffix = 0; suffix < MAX_SIZE_SUFFIXES - 1; suffix++) {
 		if (hr_size < divider)

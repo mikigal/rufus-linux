@@ -1689,6 +1689,31 @@ thumbprint_list_t* GetThumbprintEntries(char* thumbprints_txt)
  * PE parsing functions
  */
 
+// From rufus.c
+enum ArchType MachineToArch(WORD machine)
+{
+	switch (machine) {
+	case IMAGE_FILE_MACHINE_I386:
+		return ARCH_X86_32;
+	case IMAGE_FILE_MACHINE_AMD64:
+		return ARCH_X86_64;
+	case IMAGE_FILE_MACHINE_ARM:
+		return ARCH_ARM_32;
+	case IMAGE_FILE_MACHINE_ARM64:
+		return ARCH_ARM_64;
+	case IMAGE_FILE_MACHINE_IA64:
+		return ARCH_IA_64;
+	case IMAGE_FILE_MACHINE_RISCV64:
+		return ARCH_RISCV_64;
+	case IMAGE_FILE_MACHINE_LOONGARCH64:
+		return ARCH_LOONGARCH_64;
+	case IMAGE_FILE_MACHINE_EBC:
+		return ARCH_EBC;
+	default:
+		return ARCH_UNKNOWN;
+	}
+}
+
 // Return the arch of a PE executable buffer
 uint16_t GetPeArch(uint8_t* buf)
 {
@@ -1782,12 +1807,13 @@ uint32_t FindResourceRva(const uint16_t* name, uint8_t* root, uint8_t* dir, uint
 {
 	uint32_t i, rva, name_len;
 	IMAGE_RESOURCE_DIRECTORY* _dir = (IMAGE_RESOURCE_DIRECTORY*)dir;
-	IMAGE_RESOURCE_DIRECTORY_ENTRY* dir_entry = (IMAGE_RESOURCE_DIRECTORY_ENTRY*)&_dir[1];
+	IMAGE_RESOURCE_DIRECTORY_ENTRY* dir_entry;
 	IMAGE_RESOURCE_DIR_STRING_U* dir_string;
 	IMAGE_RESOURCE_DATA_ENTRY* data_entry;
 
 	if (root == NULL || dir == NULL || name == NULL)
 		return 0;
+	dir_entry = (IMAGE_RESOURCE_DIRECTORY_ENTRY*)&_dir[1];
 	for (name_len = 0; name[name_len] != 0; name_len++);
 
 	// Initial invocation should always start at the root

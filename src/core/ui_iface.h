@@ -78,6 +78,7 @@ enum ui_event_type {
 	UM_SELECT_ISO,				// Open the image selection
 	UM_TIMER_START,				// Start the elapsed time counter on the status bar
 	UM_FORMAT_START,			// param: result of the boot check (see enum bootcheck_return)
+	UM_HASH_COMPLETED,			// HashThread() succeeded: display hash_str[] (IDD_HASH)
 };
 
 /* Kinds of question the core can ask */

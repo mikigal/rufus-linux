@@ -53,31 +53,29 @@
  * will fill a supplied 16-byte array with the digest.
  */
 
- /* Memory leaks detection - define _CRTDBG_MAP_ALLOC as preprocessor macro */
-#ifdef _CRTDBG_MAP_ALLOC
-#include <stdlib.h>
-#include <crtdbg.h>
-#endif
-
 #include <stdio.h>
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
+#include <ctype.h>
 #include <errno.h>
-#include <intrin.h>
-#include <windows.h>
-#include <windowsx.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <semaphore.h>
+#include <time.h>
+#if defined(__x86_64__) || defined(__i386__)
+#include <immintrin.h>
+#endif
 
 #include "db.h"
 #include "efi.h"
 #include "rufus.h"
 #include "options.h"
-#include "winio.h"
 #include "missing.h"
-#include "darkmode.h"
 #include "resource.h"
-#include "msapi_utf8.h"
+#include "ui_iface.h"
+#include "winpe.h"
 #include "localization.h"
 
 #if (defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || defined(__i386) || \
@@ -86,11 +84,7 @@
 #define CPU_X86_SHA256_ACCELERATION     1
 #endif
 
-#if defined(_MSC_VER)
-#define RUFUS_ENABLE_GCC_ARCH(arch)
-#else
 #define RUFUS_ENABLE_GCC_ARCH(arch) __attribute__ ((target (arch)))
-#endif
 
 #undef BIG_ENDIAN_HOST
 
@@ -103,7 +97,9 @@
 
 /* Globals */
 char hash_str[HASH_MAX][150];
-HANDLE data_ready[HASH_MAX] = { 0 }, thread_ready[HASH_MAX] = { 0 };
+// NB: These replace the auto-reset events of upstream. The hashing protocol strictly
+// alternates between the two, so a semaphore never counts beyond 1, as an event would.
+static sem_t data_ready[HASH_MAX], thread_ready[HASH_MAX];
 DWORD read_size[NUM_BUFFERS];
 BOOL enable_extra_hashes = FALSE;
 BOOL cpu_has_sha1_accel = FALSE, cpu_has_sha256_accel = FALSE;
@@ -114,10 +110,9 @@ uint32_t pe256ssp_size = 0;
 uint64_t md5sum_totalbytes;
 StrArray modified_files = { 0 };
 
-extern int default_thread_priority;
 extern const char* efi_archname[ARCH_MAX];
 extern char *sbat_level_txt, *sb_active_txt, *sb_revoked_txt;
-extern BOOL expert_mode, usb_debug;
+extern BOOL expert_mode;
 
 /*
  * Detect if the processor supports SHA-1 acceleration. We only check for
@@ -127,29 +122,8 @@ extern BOOL expert_mode, usb_debug;
 BOOL DetectSHA1Acceleration(void)
 {
 #if defined(CPU_X86_SHA1_ACCELERATION)
-#if defined(_MSC_VER)
-	uint32_t regs0[4] = { 0,0,0,0 }, regs1[4] = { 0,0,0,0 }, regs7[4] = { 0,0,0,0 };
-	const uint32_t SSSE3_BIT = 1u << 9; /* Function 1, Bit  9 of ECX */
-	const uint32_t SSE41_BIT = 1u << 19; /* Function 1, Bit 19 of ECX */
-	const uint32_t SHA_BIT = 1u << 29; /* Function 7, Bit 29 of EBX */
-
-	__cpuid(regs0, 0);
-	const uint32_t highest = regs0[0]; /*EAX*/
-
-	if (highest >= 0x01) {
-		__cpuidex(regs1, 1, 0);
-	}
-	if (highest >= 0x07) {
-		__cpuidex(regs7, 7, 0);
-	}
-
-	return (regs1[2] /*ECX*/ & SSSE3_BIT) && (regs1[2] /*ECX*/ & SSE41_BIT) && (regs7[1] /*EBX*/ & SHA_BIT) ? TRUE : FALSE;
-#elif defined(__GNUC__) || defined(__clang__)
 	/* __builtin_cpu_supports available in GCC 4.8.1 and above */
 	return __builtin_cpu_supports("ssse3") && __builtin_cpu_supports("sse4.1") && __builtin_cpu_supports("sha") ? TRUE : FALSE;
-#else
-	return FALSE;
-#endif
 #else
 	return FALSE;
 #endif
@@ -163,29 +137,8 @@ BOOL DetectSHA1Acceleration(void)
 BOOL DetectSHA256Acceleration(void)
 {
 #if defined(CPU_X86_SHA256_ACCELERATION)
-#if defined(_MSC_VER)
-	uint32_t regs0[4] = { 0,0,0,0 }, regs1[4] = { 0,0,0,0 }, regs7[4] = { 0,0,0,0 };
-	const uint32_t SSSE3_BIT = 1u << 9; /* Function 1, Bit  9 of ECX */
-	const uint32_t SSE41_BIT = 1u << 19; /* Function 1, Bit 19 of ECX */
-	const uint32_t SHA_BIT = 1u << 29; /* Function 7, Bit 29 of EBX */
-
-	__cpuid(regs0, 0);
-	const uint32_t highest = regs0[0]; /*EAX*/
-
-	if (highest >= 0x01) {
-		__cpuidex(regs1, 1, 0);
-	}
-	if (highest >= 0x07) {
-		__cpuidex(regs7, 7, 0);
-	}
-
-	return (regs1[2] /*ECX*/ & SSSE3_BIT) && (regs1[2] /*ECX*/ & SSE41_BIT) && (regs7[1] /*EBX*/ & SHA_BIT) ? TRUE : FALSE;
-#elif defined(__GNUC__) || defined(__clang__)
 	/* __builtin_cpu_supports available in GCC 4.8.1 and above */
 	return __builtin_cpu_supports("ssse3") && __builtin_cpu_supports("sse4.1") && __builtin_cpu_supports("sha") ? TRUE : FALSE;
-#else
-	return FALSE;
-#endif
 #else
 	return FALSE;
 #endif
@@ -1530,25 +1483,29 @@ hash_final_t *hash_final[HASH_MAX] = { md5_final, sha1_final , sha256_final, sha
 BOOL HashFile(const unsigned type, const char* path, uint8_t* hash)
 {
 	BOOL r = FALSE;
-	HASH_CONTEXT hash_ctx = { {0} };
-	HANDLE h = INVALID_HANDLE_VALUE;
-	DWORD rs = 0;
+	HASH_CONTEXT hash_ctx = { 0 };
+	int fd = -1;
+	ssize_t rs = 0;
 	uint8_t buf[4096];
 
 	if ((type >= HASH_MAX) || (path == NULL) || (hash == NULL))
 		goto out;
 
-	h = CreateFileU(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
-	if (h == INVALID_HANDLE_VALUE) {
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
 		uprintf("Could not open file: %s", WindowsErrorString());
 		ErrorStatus = RUFUS_ERROR(ERROR_OPEN_FAILED);
 		goto out;
 	}
+	posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
 
 	hash_init[type](&hash_ctx);
 	while(1) {
 		CHECK_FOR_USER_CANCEL;
-		if (!ReadFile(h, buf, sizeof(buf), &rs, NULL)) {
+		rs = read(fd, buf, sizeof(buf));
+		if (rs < 0) {
+			if (errno == EINTR)
+				continue;
 			ErrorStatus = RUFUS_ERROR(ERROR_READ_FAULT);
 			uprintf("  Read error: %s", WindowsErrorString());
 			goto out;
@@ -1563,7 +1520,7 @@ BOOL HashFile(const unsigned type, const char* path, uint8_t* hash)
 	r = TRUE;
 
 out:
-	safe_closehandle(h);
+	safe_close(fd);
 	return r;
 }
 
@@ -1777,7 +1734,7 @@ BOOL efi_image_parse(uint8_t* efi, size_t len, struct efi_image_regions** regp)
 	num_sections = nt->FileHeader.NumberOfSections;
 	sections = (void*)((uint8_t*)&nt->OptionalHeader +
 		nt->FileHeader.SizeOfOptionalHeader);
-	sorted = calloc(sizeof(IMAGE_SECTION_HEADER*), num_sections);
+	sorted = calloc(num_sections, sizeof(IMAGE_SECTION_HEADER*));
 	if (!sorted) {
 		uprintf("%s: Out of memory", __func__);
 		goto err;
@@ -1836,7 +1793,7 @@ err:
 BOOL PE256Buffer(uint8_t* buf, uint32_t len, uint8_t* hash)
 {
 	BOOL r = FALSE;
-	HASH_CONTEXT hash_ctx = { {0} };
+	HASH_CONTEXT hash_ctx = { 0 };
 	int i;
 	struct efi_image_regions* regs = NULL;
 
@@ -1867,7 +1824,7 @@ out:
 BOOL HashBuffer(const unsigned type, const uint8_t* buf, const size_t len, uint8_t* hash)
 {
 	BOOL r = FALSE;
-	HASH_CONTEXT hash_ctx = { {0} };
+	HASH_CONTEXT hash_ctx = { 0 };
 
 	if ((type >= HASH_MAX) || (hash == NULL))
 		goto out;
@@ -1884,105 +1841,49 @@ out:
 }
 
 /*
- * Hash dialog callback
+ * The hash dialog (HashCallback() upstream) belongs to the front end, which
+ * displays hash_str[] when HashThread() reports UM_HASH_COMPLETED.
  */
-INT_PTR CALLBACK HashCallback(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
+
+// Wait for a semaphore, for up to timeout ms
+static BOOL WaitSemaphore(sem_t* sem, DWORD timeout)
 {
-	static HFONT hFont = NULL;
-	int i, dw, dh;
-	RECT rc;
-	HDC hDC;
+	struct timespec ts;
 
-	switch (message) {
-	case WM_INITDIALOG:
-		SetDarkModeForDlg(hDlg);
-		apply_localization(IDD_HASH, hDlg);
-		if (hFont == NULL) {
-			hDC = GetDC(hDlg);
-			hFont = CreateFontA(-MulDiv(9, GetDeviceCaps(hDC, LOGPIXELSY), 72),
-				0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-				0, 0, PROOF_QUALITY, 0, "Courier New");
-			safe_release_dc(hDlg, hDC);
-		}
-		SendDlgItemMessageA(hDlg, IDC_MD5, WM_SETFONT, (WPARAM)hFont, TRUE);
-		SendDlgItemMessageA(hDlg, IDC_SHA1, WM_SETFONT, (WPARAM)hFont, TRUE);
-		SendDlgItemMessageA(hDlg, IDC_SHA256, WM_SETFONT, (WPARAM)hFont, TRUE);
-		SendDlgItemMessageA(hDlg, IDC_SHA512, WM_SETFONT, (WPARAM)hFont, TRUE);
-		SetWindowTextA(GetDlgItem(hDlg, IDC_MD5), hash_str[0]);
-		SetWindowTextA(GetDlgItem(hDlg, IDC_SHA1), hash_str[1]);
-		SetWindowTextA(GetDlgItem(hDlg, IDC_SHA256), hash_str[2]);
-		if (enable_extra_hashes)
-			SetWindowTextA(GetDlgItem(hDlg, IDC_SHA512), hash_str[3]);
-		else
-			SetWindowTextU(GetDlgItem(hDlg, IDC_SHA512), lmprintf(MSG_311, "<Alt>-<H>"));
-
-		// Move/Resize the controls as needed to fit our text
-		hDC = GetDC(GetDlgItem(hDlg, IDC_MD5));
-		SelectFont(hDC, hFont);	// Yes, you *MUST* reapply the font to the DC, even after SetWindowText!
-
-		GetWindowRect(GetDlgItem(hDlg, IDC_MD5), &rc);
-		dw = rc.right - rc.left;
-		dh = rc.bottom - rc.top;
-		DrawTextU(hDC, hash_str[0], -1, &rc, DT_CALCRECT);
-		dw = rc.right - rc.left - dw + 12;	// Ideally we'd compute the field borders from the system, but hey...
-		dh = rc.bottom - rc.top - dh + 6;
-		ResizeMoveCtrl(hDlg, GetDlgItem(hDlg, IDC_SHA256), 0, 0, dw, dh, 1.0f);
-		ResizeMoveCtrl(hDlg, GetDlgItem(hDlg, IDC_SHA512), 0, 0, dw, dh, 1.0f);
-
-		GetWindowRect(GetDlgItem(hDlg, IDC_SHA1), &rc);
-		dw = rc.right - rc.left;
-		DrawTextU(hDC, hash_str[1], -1, &rc, DT_CALCRECT);
-		dw = rc.right - rc.left - dw + 12;
-		ResizeMoveCtrl(hDlg, GetDlgItem(hDlg, IDC_MD5), 0, 0, dw, 0, 1.0f);
-		ResizeMoveCtrl(hDlg, GetDlgItem(hDlg, IDC_SHA1), 0, 0, dw, 0, 1.0f);
-		ResizeButtonHeight(hDlg, IDOK);
-
-		safe_release_dc(GetDlgItem(hDlg, IDC_MD5), hDC);
-
-		if (image_path != NULL) {
-			for (i = (int)strlen(image_path); (i > 0) && (image_path[i] != '\\'); i--);
-			SetWindowTextU(hDlg, &image_path[i + 1]);
-		}
-		SetDarkModeForChild(hDlg);
-		// Set focus on the OK button
-		SendMessage(hDlg, WM_NEXTDLGCTL, (WPARAM)GetDlgItem(hDlg, IDOK), TRUE);
-		CenterDialog(hDlg, NULL);
-		break;
-	case WM_NCDESTROY:
-		safe_delete_object(hFont);
-		break;
-	case WM_COMMAND:
-		switch (LOWORD(wParam)) {
-		case IDOK:
-		case IDCANCEL:
-			reset_localization(IDD_HASH);
-			EndDialog(hDlg, LOWORD(wParam));
-			return (INT_PTR)TRUE;
-		}
+	clock_gettime(CLOCK_REALTIME, &ts);
+	ts.tv_sec += timeout / 1000;
+	ts.tv_nsec += (long)(timeout % 1000) * 1000000L;
+	if (ts.tv_nsec >= 1000000000L) {
+		ts.tv_sec++;
+		ts.tv_nsec -= 1000000000L;
 	}
-	return (INT_PTR)FALSE;
+	while (sem_timedwait(sem, &ts) != 0) {
+		if (errno != EINTR)
+			return FALSE;
+	}
+	return TRUE;
 }
 
 /* Individual thread that computes one of MD5, SHA1, SHA256 or SHA512 in parallel */
-DWORD WINAPI IndividualHashThread(void* param)
+static void* IndividualHashThread(void* param)
 {
-	HASH_CONTEXT hash_ctx = { {0} }; // There's a memset in hash_init, but static analyzers still bug us
+	HASH_CONTEXT hash_ctx = { 0 }; // There's a memset in hash_init, but static analyzers still bug us
 	uint32_t i = (uint32_t)(uintptr_t)param, j;
 
 	hash_init[i](&hash_ctx);
 	// Signal that we're ready to service requests
-	if (!SetEvent(thread_ready[i]))
+	if (sem_post(&thread_ready[i]) != 0)
 		goto error;
 
 	// Wait for requests
 	while (1) {
-		if (WaitForSingleObject(data_ready[i], WAIT_TIME) != WAIT_OBJECT_0) {
+		if (!WaitSemaphore(&data_ready[i], WAIT_TIME)) {
 			uprintf("Failed to wait for event for hash thread #%d: %s", i, WindowsErrorString());
-			return 1;
+			return (void*)1;
 		}
 		if (read_size[proc_bufnum] != 0) {
 			hash_write[i](&hash_ctx, buffer[proc_bufnum], (size_t)read_size[proc_bufnum]);
-			if (!SetEvent(thread_ready[i]))
+			if (sem_post(&thread_ready[i]) != 0)
 				goto error;
 		} else {
 			hash_final[i](&hash_ctx);
@@ -1994,106 +1895,92 @@ DWORD WINAPI IndividualHashThread(void* param)
 					((hash_ctx.buf[j] & 15) + '0') : ((hash_ctx.buf[j] & 15) - 0xa + 'a');
 			}
 			hash_str[i][2 * j] = 0;
-			return 0;
+			return NULL;
 		}
 	}
 error:
 	uprintf("Failed to set event for hash thread #%d: %s", i, WindowsErrorString());
-	return 1;
+	return (void*)1;
 }
 
-DWORD WINAPI HashThread(void* param)
+// Compute the hashes of image_path. The reads alternate between NUM_BUFFERS buffers,
+// so that the next buffer is read while the hash threads process the previous one.
+// NB: Upstream binds each thread to a CPU set, and reads asynchronously.
+void* HashThread(void* param)
 {
-	DWORD_PTR* thread_affinity = (DWORD_PTR*)param;
-	HANDLE hash_thread[HASH_MAX] = { NULL, NULL, NULL, NULL };
-	DWORD wr;
-	VOID* fd = NULL;
+	pthread_t hash_thread[HASH_MAX];
+	BOOL started[HASH_MAX] = { FALSE }, sem_ready[HASH_MAX] = { FALSE };
+	int fd = -1;
+	ssize_t rs;
 	uint64_t processed_bytes;
 	int i, read_bufnum, r = -1;
 	int num_hashes = HASH_MAX - (enable_extra_hashes ? 0 : 1);
 
-	if ((image_path == NULL) || (thread_affinity == NULL))
-		ExitThread(r);
+	if (image_path == NULL)
+		goto out;
 
-	uprintf("\r\nComputing hash for '%s'...", image_path);
-
-	if (thread_affinity[0] != 0)
-		// Use the first affinity mask, as our read thread is the least
-		// CPU intensive (mostly waits on disk I/O or on the other threads)
-		// whereas the OS is likely to requisition the first Core, which
-		// is usually in this first mask, for other tasks.
-		SetThreadAffinityMask(GetCurrentThread(), thread_affinity[0]);
+	uprintf("\nComputing hash for '%s'...", image_path);
 
 	for (i = 0; i < num_hashes; i++) {
-		// NB: Can't use a single manual-reset event for data_ready as we
-		// wouldn't be able to ensure the event is reset before the thread
-		// gets into its next wait loop
-		data_ready[i] = CreateEvent(NULL, FALSE, FALSE, NULL);
-		thread_ready[i] = CreateEvent(NULL, FALSE, FALSE, NULL);
-		if ((data_ready[i] == NULL) || (thread_ready[i] == NULL)) {
+		if ((sem_init(&data_ready[i], 0, 0) != 0) || (sem_init(&thread_ready[i], 0, 0) != 0)) {
 			uprintf("Unable to create hash thread event: %s", WindowsErrorString());
 			goto out;
 		}
-		hash_thread[i] = CreateThread(NULL, 0, IndividualHashThread, (LPVOID)(uintptr_t)i, 0, NULL);
-		if (hash_thread[i] == NULL) {
+		sem_ready[i] = TRUE;
+		if (pthread_create(&hash_thread[i], NULL, IndividualHashThread, (void*)(uintptr_t)i) != 0) {
 			uprintf("Unable to start hash thread #%d", i);
 			goto out;
 		}
-		SetThreadPriority(hash_thread[i], default_thread_priority);
-		if (thread_affinity[i+1] != 0)
-			SetThreadAffinityMask(hash_thread[i], thread_affinity[i+1]);
+		started[i] = TRUE;
 	}
 
-	fd = CreateFileAsync(image_path, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN);
-	if (fd == NULL) {
+	fd = open(image_path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
 		uprintf("Could not open file: %s", WindowsErrorString());
 		ErrorStatus = RUFUS_ERROR(ERROR_OPEN_FAILED);
 		goto out;
 	}
+	posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
 
 	read_bufnum = 0;
 	proc_bufnum = 1;
 	read_size[proc_bufnum] = 1;	// To avoid early loop exit
-	UpdateProgressWithInfoInit(hMainDialog, FALSE);
-
-	// Start the initial read
-	ReadFileAsync(fd, buffer[read_bufnum], BUFFER_SIZE);
+	UpdateProgressWithInfoInit(NULL, FALSE);
 
 	for (processed_bytes = 0; read_size[proc_bufnum] != 0; processed_bytes += read_size[proc_bufnum]) {
 		// 0. Update the progress and check for cancel
 		UpdateProgressWithInfo(OP_NOOP_WITH_TASKBAR, MSG_271, processed_bytes, img_report.image_size);
 		CHECK_FOR_USER_CANCEL;
 
-		// 1. Wait for the current read operation to complete (and update the read size)
-		if ((!WaitFileAsync(fd, DRIVE_ACCESS_TIMEOUT)) ||
-			(!GetSizeAsync(fd, &read_size[read_bufnum]))) {
+		// 1. Read the next buffer (while the hash threads process the previous one)
+		do {
+			rs = read(fd, buffer[read_bufnum], BUFFER_SIZE);
+		} while ((rs < 0) && (errno == EINTR));
+		if (rs < 0) {
 			uprintf("Read error: %s", WindowsErrorString());
 			ErrorStatus = RUFUS_ERROR(ERROR_READ_FAULT);
 			goto out;
 		}
+		read_size[read_bufnum] = (DWORD)rs;
 
-		// 2. Switch to the next reading buffer
-		read_bufnum = (read_bufnum + 1) % NUM_BUFFERS;
-
-		// 3. Launch the next asynchronous read operation
-		ReadFileAsync(fd, buffer[read_bufnum], BUFFER_SIZE);
-
-		// 4. Wait for all the hash threads to indicate that they are ready to process data
-		wr = WaitForMultipleObjects(num_hashes, thread_ready, TRUE, WAIT_TIME);
-		if (wr != WAIT_OBJECT_0) {
-			if (wr == STATUS_TIMEOUT)
-				SetLastError(ERROR_TIMEOUT);
-			uprintf("Hash threads failed to signal: %s", WindowsErrorString());
-			goto out;
+		// 2. Wait for all the hash threads to indicate that they are ready to process data
+		for (i = 0; i < num_hashes; i++) {
+			if (!WaitSemaphore(&thread_ready[i], WAIT_TIME)) {
+				uprintf("Hash threads failed to signal: %s", WindowsErrorString());
+				goto out;
+			}
 		}
 
-		// 5. Set the target buffer we want to process to the buffer we just read data into
+		// 3. Set the target buffer we want to process to the buffer we just read data into
 		// Note that this variable should only be updated AFTER all the threads have signalled.
-		proc_bufnum = (read_bufnum + NUM_BUFFERS - 1) % NUM_BUFFERS;
+		proc_bufnum = read_bufnum;
 
-		// 6. Signal the waiting threads that there is data available
+		// 4. Switch to the next reading buffer
+		read_bufnum = (read_bufnum + 1) % NUM_BUFFERS;
+
+		// 5. Signal the waiting threads that there is data available
 		for (i = 0; i < num_hashes; i++) {
-			if (!SetEvent(data_ready[i])) {
+			if (sem_post(&data_ready[i]) != 0) {
 				uprintf("Could not signal hash thread %d: %s", i, WindowsErrorString());
 				goto out;
 			}
@@ -2101,9 +1988,14 @@ DWORD WINAPI HashThread(void* param)
 	}
 
 	// Our last event with read_size=0 signaled the threads to exit - wait for that to happen
-	if (WaitForMultipleObjects(num_hashes, hash_thread, TRUE, WAIT_TIME) != WAIT_OBJECT_0) {
-		uprintf("Hash threads did not finalize: %s", WindowsErrorString());
-		goto out;
+	for (i = 0; i < num_hashes; i++) {
+		void* tr = NULL;
+		pthread_join(hash_thread[i], &tr);
+		started[i] = FALSE;
+		if (tr != NULL) {
+			uprintf("Hash threads did not finalize");
+			goto out;
+		}
 	}
 
 	uprintf("  MD5:    %s", hash_str[0]);
@@ -2120,16 +2012,22 @@ DWORD WINAPI HashThread(void* param)
 
 out:
 	for (i = 0; i < num_hashes; i++) {
-		if (hash_thread[i] != NULL)
-			TerminateThread(hash_thread[i], 1);
-		safe_closehandle(data_ready[i]);
-		safe_closehandle(thread_ready[i]);
+		if (started[i]) {
+			// Unblock the thread with an empty buffer, so that it exits
+			read_size[proc_bufnum] = 0;
+			sem_post(&data_ready[i]);
+			pthread_join(hash_thread[i], NULL);
+		}
+		if (sem_ready[i]) {
+			sem_destroy(&data_ready[i]);
+			sem_destroy(&thread_ready[i]);
+		}
 	}
-	CloseFileAsync(fd);
-	PostMessage(hMainDialog, UM_FORMAT_COMPLETED, (WPARAM)FALSE, 0);
+	safe_close(fd);
+	ui_event(UM_FORMAT_COMPLETED, FALSE);
 	if (r == 0)
-		MyDialogBox(hMainInstance, IDD_HASH, hMainDialog, HashCallback);
-	ExitThread(r);
+		ui_event(UM_HASH_COMPLETED, 0);
+	return (void*)(intptr_t)r;
 }
 
 /*
@@ -2191,7 +2089,7 @@ static BOOL IsRevokedBySbat(uint8_t* buf, uint32_t len)
 		return FALSE;
 
 	// Look for a .sbat section
-	sbat = GetPeSection(buf, ".sbat", &sbat_len);
+	sbat = (char*)GetPeSection(buf, ".sbat", &sbat_len);
 	if (sbat == NULL || sbat < (char*)buf || sbat >= (char*)buf + len)
 		return FALSE;
 
@@ -2226,7 +2124,6 @@ static BOOL IsRevokedBySbat(uint8_t* buf, uint32_t len)
 }
 
 // NB: Can be tested using en_windows_8_1_x64_dvd_2707217.iso
-extern BOOL UseLocalDbx(int arch);
 static BOOL IsRevokedByDbx(uint8_t* hash, uint8_t* buf, uint32_t len)
 {
 	EFI_VARIABLE_AUTHENTICATION_2* efi_var_auth;
@@ -2234,25 +2131,18 @@ static BOOL IsRevokedByDbx(uint8_t* hash, uint8_t* buf, uint32_t len)
 	BYTE* dbx_data = NULL;
 	BOOL ret = FALSE, needs_free = FALSE;
 	DWORD dbx_size = 0;
-	char dbx_name[32], path[MAX_PATH];
+	char dbx_name[32];
 	uint32_t i, fluff_size, nb_entries;
 
 	i = MachineToArch(GetPeArch(buf));
 	if (i == ARCH_UNKNOWN)
 		goto out;
 
-	// Check if a more recent local DBX should be preferred over embedded
+	// TODO: Prefer a more recent downloaded DBX over the embedded one, as upstream
+	// does with UseLocalDbx(), once the DBX updates of net.c are ported.
 	static_sprintf(dbx_name, "dbx_%s.bin", efi_archname[i]);
-	if (UseLocalDbx(i)) {
-		static_sprintf(path, "%s\\%s\\%s", app_data_dir, FILES_DIR, dbx_name);
-		dbx_size = read_file(path, &dbx_data);
-		needs_free = (dbx_data != NULL);
-		if (needs_free)
-			duprintf("  Using local %s for revocation check", path);
-	}
 	if (dbx_size == 0) {
-		dbx_data = (BYTE*)GetResource(hMainInstance, MAKEINTRESOURCEA(IDR_DBX + i),
-			_RT_RCDATA, dbx_name, &dbx_size, FALSE);
+		dbx_data = (BYTE*)GetResource(IDR_DBX + i, dbx_name, &dbx_size, FALSE);
 	}
 	if (dbx_data == NULL || dbx_size <= sizeof(EFI_VARIABLE_AUTHENTICATION_2))
 		goto out;
@@ -2289,7 +2179,7 @@ out:
 
 static BOOL IsRevokedBySvn(uint8_t* buf, uint32_t len)
 {
-	wchar_t* rsrc_name = NULL;
+	uint16_t rsrc_name[64];
 	uint8_t *root;
 	uint32_t i, j, rsrc_rva, rsrc_len, *svn_ver;
 	IMAGE_DOS_HEADER* dos_header = (IMAGE_DOS_HEADER*)buf;
@@ -2305,9 +2195,12 @@ static BOOL IsRevokedBySvn(uint8_t* buf, uint32_t len)
 		for (j = 0; j < strlen(sbat_entries[i].product) && isupper(sbat_entries[i].product[j]); j++);
 		if (j < strlen(sbat_entries[i].product))
 			continue;
-		rsrc_name = utf8_to_wchar(sbat_entries[i].product);
-		if (rsrc_name == NULL)
+		// The product is uppercase ASCII at this stage
+		if (strlen(sbat_entries[i].product) >= ARRAYSIZE(rsrc_name))
 			continue;
+		for (j = 0; sbat_entries[i].product[j] != 0; j++)
+			rsrc_name[j] = (uint16_t)sbat_entries[i].product[j];
+		rsrc_name[j] = 0;
 
 		pe_header = (IMAGE_NT_HEADERS32*)&buf[dos_header->e_lfanew];
 		if (pe_header->FileHeader.Machine == IMAGE_FILE_MACHINE_I386 || pe_header->FileHeader.Machine == IMAGE_FILE_MACHINE_ARM) {
@@ -2319,7 +2212,6 @@ static BOOL IsRevokedBySvn(uint8_t* buf, uint32_t len)
 
 		root = RvaToPhysical(buf, img_data_dir.VirtualAddress);
 		rsrc_rva = FindResourceRva(rsrc_name, root, root, &rsrc_len);
-		safe_free(rsrc_name);
 		if (rsrc_rva != 0) {
 			if (rsrc_len == sizeof(uint32_t)) {
 				svn_ver = (uint32_t*)RvaToPhysical(buf, rsrc_rva);
@@ -2473,17 +2365,20 @@ void UpdateMD5Sum(const char* dest_dir, const char* md5sum_name)
 	BOOL display_header = TRUE;
 	BYTE* res_data;
 	DWORD res_size;
-	HANDLE hFile;
+	int fd;
 	intptr_t pos;
 	uint32_t i, j, size, md5_size, new_size;
 	uint8_t sum[MD5_HASHSIZE];
-	char md5_path[64], path1[64], path2[64], bootloader_name[32];
+	char md5_path[MAX_PATH], path1[MAX_PATH], path2[MAX_PATH], bootloader_name[32];
 	char *md5_data = NULL, *new_data = NULL, *str_pos, *d, *s, *p;
+	// NB: Upstream works with "X:" drive paths, and skips 2 characters for the relative path
+	const size_t dest_len = strlen(dest_dir);
 
 	if (!img_report.has_md5sum && !opts.validate_md5sum)
 		return;
 
-	static_sprintf(md5_path, "%s\\%s", dest_dir, md5sum_name);
+	static_sprintf(md5_path, "%s/%s", dest_dir, md5sum_name);
+	PathFileExistsNoCase(md5_path);
 	md5_size = read_file(md5_path, (uint8_t**)&md5_data);
 	if (md5_size == 0)
 		return;
@@ -2492,12 +2387,12 @@ void UpdateMD5Sum(const char* dest_dir, const char* md5sum_name)
 	for (i = 0; i < md5_size; i++)
 		md5_data[i] = (char)tolower(md5_data[i]);
 	for (i = 0; i < modified_files.Index; i++) {
-		for (j = 0; j < (uint32_t)strlen(modified_files.String[i]); j++) {
+		// Only lowercase the part that is relative to the destination
+		if (strlen(modified_files.String[i]) <= dest_len)
+			continue;
+		for (j = (uint32_t)dest_len; j < (uint32_t)strlen(modified_files.String[i]); j++)
 			modified_files.String[i][j] = (char)tolower(modified_files.String[i][j]);
-			if (modified_files.String[i][j] == '\\')
-				modified_files.String[i][j] = '/';
-		}
-		str_pos = strstr(md5_data, &modified_files.String[i][2]);
+		str_pos = strstr(md5_data, &modified_files.String[i][dest_len]);
 		if (str_pos == NULL)
 			// File is not listed in md5 sums
 			continue;
@@ -2505,7 +2400,7 @@ void UpdateMD5Sum(const char* dest_dir, const char* md5sum_name)
 			uprintf("Updating %s:", md5_path);
 			display_header = FALSE;
 		}
-		uprintf("● %s", &modified_files.String[i][2]);
+		uprintf("● %s", &modified_files.String[i][dest_len]);
 		pos = str_pos - md5_data;
 		HashFile(HASH_MD5, modified_files.String[i], sum);
 		while ((pos > 0) && (md5_data[pos - 1] != '\n'))
@@ -2526,7 +2421,7 @@ void UpdateMD5Sum(const char* dest_dir, const char* md5sum_name)
 			return;
 		// Will be nonzero if we created the file, otherwise zero
 		if (md5sum_totalbytes != 0) {
-			snprintf(new_data, md5_size + 1024, "# md5sum_totalbytes = 0x%llx\n", md5sum_totalbytes);
+			snprintf(new_data, md5_size + 1024, "# md5sum_totalbytes = 0x%" PRIx64 "\n", md5sum_totalbytes);
 			new_size += (uint32_t)strlen(new_data);
 			d = &new_data[strlen(new_data)];
 		} else {
@@ -2536,43 +2431,43 @@ void UpdateMD5Sum(const char* dest_dir, const char* md5sum_name)
 		// Extract the MD5Sum bootloader(s)
 		for (i = 1; i < ARRAYSIZE(efi_archname); i++) {
 			static_sprintf(bootloader_name, "boot%s.efi", efi_archname[i]);
-			static_sprintf(path1, "%s\\efi\\boot\\boot%s.efi", dest_dir, efi_archname[i]);
-			if (!PathFileExistsA(path1))
+			static_sprintf(path1, "%s/efi/boot/boot%s.efi", dest_dir, efi_archname[i]);
+			if (!PathFileExistsNoCase(path1))
 				continue;
-			res_data = (BYTE*)GetResource(hMainInstance, MAKEINTRESOURCEA(IDR_MD5_BOOT + i),
-				_RT_RCDATA, bootloader_name, &res_size, FALSE);
+			res_data = (BYTE*)GetResource(IDR_MD5_BOOT + i, bootloader_name, &res_size, FALSE);
 			static_strcpy(path2, path1);
 			path2[strlen(path2) - 4] = 0;
 			static_strcat(path2, "_original.efi");
-			if (res_data == NULL || !MoveFileU(path1, path2)) {
+			if (res_data == NULL || rename(path1, path2) != 0) {
 				uprintf("Could not rename: %s → %s", path1, path2);
 				continue;
 			}
 			uprintf("Renamed: %s → %s", path1, path2);
-			hFile = CreatePreallocatedFile(path1, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL,
-				CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, res_size);
-			if ((hFile == NULL) || (hFile == INVALID_HANDLE_VALUE)) {
+			fd = CreatePreallocatedFile(path1, O_RDWR | O_CREAT | O_TRUNC, 0644, res_size);
+			if (fd < 0) {
 				uprintf("Could not create '%s': %s.", path1, WindowsErrorString());
-				MoveFileU(path2, path1);
+				rename(path2, path1);
 				continue;
 			}
-			if (!WriteFileWithRetry(hFile, res_data, res_size, NULL, WRITE_RETRIES)) {
+			if (!WriteFileWithRetry(fd, res_data, res_size, NULL, WRITE_RETRIES)) {
 				uprintf("Could not write '%s': %s.", path1, WindowsErrorString());
-				safe_closehandle(hFile);
-				MoveFileU(path2, path1);
+				safe_close(fd);
+				rename(path2, path1);
 				continue;
 			}
-			safe_closehandle(hFile);
+			safe_close(fd);
 			uprintf("Created: %s (%s)", path1, SizeToHumanReadable(res_size, FALSE, FALSE));
 		}
 		// Rename the original bootloaders if present in md5sum.txt
-		for (p = md5_data; (p = StrStrIA(p, " ./efi/boot/boot")) != NULL; ) {
+		for (p = md5_data; (p = strcasestr(p, " ./efi/boot/boot")) != NULL; ) {
 			for (i = 1; i < ARRAYSIZE(efi_archname); i++) {
 				static_sprintf(bootloader_name, "boot%s.efi", efi_archname[i]);
-				if (p[12 + strlen(bootloader_name)] != 0x0a)
+				// NB: Upstream reads past the end of the data for the last entries
+				if ((p + 12 + strlen(bootloader_name) >= &md5_data[md5_size]) ||
+					(p[12 + strlen(bootloader_name)] != 0x0a))
 					continue;
 				p[12 + strlen(bootloader_name)] = 0;
-				if (lstrcmpiA(&p[12], bootloader_name) == 0) {
+				if (_stricmp(&p[12], bootloader_name) == 0) {
 					size = (uint32_t)(p - s) + 12 + (uint32_t)strlen(bootloader_name) - 4;
 					memcpy(d, s, size);
 					d = &d[size];
@@ -2592,7 +2487,7 @@ void UpdateMD5Sum(const char* dest_dir, const char* md5sum_name)
 		md5_size = new_size;
 	}
 
-	write_file(md5_path, md5_data, md5_size);
+	write_file(md5_path, (uint8_t*)md5_data, md5_size);
 	free(md5_data);
 }
 

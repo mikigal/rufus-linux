@@ -340,7 +340,8 @@ char* lmprintf(uint32_t msg_id, ...)
 	buf[buf_id][0] = 0;
 
 	msg_id &= MSG_MASK;
-	if ((msg_id >= MSG_000) && (msg_id < MSG_MAX)) {
+	// NB: msg_table is NULL until a localization file has been loaded
+	if ((msg_table != NULL) && (msg_id >= MSG_000) && (msg_id < MSG_MAX)) {
 		format = msg_table[msg_id - MSG_000];
 	}
 
@@ -393,7 +394,7 @@ void PrintStatusInfo(BOOL info, BOOL debug, unsigned int duration, int msg_id, .
 		return;
 	}
 
-	format = msg_table[msg_id - MSG_000];
+	format = (msg_table == NULL) ? NULL : msg_table[msg_id - MSG_000];
 	if (format == NULL) {
 		safe_sprintf(msg, MSG_LEN, "MSG_%03d UNTRANSLATED", msg_id - MSG_000);
 		uprintf("%s", msg);
@@ -408,7 +409,7 @@ void PrintStatusInfo(BOOL info, BOOL debug, unsigned int duration, int msg_id, .
 	ui_status(info, duration, msg);
 
 	// Because we want the log messages in English, we go through the VA business once more, but this time with default_msg_table
-	if (debug) {
+	if (debug && (msg_table != NULL)) {
 		format = default_msg_table[msg_id - MSG_000];
 		if (format == NULL)
 			return;

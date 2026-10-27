@@ -26,6 +26,14 @@
 #include "rufus.h"
 
 RUFUS_UPDATE update = { 0 };
+// Settings that the core reads
+BOOL usb_debug = FALSE, expert_mode = FALSE;
+// Secure Boot revocation data (the embedded defaults from db.h are used if they are NULL)
+char *sbat_level_txt = NULL, *sb_active_txt = NULL, *sb_revoked_txt = NULL;
+sbat_entry_t* sbat_entries = NULL;
+thumbprint_list_t *sb_active_certs = NULL, *sb_revoked_certs = NULL;
+// TODO: Back to iso.c once it is ported
+const char* efi_archname[ARCH_MAX] = { "", "ia32", "x64", "arm", "aa64", "ia64", "riscv64", "loongarch64", "ebc" };
 // The context of the operation: the image, its report, and the other files it uses
 RUFUS_IMG_REPORT img_report = { 0 };
 char *image_path = NULL, *archive_path = NULL, *unattend_xml_path = NULL;

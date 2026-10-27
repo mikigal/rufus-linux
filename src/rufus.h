@@ -724,6 +724,16 @@ extern BOOL DumpFatDir(void* iso, const char* path, int32_t cluster);
 extern uint16_t GetSyslinuxVersion(char* buf, size_t buf_size, char** ext);
 extern BOOL SetAutorun(const char* path);
 extern BOOL FileIO(enum file_io_type io_type, char* path, char** buffer, DWORD* size);
+// Embedded payloads (IDR_* from resource.h). A resource that is not duplicated is read-only.
+extern uint8_t* GetResource(int id, const char* desc, DWORD* len, BOOL duplicate);
+extern DWORD GetResourceSize(int id, const char* desc);
+// File helpers. PathFileExistsNoCase() also fixes the case of the path, if found
+// (NTFS and UDF are case sensitive on Linux, whereas they are not on Windows).
+extern BOOL PathFileExistsNoCase(char* path);
+extern BOOL copy_file(const char* src, const char* dst, BOOL fail_if_exists);
+extern int mkdir_p(const char* path, mode_t mode);
+// UTF-16 or UTF-32 wide string (as libfat produces) to allocated UTF-8
+extern char* wchar_to_utf8(const wchar_t* wstr);
 extern DWORD RunCommandWithProgress(const char* const* argv, const char* dir, BOOL log, int msg, const char* pattern);
 #define RunCommand(argv, dir, log) RunCommandWithProgress(argv, dir, log, 0, NULL)
 extern BOOL CompareGUID(const GUID *guid1, const GUID *guid2);
@@ -746,9 +756,13 @@ extern int sanitize_label(char* label);
 extern int IsHDD(DWORD DriveIndex, uint16_t vid, uint16_t pid, const char* strid);
 extern int GetIssuerCertificateInfo(uint8_t* cert, cert_info_t* info);
 extern BOOL ValidateOpensslSignature(BYTE* pbBuffer, DWORD dwBufferLen, BYTE* pbSignature, DWORD dwSigLen);
+extern BOOL ValidateRsaSha256Signature(const uint8_t* modulus, size_t modulus_len, const BYTE* pbBuffer,
+	DWORD dwBufferLen, const BYTE* pbSignature, DWORD dwSigLen);
 extern BOOL DetectSHA1Acceleration(void);
 extern BOOL DetectSHA256Acceleration(void);
 extern BOOL HashFile(const unsigned type, const char* path, uint8_t* sum);
+extern char hash_str[HASH_MAX][150];
+extern void* HashThread(void* param);
 extern BOOL PE256Buffer(uint8_t* buf, uint32_t len, uint8_t* hash);
 extern void UpdateMD5Sum(const char* dest_dir, const char* md5sum_name);
 extern BOOL HashBuffer(const unsigned type, const uint8_t* buf, const size_t len, uint8_t* sum);

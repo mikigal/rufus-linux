@@ -278,10 +278,10 @@ Other dependencies:
     without a GUI), both from stage 2;
   - `rufus` (Qt 6).
 - **Binary payloads** (`rufus.rc:454–540`: syslinux, grub, FreeDOS, `uefi-ntfs.img`,
-  `md5/*.efi`, `dbx/*.efiauth2`, `setup_*.exe`, `embedded.loc`) are embedded with
-  **C23 `#embed`**, which GCC 16 and Clang 23 support.
-  - A `GetResource(IDR_*)` shim stays, and `embedded.loc` is parsed from memory
-    (`fmemopen`).
+  `md5/*.efi`, `dbx/*.efiauth2`, `setup_*.exe`) are embedded with the assembler's
+  `.incbin` (`core/resource.c`), since the GCC of Ubuntu 24.04 has no C23 `#embed`.
+  - A `GetResource(IDR_*)` shim stays; `embedded.loc` is not embedded, as the `.loc`
+    file is installed with the application.
   - A file in `/usr/share/rufus` may override an embedded payload.
   - Never substitute the distribution's syslinux/grub/FreeDOS binaries: `db.h` and
     libinstaller expect exact versions.
@@ -742,6 +742,10 @@ Size: S / M / L / XL (relative effort). Each stage ends with a working, testable
     (`wcslen()` bytes rather than characters).
   - `PrintStatusInfo()` (`localization.c`) formats its "UNTRANSLATED" debug message
     into a buffer whose size it takes as `sizeof(char*)`.
+  - `UpdateMD5Sum()` (`hash.c`) reads past the end of `md5sum.txt` when looking for
+    bootloader entries near its end.
+  - `FindResourceRva()` (`parser.c`) computes a pointer from a NULL directory before
+    checking for it.
 - **bled**:
   - zip members with `..` or absolute paths were extracted outside the target
     directory;

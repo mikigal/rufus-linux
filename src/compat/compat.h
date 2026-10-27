@@ -237,6 +237,10 @@ typedef struct {
 #define _strdup                         strdup
 
 /* Aligned allocations (the _mm_* spelling is what Rufus uses throughout) */
+#if defined(__x86_64__) || defined(__i386__)
+// The compiler provides them (and the x86 intrinsics headers include them)
+#include <mm_malloc.h>
+#else
 static inline void* _mm_malloc(size_t size, size_t alignment)
 {
 	void* p = NULL;
@@ -250,3 +254,4 @@ static inline void _mm_free(void* p)
 {
 	free(p);
 }
+#endif

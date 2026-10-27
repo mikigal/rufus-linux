@@ -17,8 +17,7 @@
 * along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include <basetsd.h>
-#include <guiddef.h>
+#include "compat.h"
 
 #pragma pack(1)
 
@@ -36,14 +35,15 @@ typedef struct {
 	UINT8   Pad2;
 } EFI_TIME;
 
-typedef struct _WIN_CERTIFICATE {
+// NB: Unlike the PE WIN_CERTIFICATE (winpe.h), this header has no bCertificate[] member
+typedef struct {
 	UINT32  dwLength;
 	UINT16  wRevision;
 	UINT16  wCertificateType;
-} WIN_CERTIFICATE;
+} WIN_CERTIFICATE_HEADER;
 
 typedef struct _WIN_CERTIFICATE_UEFI_GUID {
-	WIN_CERTIFICATE   Hdr;
+	WIN_CERTIFICATE_HEADER   Hdr;
 	GUID              CertType;
 	UINT8             CertData[1];
 } WIN_CERTIFICATE_UEFI_GUID;

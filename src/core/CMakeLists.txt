@@ -5,13 +5,16 @@ add_library(rufus_core STATIC
 	globals.c
 	options.c
 	progress.c
+	resource.c
 	rules.c
 	ui_iface.c
 	../cregex_compile.c
 	../cregex_parse.c
 	../cregex_vm.c
+	../hash.c
 	../localization.c
 	../parser.c
+	../pki.c
 	../stdfn.c
 	../stdio.c
 	../xml.c)
@@ -19,5 +22,16 @@ target_include_directories(rufus_core PUBLIC
 	"${CMAKE_CURRENT_SOURCE_DIR}"
 	"${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(rufus_core
-	PUBLIC rufus_compat bled m
+	PUBLIC rufus_compat bled m Threads::Threads OpenSSL::Crypto
 	PRIVATE rufus_warnings)
+
+# The payloads that rufus.rc embeds (see resource.c)
+file(STRINGS resources.h resource_lines REGEX "^RESOURCE\\(")
+set(resource_files "")
+foreach(line IN LISTS resource_lines)
+	string(REGEX REPLACE "^RESOURCE\\([A-Z0-9_]+, \"([^\"]+)\"\\)$" "\\1" file "${line}")
+	list(APPEND resource_files "${PROJECT_SOURCE_DIR}/res/${file}")
+endforeach()
+set_source_files_properties(resource.c PROPERTIES
+	COMPILE_DEFINITIONS "RUFUS_RES_DIR=\"${PROJECT_SOURCE_DIR}/res\""
+	OBJECT_DEPENDS "${resource_files};${CMAKE_CURRENT_SOURCE_DIR}/resources.h")
