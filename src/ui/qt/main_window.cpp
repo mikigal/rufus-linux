@@ -1189,6 +1189,9 @@ bool MainWindow::startFormatThread()
 // UM_FORMAT_COMPLETED: param is TRUE when the drive was written to
 void MainWindow::onFormatCompleted(bool written)
 {
+	StrArray processes = {};
+	struct stat st;
+
 	zero_drive_ = false;
 	format_running_ = false;
 	if (unattend_xml_path != nullptr) {
@@ -1225,10 +1228,20 @@ void MainWindow::onFormatCompleted(bool written)
 		PrintInfo(0, MSG_212);
 		QApplication::beep();
 		QApplication::alert(this);
-		// A port cycle usually helps with a device not ready
-		if (SCODE_CODE(ErrorStatus) == ERROR_NOT_READY)
-			cyclePort(true);
-		Notification(MB_ICONERROR | MB_CLOSE, lmprintf(MSG_042), lmprintf(MSG_043, StrError(ErrorStatus, FALSE)));
+		// The processes that keep the drive busy (the ones of this user), rather than the error
+		if (stat(start_device_.devnode, &st) == 0) {
+			StrArrayCreate(&processes, 8);
+			SearchProcesses(st.st_rdev, &processes);
+		}
+		if (processes.Index > 0) {
+			ListDialog(lmprintf(MSG_042), lmprintf(MSG_055), processes.String, (int)processes.Index);
+		} else {
+			// A port cycle usually helps with a device not ready
+			if (SCODE_CODE(ErrorStatus) == ERROR_NOT_READY)
+				cyclePort(true);
+			Notification(MB_ICONERROR | MB_CLOSE, lmprintf(MSG_042), lmprintf(MSG_043, StrError(ErrorStatus, FALSE)));
+		}
+		StrArrayDestroy(&processes);
 	}
 	ErrorStatus = 0;
 	LastWriteError = 0;

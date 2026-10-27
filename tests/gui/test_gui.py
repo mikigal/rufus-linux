@@ -17,9 +17,15 @@ import hashlib
 import os
 import re
 import shutil
+import subprocess
+import sys
+import tempfile
 import unittest
 
 import gui
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "e2e"))
+from harness import media, qemu  # noqa: E402
 
 GUI = os.environ.get("RUFUS_GUI")
 HELPER = os.environ.get("RUFUS_FAKE_HELPER")
@@ -252,9 +258,17 @@ class Base:
         r.select("IDC_BOOT_SELECTION", "Non bootable")
         r.select("IDC_FILE_SYSTEM", "NTFS")
         r.set_text("IDC_LABEL", "TESTLABEL")
+        # The progress on the taskbar (com.canonical.Unity.LauncherEntry)
+        monitor = subprocess.Popen(["dbus-monitor", "--address", gui.desktop().env["DBUS_SESSION_BUS_ADDRESS"],
+                                    "type='signal',interface='com.canonical.Unity.LauncherEntry'"],
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self.format(r)
         self.wait_helper(r, "done")
         self.wait_ready(r)
+        monitor.terminate()
+        signals = monitor.communicate()[0].decode(errors="replace")
+        self.assertIn("application://rufus.desktop", signals)
+        self.assertIn('string "progress"', signals)
         job = self.wait_helper(r, "format")
         self.assertEqual((job["devnode"], job["diskseq"]), ("/dev/sdz", 42))
         self.assertEqual((job["boot_type"], job["fs_type"], job["label"]), (BT_NON_BOOTABLE, FS_NTFS, "TESTLABEL"))
@@ -330,6 +344,34 @@ class Base:
         self.format(r)
         job = self.wait_helper(r, "format")
         self.assertEqual((job["image_fd"], job["image"]), (1, image))
+        self.wait_ready(r)
+
+    def test_selection(self):
+        # An ISOHybrid: the boot check asks how to write it (IDD_SELECTION)
+        missing = media.missing_tools("grub-mkrescue", "xorriso", "mformat")
+        if missing or qemu.host_kernel() is None:
+            self.skipTest("missing: " + ", ".join(missing or ["a readable host kernel"]))
+        work = tempfile.mkdtemp(prefix="rufus-gui-iso-")
+        self.addCleanup(shutil.rmtree, work, True)
+        iso = media.build_grub_iso(work)
+        r = self.run_rufus(devices=[gui.USB_STICK])
+        r.command(f"drop {iso}")
+        r.wait(lambda: r.name("IDC_BOOT_SELECTION") == "linux-grub.iso", timeout=30, what="the image")
+        r.click("IDC_START")
+        dlg = r.dialog("IDD_SELECTION", timeout=30)
+        self.assertIn("ISOHybrid", dlg.get_name())
+        self.assertTrue(r.checked("IDC_SELECTION_CHOICE1", dlg))
+        # DD mode, which needs no download
+        r.click("IDC_SELECTION_CHOICE2", dlg)
+        r.wait(lambda: r.checked("IDC_SELECTION_CHOICE2", dlg), what="the DD mode")
+        r.click("IDOK", dlg)
+        r.dialog_closed("IDD_SELECTION")
+        dlg = r.dialog("IDD_NOTIFICATION", timeout=30)
+        r.click("IDOK", dlg)
+        job = self.wait_helper(r, "format")
+        # NB: Upstream stores the bit of the choice (2) as the BOOL
+        self.assertTrue(job["write_as_image"])
+        self.assertEqual(job["image_fd"], 1)
         self.wait_ready(r)
 
     def test_dialogs(self):
