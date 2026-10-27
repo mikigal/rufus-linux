@@ -20,6 +20,7 @@ add_library(rufus_core STATIC
 	../stdfn.c
 	../stdio.c
 	../vhd.c
+	../wue.c
 	../xml.c)
 target_include_directories(rufus_core PUBLIC
 	"${CMAKE_CURRENT_SOURCE_DIR}"

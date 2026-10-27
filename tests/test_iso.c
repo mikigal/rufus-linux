@@ -39,76 +39,10 @@
 #include "br.h"
 #include "bled/bled.h"
 #include "test.h"
+#include "test_files.h"
 
 extern StrArray modified_files;
 extern uint64_t total_blocks;
-
-static char tmp_dir[] = "/tmp/rufus-test-iso-XXXXXX";
-static char log_buf[256 * 1024];
-
-static void test_log(const char* text)
-{
-	safe_strcat(log_buf, sizeof(log_buf), text);
-}
-
-// The paths and file contents stay valid until the end of the test, as they end up in
-// argv arrays, globals and expressions that use more than one of them
-static void** buffers = NULL;
-static size_t nb_buffers = 0;
-
-static void* keep(void* buf)
-{
-	buffers = realloc(buffers, (nb_buffers + 1) * sizeof(void*));
-	CHECK(buffers != NULL);
-	buffers[nb_buffers++] = buf;
-	return buf;
-}
-
-static char* tmp_path(const char* name)
-{
-	char* p = keep(malloc(MAX_PATH));
-
-	CHECK(p != NULL);
-	snprintf(p, MAX_PATH, "%s/%s", tmp_dir, name);
-	return p;
-}
-
-static void make_file(const char* name, const char* content)
-{
-	char path[MAX_PATH], *p;
-
-	static_strcpy(path, tmp_path(name));
-	p = strrchr(path, '/');
-	*p = 0;
-	CHECK(mkdir_p(path, 0755) == 0);
-	*p = '/';
-	CHECK(write_file(path, (const uint8_t*)content, (uint32_t)strlen(content)) == strlen(content));
-}
-
-static char* file_content(const char* path)
-{
-	char* buf = NULL;
-
-	if (read_file(path, (uint8_t**)&buf) == 0) {
-		free(buf);
-		return "";
-	}
-	return keep(buf);
-}
-
-static BOOL run(const char* const* argv)
-{
-	DWORD r = RunCommand(argv, NULL, TRUE);
-	if (r != 0)
-		fprintf(stderr, "Command '%s' failed with %u:\n%s\n", argv[0], r, log_buf);
-	return (r == 0);
-}
-
-static BOOL have(const char* tool)
-{
-	const char* argv[] = { "sh", "-c", "command -v \"$0\" >/dev/null", tool, NULL };
-	return (RunCommand(argv, NULL, FALSE) == 0);
-}
 
 // A fake isolinux.bin, with the version string that GetSyslinuxVersion() looks for
 static void make_isolinux_bin(const char* name, const char* version)
@@ -411,20 +345,12 @@ int main(void)
 {
 	const ui_iface_t iface = { .log = test_log };
 	const char* tools[] = { "xorriso", "mkfs.fat", "mmd", "mcopy", "gzip" };
-	char cmd[64];
-	size_t i;
 
 	ui_set_iface(&iface);
-	for (i = 0; i < ARRAYSIZE(tools); i++) {
-		if (!have(tools[i])) {
-			fprintf(stderr, "'%s' is not installed - skipping\n", tools[i]);
-			return 77;
-		}
-	}
-	if (mkdtemp(tmp_dir) == NULL) {
-		perror("mkdtemp");
+	if (!have_tools(tools, ARRAYSIZE(tools)))
+		return 77;
+	if (!test_files_init())
 		return 1;
-	}
 	ResetOptions(&opts);
 
 	test_syslinux_versions();
@@ -432,12 +358,6 @@ int main(void)
 	test_windows_iso();
 	test_disk_images();
 
-	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", tmp_dir);
-	IGNORE_RETVAL(system(cmd));
-	for (i = 0; i < nb_buffers; i++)
-		free(buffers[i]);
-	free(buffers);
-	if (test_failures != 0)
-		fprintf(stderr, "Log:\n%s\n", log_buf);
+	test_files_cleanup();
 	return TEST_RESULT();
 }

@@ -145,6 +145,15 @@ Done:
     VHDs (`qemu-img`) and disk images, and checks the image report, the extraction to
     FAT and NTFS (persistence and label patches, symbolic links, `md5sum.txt`) and the
     reads from the WIM and from `efi.img`.
+- **Windows images** (`wue.c`): the version, the editions and the Windows To Go index
+  from the XML index of `install.wim`, and the `unattend.xml` of the Windows User
+  Experience.
+  - The time zone and the regional options of this system are not duplicated yet
+    (stage 4, §5.6).
+  - WinPE, Windows To Go and the customization of `boot.wim` wait in `wue_apply.c`,
+    which is not built.
+  - `tests/test_wue.c` checks them on WIMs that wimlib creates with the properties of
+    Windows images, with scripted answers to the questions.
 
 Next:
 
@@ -765,6 +774,9 @@ Size: S / M / L / XL (relative effort). Each stage ends with a working, testable
     bootloader entries near its end.
   - `FindResourceRva()` (`parser.c`) computes a pointer from a NULL directory before
     checking for it.
+- **Windows User Experience** (`wue.c`), fixed in this port: the first logon commands of
+  the "QoL" and "SkuSiPolicy" options are only written when another option of the
+  Shell-Setup component (user, privacy, locale, silent install) is selected too.
 - **bled**:
   - zip members with `..` or absolute paths were extracted outside the target
     directory;
