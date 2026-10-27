@@ -198,8 +198,11 @@ extern void rules_on_target_system(rules_state_t* m, int index);
 extern void rules_on_file_system(rules_state_t* m, int index);
 extern void rules_on_cluster_size(rules_state_t* m, int index);
 extern void rules_on_nb_passes(rules_state_t* m, int index);
-// A persistence size typed in (in bytes), once the size field loses the focus
+// A persistence size typed in (in bytes, from the unit of the dropdown), once the size field loses the focus
 extern void rules_on_persistence_size(rules_state_t* m, uint64_t size);
+// The persistence slider moved to 'pos' (in the selected unit), or a unit was selected
+extern void rules_on_persistence_slider(rules_state_t* m, uint64_t pos);
+extern void rules_on_persistence_units(rules_state_t* m, int index);
 extern void rules_on_label(rules_state_t* m, const char* label);
 // A check box was clicked: 'check' is one of the rules_check_t of the state
 extern void rules_on_check(rules_state_t* m, rules_check_t* check);
@@ -224,6 +227,14 @@ extern void rules_on_operation_end(rules_state_t* m);
  * so the front end typically copies its settings to 'o' first.
  */
 extern void rules_get_options(const rules_state_t* m, rufus_options_t* o);
+
+/*
+ * The text that the Windows version displays for an entry of one of the dropdowns of 'm'
+ * (localized, with the name of the image for the boot selection), and for an entry of
+ * the bad blocks passes dropdown (0 to 4).
+ */
+extern void rules_entry_text(const rules_state_t* m, const rules_combo_t* combo, int index, char* buf, size_t size);
+extern void rules_passes_text(int index, char* buf, size_t size);
 
 /* Lower level rules, also used by the events above */
 extern void SetAllowedFileSystems(rules_state_t* m, BOOL allowed_filesystem[FS_MAX]);

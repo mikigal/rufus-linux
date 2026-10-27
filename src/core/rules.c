@@ -1037,23 +1037,67 @@ void rules_on_label(rules_state_t* m, const char* label)
 }
 
 /*
- * IDC_PERSISTENCE_SIZE (EN_CHANGE, then EN_KILLFOCUS): the size is capped to what
- * the image leaves on the drive, and raised to MIN_EXT_SIZE (0 disables it)
+ * IDC_PERSISTENCE_SIZE: a size typed in (EN_CHANGE), once the field loses the focus
+ * (EN_KILLFOCUS). The size is capped to what the image leaves on the drive, and raised
+ * to MIN_EXT_SIZE, while 0 disables persistence.
  */
 void rules_on_persistence_size(rules_state_t* m, uint64_t size)
 {
-	uint64_t max;
+	uint64_t max, pos;
+	int i;
 
-	if (!m->has_device || !(m->image_options & IMOP_PERSISTENCE))
-		return;
+	// EN_CHANGE
+	m->persistence_unit_selection = m->persistence_units.sel;
 	max = m->drive.disk_size - PERCENTAGE(PROJECTED_SIZE_RATIO, m->img.projected_size);
 	m->persistence_size = min(size, max);
-	if ((m->persistence_size != 0) && (m->persistence_size < MIN_EXT_SIZE))
+	pos = m->persistence_size / MB;
+	for (i = 0; i < m->persistence_unit_selection; i++)
+		pos /= 1024;
+	m->persistence_pos = pos;
+	// EN_KILLFOCUS
+	if (m->persistence_size == 0) {
+		// TogglePersistenceControls(FALSE)
+		m->persistence_units_visible = FALSE;
+		m->persistence_size_enabled = FALSE;
+		m->persistence_units_enabled = FALSE;
+	} else if (m->persistence_size < MIN_EXT_SIZE) {
 		m->persistence_size = MIN_EXT_SIZE;
-	// TogglePersistenceControls()
-	m->persistence_units_visible = (m->persistence_size != 0);
+		pos = m->persistence_size / MB;
+		for (i = 0; i < m->persistence_unit_selection; i++)
+			pos /= 1024;
+		m->persistence_pos = pos;
+	}
+}
+
+// The persistence slider moved (WM_HSCROLL): 'pos' is in the selected unit
+void rules_on_persistence_slider(rules_state_t* m, uint64_t pos)
+{
+	int i;
+
+	// The trackbar keeps the position in its range
+	pos = min(pos, m->persistence_max);
+	// SetPersistencePos() => TogglePersistenceControls()
+	m->persistence_pos = pos;
+	m->persistence_units_visible = (m->boot_type == BT_IMAGE) && (pos != 0);
 	m->persistence_size_enabled = m->persistence_units_visible;
 	m->persistence_units_enabled = m->persistence_units_visible;
+	m->persistence_size = pos * MB;
+	for (i = 0; i < m->persistence_unit_selection; i++)
+		m->persistence_size *= 1024;
+}
+
+// IDC_PERSISTENCE_UNITS: the size field (which displays persistence_pos) is kept in the new unit
+void rules_on_persistence_units(rules_state_t* m, int index)
+{
+	int i;
+
+	if ((index < 0) || (index >= m->persistence_units.count) || (index == m->persistence_unit_selection))
+		return;
+	m->persistence_units.sel = index;
+	m->persistence_size = m->persistence_pos * MB;
+	for (i = 0; i < m->persistence_unit_selection; i++)
+		m->persistence_size *= 1024;
+	m->persistence_unit_selection = index;
 	SetPersistenceSize(m);
 }
 

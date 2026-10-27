@@ -155,7 +155,7 @@ static __inline BOOL WriteSettingBool(const char* key, BOOL val) {
 	return (ini_file != NULL)?WriteIniKeyBool(key, val):FALSE;
 }
 static __inline char* ReadSettingStr(const char* key) {
-	return (ini_file != NULL)?ReadIniKeyStr(key):"";
+	return (ini_file != NULL)?ReadIniKeyStr(key):(char*)"";
 }
 static __inline BOOL WriteSettingStr(const char* key, char* val) {
 	return (ini_file != NULL)?WriteIniKeyStr(key, val):FALSE;

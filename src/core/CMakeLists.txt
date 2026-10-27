@@ -16,6 +16,7 @@ add_library(rufus_core STATIC
 	progress.c
 	resource.c
 	rules.c
+	rules_text.c
 	write_drive.c
 	ui_iface.c
 	../cregex_compile.c

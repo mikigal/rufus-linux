@@ -1,13 +1,11 @@
 #ifndef NLS_H
 #define NLS_H
 
-#include <libintl.h>
-
-#ifdef NO_LIBINTL_OR_GETTEXT
+/*
+ * Rufus does not translate the messages of ms-sys. Its libintl.h stub is gone, as
+ * it hid the one of glibc from the C++ standard library of the Qt front end.
+ */
 #define _(String) (String)
-#else
-#define _(String) gettext(String)
-#endif
 #define gettext_noop(String) (String)
 #define N_(String) gettext_noop(String)
 

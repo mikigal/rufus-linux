@@ -1624,6 +1624,30 @@ void oracle_cluster_size(int index) { SelectAndNotify(hClusterSize, index); }
 void oracle_nb_passes(int index) { SelectAndNotify(hNBPasses, index); }
 void oracle_label(const char* label) { SetWindowTextU(hLabel, label); }
 
+// WM_HSCROLL on the persistence slider (the trackbar keeps the position in its range)
+void oracle_persistence_slider(uint64_t pos)
+{
+	HWND hSlider = GetDlgItem(hMainDialog, IDC_PERSISTENCE_SLIDER);
+	LONG lPos;
+	int i;
+
+	hSlider->pos = (intptr_t)min(pos, (uint64_t)hSlider->range_max);
+	lPos = (LONG)hSlider->pos;
+	SetPersistencePos(lPos);
+	persistence_size = lPos * MB;
+	for (i = 0; i < persistence_unit_selection; i++)
+		persistence_size *= 1024;
+}
+
+void oracle_persistence_units(int index) { SelectAndNotify(GetDlgItem(hMainDialog, IDC_PERSISTENCE_UNITS), index); }
+
+// A size typed in the persistence size field (EN_CHANGE), which then loses the focus (EN_KILLFOCUS)
+void oracle_persistence_size(const char* text)
+{
+	SetWindowTextU(GetDlgItem(hMainDialog, IDC_PERSISTENCE_SIZE), text);
+	MainCommand(hMainDialog, (EN_KILLFOCUS << 16) | IDC_PERSISTENCE_SIZE, 0);
+}
+
 void oracle_check(enum oracle_check_id id)
 {
 	static const int ids[] = { IDC_QUICK_FORMAT, IDC_EXTENDED_LABEL, IDC_OLD_BIOS_FIXES, IDC_UEFI_MEDIA_VALIDATION,

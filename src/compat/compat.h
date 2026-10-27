@@ -128,6 +128,12 @@ typedef struct {
 #ifndef max
 #define max(a, b) (((a) > (b)) ? (a) : (b))
 #endif
+#else
+/* The C++ front end includes the core headers: functions rather than macros, which would break std::min() */
+extern "C++" {
+template <typename A, typename B> static inline auto min(A a, B b) { return (a < b) ? a : b; }
+template <typename A, typename B> static inline auto max(A a, B b) { return (a > b) ? a : b; }
+}
 #endif
 
 /*

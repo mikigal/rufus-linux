@@ -718,7 +718,8 @@ fail:
 }
 
 enum { EV_DEVICE, EV_DEVICE_REFRESH, EV_BOOT, EV_IMAGE_OPTION, EV_PARTITION, EV_TARGET, EV_FS, EV_CLUSTER,
-	EV_PASSES, EV_LABEL, EV_CHECK, EV_ADVANCED_DEVICE, EV_ADVANCED_FORMAT, EV_DUAL, EV_SCAN, EV_START, EV_MAX };
+	EV_PASSES, EV_LABEL, EV_CHECK, EV_ADVANCED_DEVICE, EV_ADVANCED_FORMAT, EV_DUAL, EV_SCAN, EV_START,
+	EV_PERSISTENCE_SLIDER, EV_PERSISTENCE_UNITS, EV_PERSISTENCE_SIZE, EV_MAX };
 
 static BOOL run_sequence(int steps)
 {
@@ -728,6 +729,7 @@ static BOOL run_sequence(int steps)
 	oracle_drive_t odrive;
 	RUFUS_IMG_REPORT img;
 	int step, ev, idx, result;
+	uint64_t pos;
 	BOOL keep;
 	rules_check_t* checks[] = { &m.quick_format, &m.extended_label, &m.old_bios_fixes, &m.uefi_validation,
 		&m.bad_blocks };
@@ -888,6 +890,39 @@ static BOOL run_sequence(int steps)
 				img.has_kolibrios, img.reactos_path[0] != 0, img.has_4GB_file, img.needs_ntfs, img.label);
 			rules_on_image_scan_end(&m, &img, result, keep);
 			oracle_image_scan_end(&img, result, keep);
+			break;
+		case EV_PERSISTENCE_SLIDER:
+			if (!m.persistence_slider_enabled || !(m.image_options & IMOP_PERSISTENCE))
+				continue;
+			pos = (m.persistence_max == 0) ? 0 : (uint64_t)rnd((int)min(m.persistence_max + 1, 1000000ULL));
+			log_event("persistence slider: %llu", (unsigned long long)pos);
+			rules_on_persistence_slider(&m, pos);
+			oracle_persistence_slider(pos);
+			break;
+		case EV_PERSISTENCE_UNITS:
+			if (!m.persistence_units_enabled || !m.persistence_units_visible || (m.persistence_units.count == 0))
+				continue;
+			idx = rnd(m.persistence_units.count);
+			log_event("persistence units: %d", idx);
+			rules_on_persistence_units(&m, idx);
+			oracle_persistence_units(idx);
+			break;
+		case EV_PERSISTENCE_SIZE:
+			if (!m.persistence_size_enabled || !(m.image_options & IMOP_PERSISTENCE))
+				continue;
+			// Zero, below the minimum, or anything up to past the maximum
+			pos = (rnd(5) == 0) ? 0 : (uint64_t)rnd((int)min(m.persistence_max * 2 + 2, 1000000ULL));
+			// In the unit that the dropdown displays
+			log_event("persistence size: %llu (unit %d)", (unsigned long long)pos, m.persistence_units.sel);
+			{
+				char text[32];
+				uint64_t size = pos * MB;
+				for (idx = 0; idx < m.persistence_units.sel; idx++)
+					size *= 1024;
+				static_sprintf(text, "%llu", (unsigned long long)pos);
+				rules_on_persistence_size(&m, size);
+				oracle_persistence_size(text);
+			}
 			break;
 		case EV_START:
 			if (!m.start_enabled)
