@@ -23,8 +23,11 @@ no root and no USB drive are needed. See section 8.5 of
   the drive list, and a **fake helper** (`tests/fake_helper.c`,
   `RUFUS_FAKE_HELPER`), which speaks the protocol of `rufus-helper` as the
   user, records what it gets, and replays progress, a question, a failure or
-  a cancellation. The real helper and drive are covered by the end-to-end
-  tests of `tests/e2e`.
+  a cancellation.
+* **The full stack** (`vm_write.py`, run by `tests/e2e/test_gui_vm.py`): the GUI
+  writes to an emulated USB stick through the real `rufus-helper`, as root in
+  the VM of the end-to-end tests, and the drive gets checked after. It is part
+  of `ctest -L e2e` (and `-L gui`), with `-DRUFUS_E2E_TESTS=ON`.
 
 ## Requirements
 

@@ -121,6 +121,13 @@ if(RUFUS_E2E_TESTS)
 		WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/e2e")
 	set_tests_properties(e2e_media PROPERTIES LABELS e2e TIMEOUT 5400
 		ENVIRONMENT "RUFUS_CLI=$<TARGET_FILE:rufus-cli>;RUFUS_HELPER=$<TARGET_FILE:rufus-helper>")
+	# The GUI with the real helper and drive (tests/gui/vm_write.py)
+	if(RUFUS_BUILD_GUI)
+		add_test(NAME e2e_gui COMMAND Python3::Interpreter -m unittest -v test_gui_vm
+			WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/e2e")
+		set_tests_properties(e2e_gui PROPERTIES LABELS "e2e;gui" TIMEOUT 1800
+			ENVIRONMENT "RUFUS_GUI=$<TARGET_FILE:rufus>;RUFUS_HELPER=$<TARGET_FILE:rufus-helper>")
+	endif()
 endif()
 
 # GUI tests: ctest -L gui
