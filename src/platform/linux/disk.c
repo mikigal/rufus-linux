@@ -230,13 +230,63 @@ BOOL WaitForUdev(uint32_t timeout)
 	return r;
 }
 
+/*
+ * Wait for udev to have processed the partitions that the kernel added since
+ * 'since' (in µs, on the monotonic clock that udev uses). The udev queue alone
+ * may still be empty right after the kernel sent its events.
+ */
+static BOOL WaitForPartitions(drive_t* drive, uint64_t since, uint32_t timeout)
+{
+	struct udev* udev = udev_new();
+	struct udev_device* dev;
+	char path[PATH_MAX], real[PATH_MAX];
+	struct dirent* entry;
+	uint64_t end_time = GetTimeMs() + timeout, now;
+	DIR* dir;
+	BOOL ready = FALSE;
+
+	if (udev == NULL)
+		return FALSE;
+	static_sprintf(path, "/sys/dev/block/%u:%u", major(drive->devnum), minor(drive->devnum));
+	if (realpath(path, real) == NULL) {
+		udev_unref(udev);
+		return FALSE;
+	}
+	while (!ready && (GetTimeMs() < end_time)) {
+		ready = TRUE;
+		dir = opendir(real);
+		while (ready && (dir != NULL) && ((entry = readdir(dir)) != NULL)) {
+			if (entry->d_name[0] == '.')
+				continue;
+			static_sprintf(path, "%s/%s/partition", real, entry->d_name);
+			if (access(path, F_OK) != 0)
+				continue;
+			static_sprintf(path, "%s/%s", real, entry->d_name);
+			dev = udev_device_new_from_syspath(udev, path);
+			now = GetTimeMs() * 1000;
+			// A partition that udev knew from before the refresh has not been processed again yet
+			ready = (dev != NULL) && udev_device_get_is_initialized(dev) &&
+				(udev_device_get_usec_since_initialized(dev) <= now - since);
+			if (dev != NULL)
+				udev_device_unref(dev);
+		}
+		if (dir != NULL)
+			closedir(dir);
+		if (!ready)
+			usleep(20 * 1000);
+	}
+	udev_unref(udev);
+	return ready && WaitForUdev((uint32_t)(end_time > GetTimeMs() ? end_time - GetTimeMs() : 0));
+}
+
 BOOL RefreshPartitions(drive_t* drive)
 {
-	uint64_t end_time = GetTimeMs() + PARTITION_REFRESH_TIMEOUT;
+	uint64_t end_time = GetTimeMs() + PARTITION_REFRESH_TIMEOUT, since;
 
 	// udev briefly opens the partitions to probe them after a change, during which the kernel
 	// refuses to drop them, so retry for a while (as upstream does with its VDS refresh)
 	WaitForUdev(PARTITION_REFRESH_TIMEOUT);
+	since = GetTimeMs() * 1000;
 	while (ioctl(drive->fd, BLKRRPART) != 0) {
 		if ((errno != EBUSY) || (GetTimeMs() >= end_time)) {
 			uprintf("Could not refresh the partitions of %s: %s", drive->devnode, WindowsErrorString());
@@ -246,8 +296,9 @@ BOOL RefreshPartitions(drive_t* drive)
 			return FALSE;
 		}
 		usleep(100 * 1000);
+		since = GetTimeMs() * 1000;
 	}
-	if (!WaitForUdev(PARTITION_REFRESH_TIMEOUT))
+	if (!WaitForPartitions(drive, since, PARTITION_REFRESH_TIMEOUT))
 		uprintf("WARNING: udev did not process the new partitions of %s in time", drive->devnode);
 	return TRUE;
 }

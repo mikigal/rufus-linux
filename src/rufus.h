@@ -702,6 +702,7 @@ extern unsigned long syslinux_ldlinux_len[2];
 extern uint8_t* grub2_buf;
 extern long grub2_len;
 extern BOOL size_check, bcdboot_supports_ex;
+extern uint32_t dur_mins, dur_secs;
 extern char ubuffer[UBUFFER_SIZE], embedded_sl_version_str[2][12];
 extern char app_dir[MAX_PATH], temp_dir[MAX_PATH], app_data_dir[MAX_PATH], *fido_url;
 // The files of the current operation (the options of the operation are in options.h)

@@ -5,9 +5,12 @@ add_library(rufus_platform STATIC
 	automount.c
 	devices.c
 	disk.c
+	filesystems.c
 	mounts.c
-	processes.c)
+	processes.c
+	../../format_ext.c
+	../../format_fat32.c)
 target_include_directories(rufus_platform PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(rufus_platform
-	PUBLIC rufus_core PkgConfig::UDEV
+	PUBLIC rufus_core PkgConfig::UDEV PkgConfig::EXT2FS
 	PRIVATE rufus_warnings)

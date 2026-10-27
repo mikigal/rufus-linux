@@ -18,25 +18,26 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifdef _CRTDBG_MAP_ALLOC
-#include <stdlib.h>
-#include <crtdbg.h>
-#endif
+/*
+ * On Linux, the volume is a file descriptor on the partition (or an image file),
+ * and the label gets written here, as SetVolumeLabel() does on Windows. The PBR
+ * is written later, by the format pipeline, once the volume is unmounted.
+ */
 
-#include <windows.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "rufus.h"
 #include "options.h"
-#include "file.h"
-#include "drive.h"
-#include "format.h"
+#include "filesystems.h"
+#include "partition.h"
 #include "missing.h"
 #include "resource.h"
-#include "msapi_utf8.h"
 #include "localization.h"
 
 #define die(msg, err) do { uprintf(msg); ErrorStatus = RUFUS_ERROR(err); goto out; } while(0)
@@ -108,21 +109,70 @@ typedef struct {
  */
 static DWORD GetVolumeID(void)
 {
-	SYSTEMTIME s;
+	struct timespec ts;
+	struct tm s;
 	DWORD d;
 	WORD lo, hi, tmp;
 
-	GetLocalTime(&s);
+	clock_gettime(CLOCK_REALTIME, &ts);
+	localtime_r(&ts.tv_sec, &s);
 
-	lo = s.wDay + (s.wMonth << 8);
-	tmp = (s.wMilliseconds / 10) + (s.wSecond << 8);
+	lo = s.tm_mday + ((s.tm_mon + 1) << 8);
+	tmp = (WORD)((ts.tv_nsec / 10000000) + (s.tm_sec << 8));
 	lo += tmp;
 
-	hi = s.wMinute + (s.wHour << 8);
-	hi += s.wYear;
+	hi = s.tm_min + (s.tm_hour << 8);
+	hi += (WORD)(s.tm_year + 1900);
 
 	d = lo + (hi << 16);
 	return d;
+}
+
+static int64_t write_sectors(int fd, uint64_t SectorSize, uint64_t StartSector, uint64_t nSectors, const void* pBuf)
+{
+	ssize_t r;
+
+	do {
+		r = pwrite(fd, pBuf, (size_t)(nSectors * SectorSize), (off_t)(StartSector * SectorSize));
+	} while ((r < 0) && (errno == EINTR));
+	if (r < 0)
+		uprintf("write_sectors: Write error: %s", WindowsErrorString());
+	return (int64_t)r;
+}
+
+// What SetVolumeLabel() does on FAT: the label goes to the root directory (and the boot sector)
+static BOOL SetFatLabel(int fd, DWORD BytesPerSect, DWORD RootSector, FAT_BOOTSECTOR32* pBootSect, const char* Label)
+{
+	uint8_t* entry;
+	char name[11];
+	struct tm t;
+	time_t now = time(NULL);
+	size_t i, len = safe_strlen(Label);
+	uint16_t dos_time, dos_date;
+	BOOL r;
+
+	if (len == 0)
+		return TRUE;
+	memset(name, ' ', sizeof(name));
+	memcpy(name, Label, min(len, sizeof(name)));
+	localtime_r(&now, &t);
+	dos_time = (uint16_t)((t.tm_hour << 11) | (t.tm_min << 5) | (t.tm_sec / 2));
+	dos_date = (uint16_t)(((t.tm_year - 80) << 9) | ((t.tm_mon + 1) << 5) | t.tm_mday);
+	entry = calloc(1, BytesPerSect);
+	if (entry == NULL)
+		return FALSE;
+	memcpy(entry, name, sizeof(name));
+	entry[11] = 0x08;	// ATTR_VOLUME_ID
+	entry[22] = dos_time & 0xff;
+	entry[23] = dos_time >> 8;
+	entry[24] = dos_date & 0xff;
+	entry[25] = dos_date >> 8;
+	r = (write_sectors(fd, BytesPerSect, RootSector, 1, entry) == BytesPerSect);
+	free(entry);
+	memcpy(pBootSect->sVolLab, name, sizeof(name));
+	for (i = 0; r && (i < 2); i++)
+		r = (write_sectors(fd, BytesPerSect, (i == 0) ? 0 : pBootSect->wBkBootSec, 1, pBootSect) == BytesPerSect);
+	return r;
 }
 
 /*
@@ -148,23 +198,20 @@ static DWORD GetFATSizeSectors(DWORD DskSize, DWORD ReservedSecCnt, DWORD SecPer
  * Large FAT32 volume formatting from fat32format by Tom Thornhill
  * http://www.ridgecrop.demon.co.uk/index.htm?fat32format.htm
  */
-BOOL FormatLargeFAT32(DWORD DriveIndex, uint64_t PartitionOffset, DWORD ClusterSize, LPCSTR FSName, LPCSTR Label, DWORD Flags)
+BOOL FormatLargeFAT32(int fd, uint64_t PartitionOffset, uint64_t PartitionLength, DWORD SectorSize, DWORD ClusterSize,
+	LPCSTR FSName, LPCSTR Label, DWORD Flags)
 {
 	BOOL r = FALSE;
 	DWORD i;
-	HANDLE hLogicalVolume = NULL;
-	DWORD cbRet;
-	DISK_GEOMETRY dgDrive;
-	BYTE geometry_ex[256]; // DISK_GEOMETRY_EX is variable size
-	PDISK_GEOMETRY_EX xdgDrive = (PDISK_GEOMETRY_EX)(void*)geometry_ex;
-	PARTITION_INFORMATION piDrive;
-	PARTITION_INFORMATION_EX xpiDrive;
+	// NB: Upstream gets the geometry and partition information from the volume
+	const DWORD SectorsPerTrack = DEFAULT_SECTORS_PER_TRACK, TracksPerCylinder = DEFAULT_HEADS;
+	const DWORD BytesPerSector = max(SectorSize, 512);
+	const DWORD HiddenSectors = (DWORD)(PartitionOffset / BytesPerSector);
 	// Recommended values
 	DWORD ReservedSectCount = 32;
 	DWORD NumFATs = 2;
 	DWORD BackupBootSect = 6;
 	DWORD VolumeId = 0; // calculated before format
-	char* VolumeName = NULL;
 	DWORD BurstSize = 128; // Zero in blocks of 64K typically
 
 	// Calculated later
@@ -197,50 +244,13 @@ BOOL FormatLargeFAT32(DWORD DriveIndex, uint64_t PartitionOffset, DWORD ClusterS
 	}
 	VolumeId = GetVolumeID();
 
-	// Open the drive and lock it
-	hLogicalVolume = opts.write_as_esp ?
-		AltGetLogicalHandle(DriveIndex, PartitionOffset, TRUE, TRUE, FALSE) :
-		GetLogicalHandle(DriveIndex, PartitionOffset, TRUE, TRUE, FALSE);
-	if (IS_ERROR(ErrorStatus))
-		goto out;
-	if ((hLogicalVolume == INVALID_HANDLE_VALUE) || (hLogicalVolume == NULL))
+	if (fd < 0)
 		die("Invalid logical volume handle", ERROR_INVALID_HANDLE);
 
-	// Try to disappear the volume while we're formatting it
-	UnmountVolume(hLogicalVolume);
-
-	// Work out drive params
-	if (!DeviceIoControl (hLogicalVolume, IOCTL_DISK_GET_DRIVE_GEOMETRY, NULL, 0, &dgDrive,
-		sizeof(dgDrive), &cbRet, NULL)) {
-		if (!DeviceIoControl (hLogicalVolume, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, NULL, 0, xdgDrive,
-			sizeof(geometry_ex), &cbRet, NULL)) {
-			uprintf("IOCTL_DISK_GET_DRIVE_GEOMETRY error: %s", WindowsErrorString());
-			die("Failed to get device geometry (both regular and _ex)", ERROR_NOT_SUPPORTED);
-		}
-		memcpy(&dgDrive, &xdgDrive->Geometry, sizeof(dgDrive));
-	}
-	if (dgDrive.BytesPerSector < 512)
-		dgDrive.BytesPerSector = 512;
-	if (IS_ERROR(ErrorStatus)) goto out;
-	if (!DeviceIoControl (hLogicalVolume, IOCTL_DISK_GET_PARTITION_INFO, NULL, 0, &piDrive,
-		sizeof(piDrive), &cbRet, NULL)) {
-		if (!DeviceIoControl (hLogicalVolume, IOCTL_DISK_GET_PARTITION_INFO_EX, NULL, 0, &xpiDrive,
-			sizeof(xpiDrive), &cbRet, NULL)) {
-			uprintf("IOCTL_DISK_GET_PARTITION_INFO error: %s", WindowsErrorString());
-			die("Failed to get partition info (both regular and _ex)", ERROR_NOT_SUPPORTED);
-		}
-
-		memset(&piDrive, 0, sizeof(piDrive));
-		piDrive.StartingOffset.QuadPart = xpiDrive.StartingOffset.QuadPart;
-		piDrive.PartitionLength.QuadPart = xpiDrive.PartitionLength.QuadPart;
-		piDrive.HiddenSectors = (DWORD)(xpiDrive.StartingOffset.QuadPart / dgDrive.BytesPerSector);
-	}
-	if (IS_ERROR(ErrorStatus)) goto out;
-
-	BytesPerSect = dgDrive.BytesPerSector;
+	BytesPerSect = BytesPerSector;
 
 	// Checks on Disk Size
-	qTotalSectors = piDrive.PartitionLength.QuadPart / dgDrive.BytesPerSector;
+	qTotalSectors = PartitionLength / BytesPerSector;
 	// Low end limit - 65536 sectors
 	if (qTotalSectors < 65536) {
 		// Most FAT32 implementations would probably mount this volume just fine,
@@ -260,19 +270,19 @@ BOOL FormatLargeFAT32(DWORD DriveIndex, uint64_t PartitionOffset, DWORD ClusterS
 	// Set default cluster size
 	// https://support.microsoft.com/en-us/help/140365/default-cluster-size-for-ntfs-fat-and-exfat
 	if (ClusterSize == 0) {
-		if (piDrive.PartitionLength.QuadPart < 64 * MB)
+		if (PartitionLength < 64 * MB)
 			ClusterSize = 512;
-		else if (piDrive.PartitionLength.QuadPart < 128 * MB)
+		else if (PartitionLength < 128 * MB)
 			ClusterSize = 1 * KB;
-		else if (piDrive.PartitionLength.QuadPart < 256 * MB)
+		else if (PartitionLength < 256 * MB)
 			ClusterSize = 2 * KB;
-		else if (piDrive.PartitionLength.QuadPart < 8 * GB)
+		else if (PartitionLength < 8 * GB)
 			ClusterSize = 4 * KB;
-		else if (piDrive.PartitionLength.QuadPart < 16 * GB)
+		else if (PartitionLength < 16 * GB)
 			ClusterSize = 8 * KB;
-		else if (piDrive.PartitionLength.QuadPart < 32 * GB)
+		else if (PartitionLength < 32 * GB)
 			ClusterSize = 16 * KB;
-		else if (piDrive.PartitionLength.QuadPart < 2 * TB)
+		else if (PartitionLength < 2 * TB)
 			ClusterSize = 32 * KB;
 		else
 			ClusterSize = 64 * KB;
@@ -300,10 +310,10 @@ BOOL FormatLargeFAT32(DWORD DriveIndex, uint64_t PartitionOffset, DWORD ClusterS
 	pFAT32BootSect->wTotSec16 = 0;
 	pFAT32BootSect->bMedia = 0xF8;
 	pFAT32BootSect->wFATSz16 = 0;
-	pFAT32BootSect->wSecPerTrk = (WORD)dgDrive.SectorsPerTrack;
-	pFAT32BootSect->wNumHeads = (WORD)dgDrive.TracksPerCylinder;
-	pFAT32BootSect->dHiddSec = (DWORD)piDrive.HiddenSectors;
-	TotalSectors = (DWORD)(piDrive.PartitionLength.QuadPart / dgDrive.BytesPerSector);
+	pFAT32BootSect->wSecPerTrk = (WORD)SectorsPerTrack;
+	pFAT32BootSect->wNumHeads = (WORD)TracksPerCylinder;
+	pFAT32BootSect->dHiddSec = HiddenSectors;
+	TotalSectors = (DWORD)(PartitionLength / BytesPerSector);
 	pFAT32BootSect->dTotSec32 = TotalSectors;
 
 	FatSize = GetFATSizeSectors(pFAT32BootSect->dTotSec32, pFAT32BootSect->wRsvdSecCnt,
@@ -400,17 +410,18 @@ BOOL FormatLargeFAT32(DWORD DriveIndex, uint64_t PartitionOffset, DWORD ClusterS
 	}
 
 	// Now we're committed - print some info first
-	uprintf("Size : %s %lu sectors", SizeToHumanReadable(piDrive.PartitionLength.QuadPart, TRUE, FALSE), TotalSectors);
-	uprintf("Cluster size %lu bytes, %lu bytes per sector", SectorsPerCluster * BytesPerSect, BytesPerSect);
+	// NB: Upstream uses the format specifiers of 32-bit longs
+	uprintf("Size : %s %u sectors", SizeToHumanReadable(PartitionLength, TRUE, FALSE), TotalSectors);
+	uprintf("Cluster size %u bytes, %u bytes per sector", SectorsPerCluster * BytesPerSect, BytesPerSect);
 	uprintf("Volume ID is %x:%x", VolumeId >> 16, VolumeId & 0xffff);
-	uprintf("%lu Reserved sectors, %lu sectors per FAT, %lu FATs", ReservedSectCount, FatSize, NumFATs);
-	uprintf("%llu Total clusters", ClusterCount);
+	uprintf("%u Reserved sectors, %u sectors per FAT, %u FATs", ReservedSectCount, FatSize, NumFATs);
+	uprintf("%llu Total clusters", (unsigned long long)ClusterCount);
 
 	// Fix up the FSInfo sector
 	pFAT32FsInfo->dFree_Count = (UserAreaSize / SectorsPerCluster) - 1;
 	pFAT32FsInfo->dNxt_Free = 3; // clusters 0-1 reserved, we used cluster 2 for the root dir
 
-	uprintf("%lu Free clusters", pFAT32FsInfo->dFree_Count);
+	uprintf("%u Free clusters", pFAT32FsInfo->dFree_Count);
 	// Work out the Cluster count
 
 	// First zero out ReservedSect + FatSize * NumFats + SectorsPerCluster
@@ -427,7 +438,7 @@ BOOL FormatLargeFAT32(DWORD DriveIndex, uint64_t PartitionOffset, DWORD ClusterS
 		if (!(Flags & FP_NO_PROGRESS))
 			UpdateProgressWithInfo(OP_FORMAT, MSG_217, (uint64_t)i, (uint64_t)SystemAreaSize + BurstSize);
 		CHECK_FOR_USER_CANCEL;
-		if (write_sectors(hLogicalVolume, BytesPerSect, i, BurstSize, pZeroSect) != (BytesPerSect * BurstSize)) {
+		if (write_sectors(fd, BytesPerSect, i, BurstSize, pZeroSect) != (BytesPerSect * BurstSize)) {
 			die("Error clearing reserved sectors", ERROR_WRITE_FAULT);
 		}
 	}
@@ -436,48 +447,35 @@ BOOL FormatLargeFAT32(DWORD DriveIndex, uint64_t PartitionOffset, DWORD ClusterS
 	// Now we should write the boot sector and fsinfo twice, once at 0 and once at the backup boot sect position
 	for (i = 0; i < 2; i++) {
 		int SectorStart = (i == 0) ? 0 : BackupBootSect;
-		write_sectors(hLogicalVolume, BytesPerSect, SectorStart, 1, pFAT32BootSect);
-		write_sectors(hLogicalVolume, BytesPerSect, SectorStart + 1, 1, pFAT32FsInfo);
+		write_sectors(fd, BytesPerSect, SectorStart, 1, pFAT32BootSect);
+		write_sectors(fd, BytesPerSect, SectorStart + 1, 1, pFAT32FsInfo);
 	}
 
 	// Write the first fat sector in the right places
 	for (i = 0; i < NumFATs; i++) {
 		int SectorStart = ReservedSectCount + (i * FatSize);
 		uprintf("FAT #%d sector at address: %d", i, SectorStart);
-		write_sectors(hLogicalVolume, BytesPerSect, SectorStart, 1, pFirstSectOfFat);
+		write_sectors(fd, BytesPerSect, SectorStart, 1, pFirstSectOfFat);
 	}
 
-	if (!(Flags & FP_NO_BOOT)) {
-		// Must do it here, as have issues when trying to write the PBR after a remount
-		if (!(Flags & FP_NO_PROGRESS))
-			PrintInfoDebug(0, MSG_229);
-		if (!WritePBR(hLogicalVolume)) {
-			// Non fatal error, but the drive probably won't boot
-			uprintf("Could not write partition boot record - drive may not boot...");
-		}
-	}
+	// NB: Upstream writes the PBR here (unless FP_NO_BOOT), which the format pipeline does later
 
 	// Set the FAT32 volume label
 	if (!(Flags & FP_NO_PROGRESS)) {
 		PrintInfo(0, MSG_221, lmprintf(MSG_307));
 		uprintf("Setting label...");
 	}
-	// Handle must be closed for SetVolumeLabel to work
-	safe_closehandle(hLogicalVolume);
-	VolumeName = opts.write_as_esp ?
-		AltGetLogicalName(DriveIndex, PartitionOffset, TRUE, TRUE) :
-		GetLogicalName(DriveIndex, PartitionOffset, TRUE, TRUE);
-	if ((VolumeName == NULL) || (!SetVolumeLabelA(VolumeName, Label))) {
+	if (!SetFatLabel(fd, BytesPerSect, ReservedSectCount + NumFATs * FatSize, pFAT32BootSect, Label)) {
 		uprintf("Could not set label: %s", WindowsErrorString());
 		// Non fatal error
 	}
+	if (fsync(fd) != 0)
+		die("Could not flush the volume", ERROR_WRITE_FAULT);
 
 	uprintf("Format completed.");
 	r = TRUE;
 
 out:
-	safe_free(VolumeName);
-	safe_closehandle(hLogicalVolume);
 	safe_free(pFAT32BootSect);
 	safe_free(pFAT32FsInfo);
 	safe_free(pFirstSectOfFat);

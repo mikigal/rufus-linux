@@ -57,6 +57,9 @@ target_link_libraries(test_devices PRIVATE rufus_platform)
 rufus_add_test(test_partition test_partition.c)
 target_link_libraries(test_partition PRIVATE rufus_core)
 
+rufus_add_test(test_filesystems test_filesystems.c)
+target_link_libraries(test_filesystems PRIVATE rufus_platform)
+
 rufus_add_test(test_disk test_disk.c)
 target_link_libraries(test_disk PRIVATE rufus_platform)
 

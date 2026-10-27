@@ -260,6 +260,25 @@ Done:
   - `tests/test_partition.c` checks the layouts against values computed separately, and
     the tables on image files with `sfdisk` (512 and 4096 byte sectors). The VM test
     partitions the stick, and checks what the kernel and udev see.
+- **File systems** (`platform/linux/filesystems.c`, `format_fat32.c`, `format_ext.c`):
+  - `FormatPartition()` formats a partition (or an image file) with `mkfs.fat`, `mkntfs`,
+    `mkfs.exfat` or `mkudffs`, with the 255 × 63 geometry and hidden sectors of the
+    partition, the cluster size of the rules, NTFS compression (Alt-N) and indexing
+    (Alt-Q), and no partition table of their own. A slow format zeroes the volume
+    first, as FormatEx does. ReFS is not available.
+  - Large FAT32 (over 32 GB, or Alt-L) is still `FormatLargeFAT32()`, on a file
+    descriptor, which now writes the label itself (`SetVolumeLabel()` on Windows). The
+    PBR is left to the format pipeline.
+  - ext2/3/4 use the system libext2fs (`unix_io`), and ext4 now gets created (with
+    `metadata_csum`), rather than ext3.
+  - `ToValidLabel()` works on UTF-8 code points.
+  - The mkfs tools open the partitions exclusively, so the drive can't be held with
+    `O_EXCL` while they run; the udev rule keeps its partitions from being mounted.
+  - `tests/test_filesystems.c` checks each file system on image files (`blkid`, the
+    fsck tools, the boot sectors); NTFS, exFAT and UDF need ntfsprogs, exfatprogs and
+    udftools. The VM test formats and mounts the partitions of the stick.
+  - `RefreshPartitions()` now waits for udev to have processed each new partition: its
+    queue can still be empty right after `BLKRRPART`.
 
 ---
 

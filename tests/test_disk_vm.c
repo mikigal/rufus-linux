@@ -45,6 +45,7 @@
 #include "disk.h"
 #include "options.h"
 #include "partition.h"
+#include "filesystems.h"
 #include "test.h"
 
 #define QEMU_VID                    0x46f4
@@ -419,6 +420,58 @@ static void test_partitioning(void)
 	CloseDrive(&drive);
 }
 
+/* The partitions of test_partitioning(), formatted and mounted */
+static void test_formatting(void)
+{
+	partition_layout_t layout;
+	char p1[32], p2[32], path[128], *mp, *buf = NULL;
+	drive_t drive;
+
+	ResetOptions(&opts);
+	opts.cluster_size = 4096;
+	opts.boot_type = BT_IMAGE;
+	opts.persistence_size = 32 * MB;
+	opts.disk_size = stick.size;
+	ErrorStatus = 0;
+	WaitForUdev(5000);
+	CHECK(OpenDrive(stick.devnode, stick.diskseq, DRIVE_OPEN_WRITE | DRIVE_OPEN_EXCLUSIVE, &drive));
+	CHECK(PlanPartitions(&layout, PARTITION_STYLE_MBR, FS_FAT32, FALSE, XP_PERSISTENCE, drive.size, drive.sector_size));
+	CHECK(WritePartitionTable(drive.fd, &layout));
+	CHECK(RefreshPartitions(&drive));
+	CHECK(GetPartitionDevnode(&drive, 1, p1, sizeof(p1)));
+	CHECK(GetPartitionDevnode(&drive, 2, p2, sizeof(p2)));
+	// The mkfs tools open the partitions exclusively, which a drive that is held prevents
+	CHECK(!FormatPartition(p1, layout.part[0].offset, layout.part[0].size, drive.sector_size, 4096, FS_FAT32, "RUFUS", FP_QUICK));
+	CloseDrive(&drive);
+	WaitForUdev(5000);
+	ErrorStatus = 0;
+	CHECK(FormatPartition(p1, layout.part[0].offset, layout.part[0].size, drive.sector_size, 4096, FS_FAT32, "RUFUS", FP_QUICK));
+	CHECK(FormatPartition(p2, layout.part[1].offset, layout.part[1].size, drive.sector_size, 0, FS_EXT4, "casper-rw",
+		FP_QUICK | FP_CREATE_PERSISTENCE_CONF));
+	WaitForUdev(5000);
+
+	mp = MountVolume(p1, "vfat", FALSE);
+	CHECK(mp != NULL);
+	if (mp != NULL) {
+		snprintf(path, sizeof(path), "%s/test.txt", mp);
+		CHECK(write_file(path, (const uint8_t*)"test", 4) == 4);
+		CHECK(UnmountVolume(mp));
+		free(mp);
+	}
+	mp = MountVolume(p2, "ext4", TRUE);
+	CHECK(mp != NULL);
+	if (mp != NULL) {
+		snprintf(path, sizeof(path), "%s/persistence.conf", mp);
+		CHECK(read_file(path, (uint8_t**)&buf) == 8);
+		CHECK((buf != NULL) && (strcmp(buf, "/ union\n") == 0));
+		free(buf);
+		CHECK(UnmountVolume(mp));
+		free(mp);
+	}
+	snprintf(path, sizeof(path), "fsck.fat -n %s >/dev/null && e2fsck -fn %s >/dev/null", p1, p2);
+	CHECK(sh(path));
+}
+
 int main(void)
 {
 	const ui_iface_t iface = { .log = test_log };
@@ -438,6 +491,7 @@ int main(void)
 	test_refresh();
 	test_private_mounts();
 	test_partitioning();
+	test_formatting();
 	if (test_failures != 0)
 		fprintf(stderr, "Log:\n%s\n", log_buf);
 	else

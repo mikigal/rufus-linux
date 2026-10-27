@@ -25,7 +25,11 @@
  *   never written to;
  * - its file systems are unmounted, and the whole disk is opened with O_EXCL,
  *   which the kernel refuses while a partition is mounted or used by the
- *   device mapper or RAID, and which then prevents any mount;
+ *   device mapper or RAID, and which then prevents any mount. It also
+ *   prevents the exclusive opens of the mkfs tools, so the drive gets
+ *   released while they format its partitions (and udev rereads the
+ *   partition table when a drive that was open for writing is closed, so
+ *   WaitForUdev() must be called after that);
  * - the partition table is read again with BLKRRPART;
  * - a temporary udev rule keeps udisks from mounting the new partitions, or
  *   displaying them on the desktop;

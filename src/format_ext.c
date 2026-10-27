@@ -17,30 +17,30 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifdef _CRTDBG_MAP_ALLOC
-#include <stdlib.h>
-#include <crtdbg.h>
-#endif
+/*
+ * On Linux, the file system is created through the unix_io manager of the
+ * system libext2fs, on the device node of the partition (or an image file),
+ * and ext4 is supported (upstream falls back to ext3). The error messages are
+ * the ones of com_err.
+ */
 
-#include <windows.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <time.h>
+#include <sys/random.h>
 
 #include "rufus.h"
-#include "file.h"
-#include "drive.h"
-#include "format.h"
+#include "filesystems.h"
 #include "missing.h"
 #include "resource.h"
-#include "msapi_utf8.h"
 #include "localization.h"
-#include "ext2fs/ext2fs.h"
+#include <ext2fs/ext2fs.h>
+#include <et/com_err.h>
+
 
 extern const char* FileSystemLabel[FS_MAX];
-extern io_manager nt_io_manager;
-extern DWORD ext2_last_winerror(DWORD default_error);
 static float ext2_percent_start = 0.0f, ext2_percent_share = 0.5f;
 
 typedef struct {
@@ -50,139 +50,7 @@ typedef struct {
 	uint32_t inode_ratio;
 } ext2fs_default_t;
 
-const char* error_message(errcode_t error_code)
-{
-	static char error_string[256];
-
-	switch (error_code) {
-	case EXT2_ET_MAGIC_EXT2FS_FILSYS:
-	case EXT2_ET_MAGIC_BADBLOCKS_LIST:
-	case EXT2_ET_MAGIC_BADBLOCKS_ITERATE:
-	case EXT2_ET_MAGIC_INODE_SCAN:
-	case EXT2_ET_MAGIC_IO_CHANNEL:
-	case EXT2_ET_MAGIC_IO_MANAGER:
-	case EXT2_ET_MAGIC_BLOCK_BITMAP:
-	case EXT2_ET_MAGIC_INODE_BITMAP:
-	case EXT2_ET_MAGIC_GENERIC_BITMAP:
-	case EXT2_ET_MAGIC_ICOUNT:
-	case EXT2_ET_MAGIC_EXTENT_HANDLE:
-	case EXT2_ET_BAD_MAGIC:
-		return "Bad magic";
-	case EXT2_ET_RO_FILSYS:
-		return "Read-only file system";
-	case EXT2_ET_GDESC_BAD_BLOCK_MAP:
-	case EXT2_ET_GDESC_BAD_INODE_MAP:
-	case EXT2_ET_GDESC_BAD_INODE_TABLE:
-		return "Bad map or table";
-	case EXT2_ET_UNEXPECTED_BLOCK_SIZE:
-		return "Unexpected block size";
-	case EXT2_ET_DIR_CORRUPTED:
-		return "Corrupted entry";
-	case EXT2_ET_GDESC_READ:
-	case EXT2_ET_GDESC_WRITE:
-	case EXT2_ET_INODE_BITMAP_WRITE:
-	case EXT2_ET_INODE_BITMAP_READ:
-	case EXT2_ET_BLOCK_BITMAP_WRITE:
-	case EXT2_ET_BLOCK_BITMAP_READ:
-	case EXT2_ET_INODE_TABLE_WRITE:
-	case EXT2_ET_INODE_TABLE_READ:
-	case EXT2_ET_NEXT_INODE_READ:
-	case EXT2_ET_SHORT_READ:
-	case EXT2_ET_SHORT_WRITE:
-		return "read/write error";
-	case EXT2_ET_DIR_NO_SPACE:
-		return "no space left";
-	case EXT2_ET_TOOSMALL:
-		return "Too small";
-	case EXT2_ET_BAD_DEVICE_NAME:
-		return "Bad device name";
-	case EXT2_ET_MISSING_INODE_TABLE:
-		return "Missing inode table";
-	case EXT2_ET_CORRUPT_SUPERBLOCK:
-		return "Superblock is corrupted";
-	case EXT2_ET_CALLBACK_NOTHANDLED:
-		return "Unhandled callback";
-	case EXT2_ET_BAD_BLOCK_IN_INODE_TABLE:
-		return "Bad block in inode table";
-	case EXT2_ET_UNSUPP_FEATURE:
-	case EXT2_ET_RO_UNSUPP_FEATURE:
-	case EXT2_ET_UNIMPLEMENTED:
-		return "Unsupported feature";
-	case EXT2_ET_LLSEEK_FAILED:
-		return "Seek failed";
-	case EXT2_ET_NO_MEMORY:
-	case EXT2_ET_BLOCK_ALLOC_FAIL:
-	case EXT2_ET_INODE_ALLOC_FAIL:
-		return "Out of memory";
-	case EXT2_ET_INVALID_ARGUMENT:
-		return "Invalid argument";
-	case EXT2_ET_NO_DIRECTORY:
-		return "No directory";
-	case EXT2_ET_FILE_NOT_FOUND:
-		return "File not found";
-	case EXT2_ET_FILE_RO:
-		return "File is read-only";
-	case EXT2_ET_DIR_EXISTS:
-		return "Directory already exists";
-	case EXT2_ET_CANCEL_REQUESTED:
-		return "Cancel requested";
-	case EXT2_ET_FILE_TOO_BIG:
-		return "File too big";
-	case EXT2_ET_JOURNAL_NOT_BLOCK:
-	case EXT2_ET_NO_JOURNAL_SB:
-		return "No journal superblock";
-	case EXT2_ET_JOURNAL_TOO_SMALL:
-		return "Journal too small";
-	case EXT2_ET_NO_JOURNAL:
-		return "No journal";
-	case EXT2_ET_TOO_MANY_INODES:
-		return "Too many inodes";
-	case EXT2_ET_NO_CURRENT_NODE:
-		return "No current node";
-	case EXT2_ET_OP_NOT_SUPPORTED:
-		return "Operation not supported";
-	case EXT2_ET_IO_CHANNEL_NO_SUPPORT_64:
-		return "I/O Channel does not support 64-bit operation";
-	case EXT2_ET_BAD_DESC_SIZE:
-		return "Bad descriptor size";
-	case EXT2_ET_INODE_CSUM_INVALID:
-	case EXT2_ET_INODE_BITMAP_CSUM_INVALID:
-	case EXT2_ET_EXTENT_CSUM_INVALID:
-	case EXT2_ET_DIR_CSUM_INVALID:
-	case EXT2_ET_EXT_ATTR_CSUM_INVALID:
-	case EXT2_ET_SB_CSUM_INVALID:
-	case EXT2_ET_BLOCK_BITMAP_CSUM_INVALID:
-	case EXT2_ET_MMP_CSUM_INVALID:
-		return "Invalid checksum";
-	case EXT2_ET_UNKNOWN_CSUM:
-		return "Unknown checksum";
-	case EXT2_ET_FILE_EXISTS:
-		return "File exists";
-	case EXT2_ET_INODE_IS_GARBAGE:
-		return "Inode is garbage";
-	case EXT2_ET_JOURNAL_FLAGS_WRONG:
-		return "Wrong journal flags";
-	case EXT2_ET_FILESYSTEM_CORRUPTED:
-		return "File system is corrupted";
-	case EXT2_ET_BAD_CRC:
-		return "Bad CRC";
-	case EXT2_ET_CORRUPT_JOURNAL_SB:
-		return "Journal Superblock is corrupted";
-	case EXT2_ET_INODE_CORRUPTED:
-	case EXT2_ET_EA_INODE_CORRUPTED:
-		return "Inode is corrupted";
-	case EXT2_ET_NO_GDESC:
-		return "Group descriptors not loaded";
-	default:
-		if ((error_code > EXT2_ET_BASE) && error_code < (EXT2_ET_BASE + 1000)) {
-			static_sprintf(error_string, "Unknown ext2fs error %ld (EXT2_ET_BASE + %ld)", error_code, error_code - EXT2_ET_BASE);
-		} else {
-			SetLastError((ErrorStatus == 0) ? RUFUS_ERROR(error_code & 0xFFFF) : ErrorStatus);
-			static_sprintf(error_string, "%s", WindowsErrorString());
-		}
-		return error_string;
-	}
-}
+// NB: Upstream has its own error_message(), which com_err provides here
 
 errcode_t ext2fs_print_progress(int64_t cur_value, int64_t max_value)
 {
@@ -191,33 +59,21 @@ errcode_t ext2fs_print_progress(int64_t cur_value, int64_t max_value)
 	return IS_ERROR(ErrorStatus) ? EXT2_ET_CANCEL_REQUESTED : 0;
 }
 
-const char* GetExtFsLabel(DWORD DriveIndex, uint64_t PartitionOffset)
-{
-	static char label[EXT2_LABEL_LEN + 1];
-	errcode_t r;
-	ext2_filsys ext2fs = NULL;
-	io_manager manager = nt_io_manager;
-	char* volume_name = GetExtPartitionName(DriveIndex, PartitionOffset);
+// NB: GetExtFsLabel() is not needed, as udev provides the labels
 
-	if (volume_name == NULL)
-		return NULL;
-	r = ext2fs_open(volume_name, EXT2_FLAG_SKIP_MMP, 0, 0, manager, &ext2fs);
-	free(volume_name);
-	if (r == 0) {
-		assert(ext2fs != NULL);
-		strncpy(label, ext2fs->super->s_volume_name, EXT2_LABEL_LEN);
-		label[EXT2_LABEL_LEN] = 0;
+#define SET_EXT2_FORMAT_ERROR(x)    if (!IS_ERROR(ErrorStatus)) ErrorStatus = RUFUS_ERROR(x)
+
+static void RandomBytes(void* buf, size_t len)
+{
+	size_t i;
+
+	if (getrandom(buf, len, 0) != (ssize_t)len) {
+		for (i = 0; i < len; i++)
+			((uint8_t*)buf)[i] = (uint8_t)rand();
 	}
-	if (ext2fs != NULL)
-		ext2fs_close(ext2fs);
-	return (r == 0) ? label : NULL;
 }
 
-#define TEST_IMG_PATH               "\\??\\C:\\tmp\\disk.img"
-#define TEST_IMG_SIZE               4000		// Size in MB
-#define SET_EXT2_FORMAT_ERROR(x)    if (!IS_ERROR(ErrorStatus)) ErrorStatus = ext2_last_winerror(x)
-
-BOOL FormatExtFs(DWORD DriveIndex, uint64_t PartitionOffset, DWORD BlockSize, LPCSTR FSName, LPCSTR Label, DWORD Flags)
+BOOL FormatExtFs(const char* devnode, DWORD BlockSize, LPCSTR FSName, LPCSTR Label, DWORD Flags)
 {
 	// Mostly taken from mke2fs.conf
 	const float reserve_ratio = 0.05f;
@@ -233,49 +89,22 @@ BOOL FormatExtFs(DWORD DriveIndex, uint64_t PartitionOffset, DWORD BlockSize, LP
 	char* volume_name = NULL;
 	int i, count;
 	struct ext2_super_block features = { 0 };
-	io_manager manager = nt_io_manager;
+	io_manager manager = unix_io_manager;
 	blk_t journal_size;
 	blk64_t size = 0, cur;
 	ext2_filsys ext2fs = NULL;
 	errcode_t r;
 	uint8_t* buf = NULL;
 
-#if defined(RUFUS_TEST)
-	// Create a disk image file to test
-	uint8_t zb[1024];
-	HANDLE h;
-	DWORD dwSize;
-	HCRYPTPROV hCryptProv = 0;
-	volume_name = strdup(TEST_IMG_PATH);
-	uprintf("Creating '%s'...", volume_name);
-	if (!CryptAcquireContext(&hCryptProv, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT) || !CryptGenRandom(hCryptProv, sizeof(zb), zb)) {
-		uprintf("Failed to randomize buffer - filling with constant value");
-		memset(zb, rand(), sizeof(zb));
-	}
-	CryptReleaseContext(hCryptProv, 0);
-	h = CreateFileU(volume_name, GENERIC_WRITE, FILE_SHARE_WRITE, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-	for (i = 0; i < TEST_IMG_SIZE * sizeof(zb); i++) {
-		if (!WriteFile(h, zb, sizeof(zb), &dwSize, NULL) || (dwSize != sizeof(zb))) {
-			uprintf("Write error: %s", WindowsErrorString());
-			break;
-		}
-	}
-	CloseHandle(h);
-#else
-	volume_name = GetExtPartitionName(DriveIndex, PartitionOffset);
-#endif
+	volume_name = safe_strdup(devnode);
 	if ((volume_name == NULL) | (strlen(FSName) != 4) || (strncmp(FSName, "ext", 3) != 0)) {
 		ErrorStatus = RUFUS_ERROR(ERROR_INVALID_PARAMETER);
 		goto out;
 	}
-	if (strchr(volume_name, ' ') != NULL)
-		uprintf("Notice: Using physical device to access partition data");
-
-	if ((strcmp(FSName, FileSystemLabel[FS_EXT2]) != 0) && (strcmp(FSName, FileSystemLabel[FS_EXT3]) != 0)) {
-		if (strcmp(FSName, FileSystemLabel[FS_EXT4]) == 0)
-			uprintf("ext4 file system is not supported, defaulting to ext3");
-		else
-			uprintf("Invalid ext file system version requested, defaulting to ext3");
+	// NB: Upstream only supports ext2 and ext3, and formats ext4 as ext3
+	if ((strcmp(FSName, FileSystemLabel[FS_EXT2]) != 0) && (strcmp(FSName, FileSystemLabel[FS_EXT3]) != 0) &&
+		(strcmp(FSName, FileSystemLabel[FS_EXT4]) != 0)) {
+		uprintf("Invalid ext file system version requested, defaulting to ext3");
 		FSName = FileSystemLabel[FS_EXT3];
 	}
 
@@ -319,6 +148,9 @@ BOOL FormatExtFs(DWORD DriveIndex, uint64_t PartitionOffset, DWORD BlockSize, LP
 	ext2fs_r_blocks_count_set(&features, (blk64_t)(reserve_ratio * size));
 	features.s_rev_level = 1;
 	features.s_inode_size = ext2fs_default[i].inode_size;
+	// ext4 needs room for the extra fields of its inodes (nanosecond timestamps...)
+	if (FSName[3] == '4')
+		features.s_inode_size = 256;
 	features.s_inodes_count = ((ext2fs_blocks_count(&features) >> ext2fs_default[i].inode_ratio) > UINT32_MAX) ?
 		UINT32_MAX : (uint32_t)(ext2fs_blocks_count(&features) >> ext2fs_default[i].inode_ratio);
 	uprintf("%d possible inodes out of %lld blocks (block size = %d)", features.s_inodes_count, size, EXT2_BLOCK_SIZE(&features));
@@ -332,6 +164,18 @@ BOOL FormatExtFs(DWORD DriveIndex, uint64_t PartitionOffset, DWORD BlockSize, LP
 	ext2fs_set_feature_xattr(&features);
 	if (FSName[3] != '2')
 		ext2fs_set_feature_journal(&features);
+	// The features that mke2fs.conf sets for ext4
+	if (FSName[3] == '4') {
+		ext2fs_set_feature_extents(&features);
+		ext2fs_set_feature_flex_bg(&features);
+		ext2fs_set_feature_huge_file(&features);
+		ext2fs_set_feature_dir_nlink(&features);
+		ext2fs_set_feature_extra_isize(&features);
+		ext2fs_set_feature_64bit(&features);
+		ext2fs_set_feature_metadata_csum(&features);
+		features.s_log_groups_per_flex = 4;
+		features.s_min_extra_isize = features.s_want_extra_isize = sizeof(struct ext2_inode_large) - EXT2_GOOD_OLD_INODE_SIZE;
+	}
 	features.s_default_mount_opts = EXT2_DEFM_XATTR_USER | EXT2_DEFM_ACL;
 
 	// Now that we have set our base features, initialize a virtual superblock
@@ -354,15 +198,19 @@ BOOL FormatExtFs(DWORD DriveIndex, uint64_t PartitionOffset, DWORD BlockSize, LP
 	}
 
 	// Finish setting up the file system
-	IGNORE_RETVAL(CoCreateGuid((GUID*)ext2fs->super->s_uuid));
+	RandomBytes(ext2fs->super->s_uuid, sizeof(ext2fs->super->s_uuid));
+	// metadata_csum needs the type of checksum before the seed
+	if (ext2fs_has_feature_metadata_csum(ext2fs->super))
+		ext2fs->super->s_checksum_type = EXT2_CRC32C_CHKSUM;
 	ext2fs_init_csum_seed(ext2fs);
 	ext2fs->super->s_def_hash_version = EXT2_HASH_HALF_MD4;
-	IGNORE_RETVAL(CoCreateGuid((GUID*)ext2fs->super->s_hash_seed));
+	RandomBytes(ext2fs->super->s_hash_seed, sizeof(ext2fs->super->s_hash_seed));
 	ext2fs->super->s_max_mnt_count = -1;
-	ext2fs->super->s_creator_os = EXT2_OS_WINDOWS;
+	// NB: Upstream uses its own EXT2_OS_WINDOWS
+	ext2fs->super->s_creator_os = EXT2_OS_LINUX;
 	ext2fs->super->s_errors = EXT2_ERRORS_CONTINUE;
 	if (Label != NULL)
-		static_strcpy(ext2fs->super->s_volume_name, Label);
+		safe_strcpy((char*)ext2fs->super->s_volume_name, sizeof(ext2fs->super->s_volume_name), Label);
 
 	r = ext2fs_allocate_tables(ext2fs);
 	if (r != 0) {
@@ -389,11 +237,11 @@ BOOL FormatExtFs(DWORD DriveIndex, uint64_t PartitionOffset, DWORD BlockSize, LP
 		r = ext2fs_zero_blocks2(ext2fs, cur, count, &cur, &count);
 		if (r != 0) {
 			SET_EXT2_FORMAT_ERROR(ERROR_WRITE_FAULT);
-			uprintf("\r\nCould not zero inode set at position %llu (%d blocks): %s", cur, count, error_message(r));
+			uprintf("\nCould not zero inode set at position %llu (%d blocks): %s", cur, count, error_message(r));
 			goto out;
 		}
 	}
-	uprintfs("\r\n");
+	uprintfs("\n");
 
 	// Create root and lost+found dirs
 	r = ext2fs_mkdir(ext2fs, EXT2_ROOT_INO, EXT2_ROOT_INO, 0);
@@ -438,7 +286,7 @@ BOOL FormatExtFs(DWORD DriveIndex, uint64_t PartitionOffset, DWORD BlockSize, LP
 			max((float)journal_size / MAX_MARKER, 1.0f));
 		// Even with EXT2_MKJOURNAL_LAZYINIT, this call is absolutely dreadful in terms of speed...
 		r = ext2fs_add_journal_inode(ext2fs, journal_size, EXT2_MKJOURNAL_NO_MNT_CHECK | ((Flags & FP_QUICK) ? EXT2_MKJOURNAL_LAZYINIT : 0));
-		uprintfs("\r\n");
+		uprintfs("\n");
 		if (r != 0) {
 			SET_EXT2_FORMAT_ERROR(ERROR_WRITE_FAULT);
 			uprintf("Could not create %s journal: %s", FSName, error_message(r));
@@ -450,7 +298,7 @@ BOOL FormatExtFs(DWORD DriveIndex, uint64_t PartitionOffset, DWORD BlockSize, LP
 	if (Flags & FP_CREATE_PERSISTENCE_CONF) {
 		// You *do* want the LF at the end of the "/ union" line, else Debian Live bails out...
 		const char* name = "persistence.conf", data[] = "/ union\n";
-		int written = 0, fsize = sizeof(data) - 1;
+		unsigned int written = 0, fsize = sizeof(data) - 1;
 		ext2_file_t ext2fd;
 		ext2_ino_t inode_id;
 		time_t ctime = time(NULL);
