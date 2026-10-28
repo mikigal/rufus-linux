@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # The version of packaging/version.sh (rpmbuild --define "rufus_version ...")
-%{!?rufus_version: %global rufus_version 4.16.0}
+%{!?rufus_version: %global rufus_version 4.16.1}
 
 Name:           rufus
 Version:        %{rufus_version}
@@ -93,5 +93,5 @@ DESTDIR=%{buildroot} cmake --install rpm-build
 %{_mandir}/man1/rufus-cli.1*
 
 %changelog
-* Tue Oct 27 2026 mikigal <mikigal.priv@gmail.com> - 4.16.0-1
+* Wed Oct 28 2026 mikigal <mikigal.priv@gmail.com> - 4.16.1-1
 - The first release of the Linux port, based on Rufus 4.16

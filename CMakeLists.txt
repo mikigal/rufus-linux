@@ -1,7 +1,9 @@
 cmake_minimum_required(VERSION 3.25)
 
+# The version of Rufus that the port is based on (4.16), then the release of the port on it (1, 2...),
+# which starts again at 1 with each new version of Rufus. The release tags are v<version>.
 project(rufus
-	VERSION 4.16.0
+	VERSION 4.16.1
 	DESCRIPTION "The Reliable USB Formatting Utility (Linux port)"
 	HOMEPAGE_URL "https://github.com/mikigal/rufus-linux"
 	LANGUAGES C CXX)

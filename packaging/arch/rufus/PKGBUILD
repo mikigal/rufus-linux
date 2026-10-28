@@ -2,7 +2,7 @@
 # The release workflow sets pkgver and sha256sums (.github/workflows/release.yml)
 
 pkgname=rufus
-pkgver=4.16.0
+pkgver=4.16.1
 pkgrel=1
 pkgdesc="Create bootable USB drives from ISO and disk images (unofficial Linux port of Rufus)"
 arch=('x86_64')

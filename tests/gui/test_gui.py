@@ -35,6 +35,8 @@ HELPER = os.environ.get("RUFUS_FAKE_HELPER")
 ARTIFACTS = os.environ.get("RUFUS_GUI_ARTIFACTS")
 SOURCE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 LOC = os.path.join(SOURCE, "res", "loc", "rufus.loc")
+with open(os.path.join(SOURCE, "CMakeLists.txt")) as f:
+    VERSION = re.search(r"^\s*VERSION ([0-9.]+)$", f.read(), re.MULTILINE).group(1)
 CASPER_ISO = os.path.join(SOURCE, "res", "loc", "test", "casper_test.iso")
 
 # FS_* and BT_* of rufus.h
@@ -252,7 +254,7 @@ class Base:
             with self.subTest(scale=scale):
                 r = self.run_rufus(scale, devices=[gui.USB_STICK])
                 self.addCleanup(self.stop, r)
-                self.assertEqual(r.main.get_name(), "Rufus 4.16.0")
+                self.assertEqual(r.main.get_name(), f"Rufus {VERSION}")
                 self.assertEqual(r.name("IDC_DEVICE"), "MY_USB (sdz) [17 GB]")
                 self.assertEqual(r.status(), msg(208, 1))
                 self.assertEqual(r.get("IDC_PROGRESS").get_description(), msg(210))
@@ -529,7 +531,7 @@ class Base:
         # The log, from its button and with Ctrl-L
         r.click("IDC_LOG")
         log = r.dialog("IDD_LOG")
-        self.assertIn("Rufus v4.16.0", r.text("IDC_LOG_EDIT", log))
+        self.assertIn(f"Rufus v{VERSION}", r.text("IDC_LOG_EDIT", log))
         r.click("IDCANCEL", log)
         r.dialog_closed("IDD_LOG")
         r.key("ctrl+l")

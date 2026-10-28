@@ -597,6 +597,9 @@ came with stage 2 (and their GUI with stage 3); the rest is here.
     (`rpm/rufus.spec`), Arch Linux (the PKGBUILDs of the AUR packages `rufus` and
     `rufus-bin`). The version is the one of the release tag, or the one of the project
     with the date and hash of the commit (`packaging/version.sh`).
+  - The version of the port is the one of Rufus that it is based on, then the release of
+    the port on it: 4.16.1, 4.16.2... then 4.17.1 (tags `v4.16.1`...). The About dialog
+    shows it as "Version 4.16 (Build 1)", with the string of upstream.
   - A portable tree with its own Qt (6.8, from the Qt installer) and libraries, built on
     Ubuntu 24.04 with linuxdeploy: an AppImage, and the same tree as a `tar.gz`, which
     `rufus-bin` installs in `/opt/rufus`, with a polkit action for its helper. Its
