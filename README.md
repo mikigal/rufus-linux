@@ -57,8 +57,8 @@ these distributions, and two that run on any other one.
 | Distribution | Package | Install with |
 |---|---|---|
 | Arch Linux, CachyOS, Manjaro | AUR: [`rufus`](https://aur.archlinux.org/packages/rufus) (built from source) or [`rufus-bin`](https://aur.archlinux.org/packages/rufus-bin) | `yay -S rufus` or `paru -S rufus` |
-| Debian 13 | `rufus_*~debian13_amd64.deb` | `sudo apt install ./rufus_*~debian13_amd64.deb` |
-| Ubuntu 26.04 | `rufus_*~ubuntu26.04_amd64.deb` | `sudo apt install ./rufus_*~ubuntu26.04_amd64.deb` |
+| Debian 13 | `rufus_*debian13_amd64.deb` | `sudo apt install ./rufus_*debian13_amd64.deb` |
+| Ubuntu 26.04 | `rufus_*ubuntu26.04_amd64.deb` | `sudo apt install ./rufus_*ubuntu26.04_amd64.deb` |
 | Fedora | `rufus-*.fc*.x86_64.rpm` | `sudo dnf install ./rufus-*.fc*.x86_64.rpm` |
 | openSUSE Tumbleweed | `rufus-*.tw.x86_64.rpm` | `sudo zypper install --allow-unsigned-rpm ./rufus-*.tw.x86_64.rpm` |
 | Any other | `rufus-*-x86_64.AppImage` | `chmod +x rufus-*.AppImage`, then run it |

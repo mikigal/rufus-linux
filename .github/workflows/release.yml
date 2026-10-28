@@ -298,6 +298,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd assets
+          # GitHub replaces the "~" of the names of the assets (1~debian13) with "."
+          for f in *~*; do
+            mv "$f" "$(echo "$f" | tr '~' '.')"
+          done
           sha256sum * > SHA256SUMS
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             --title "Rufus ${GITHUB_REF_NAME#v} for Linux" \
