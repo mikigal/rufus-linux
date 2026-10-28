@@ -23,7 +23,11 @@ rufus-bin)
 	out=$(realpath "${3:-.}")
 	mkdir "$work/tree"
 	tar -xzf "$2" -C "$work/tree"
-	mv "$work/tree/"* "$work/tree/rufus-$pkgver-x86_64"
+	# The name of the tree has the version of the archive, which pkgver changes outside of releases
+	tree=$(echo "$work/tree/"*)
+	if [ "$tree" != "$work/tree/rufus-$pkgver-x86_64" ]; then
+		mv "$tree" "$work/tree/rufus-$pkgver-x86_64"
+	fi
 	tar -czf "$work/rufus-$pkgver-x86_64.tar.gz" -C "$work/tree" "rufus-$pkgver-x86_64"
 	source="rufus-$pkgver-x86_64.tar.gz"
 	;;
